@@ -22,6 +22,8 @@ export interface Quote {
   changePct: number
   dayHigh: number
   dayLow: number
+  fiftyTwoWeekLow: number
+  fiftyTwoWeekHigh: number
   marketTime: number // epoch seconds
   intraday: IntradayPoint[]
   stale: boolean // true when served from cache after a failed refresh
@@ -109,6 +111,8 @@ function parseYahoo(symbol: string, json: any, proxyUsed: string): Quote {
     changePct: prev ? ((price - prev) / prev) * 100 : 0,
     dayHigh: meta.regularMarketDayHigh ?? (intraday.length ? Math.max(...intraday.map((p) => p.price)) : price),
     dayLow: meta.regularMarketDayLow ?? (intraday.length ? Math.min(...intraday.map((p) => p.price)) : price),
+    fiftyTwoWeekLow: meta.fiftyTwoWeekLow ?? (intraday.length ? Math.min(...intraday.map((p) => p.price)) : price),
+    fiftyTwoWeekHigh: meta.fiftyTwoWeekHigh ?? (intraday.length ? Math.max(...intraday.map((p) => p.price)) : price),
     marketTime: meta.regularMarketTime ?? Math.floor(Date.now() / 1000),
     intraday,
     stale: false,
