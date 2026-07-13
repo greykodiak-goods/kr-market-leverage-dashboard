@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { fetchDashboardData } from './lib/data'
 import { computeSentiment } from './lib/sentiment'
@@ -9,13 +10,16 @@ import {
   formatSignedPercent,
   pctChange,
 } from './lib/format'
-import type { ValuePoint } from './types'
+import type { DashboardData, ValuePoint } from './types'
+import { filterByPeriod, LEVERAGE_PERIODS } from './lib/period'
+import type { LeveragePeriod } from './lib/period'
 import { KpiCard } from './components/KpiCard'
 import { CreditBalanceChart } from './components/CreditBalanceChart'
 import { MarginCallRiskChart } from './components/MarginCallRiskChart'
 import { SimpleLineChart } from './components/SimpleLineChart'
 import { SentimentGauge } from './components/SentimentGauge'
 import { RealtimeSection } from './components/RealtimeSection'
+import { PeriodSelector } from './components/PeriodSelector'
 import { tickDateLong } from './components/chartUtils'
 
 function lastTwo<T>(arr: T[]): [T, T] {
@@ -34,6 +38,7 @@ function latestVal(series: ValuePoint[]) {
 }
 
 export default function App() {
+  const [levPeriod, setLevPeriod] = useState<LeveragePeriod>('1Y')
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['dashboard'],
     queryFn: fetchDashboardData,
@@ -46,6 +51,7 @@ export default function App() {
   const meta = data.credit.meta
   const isLive = meta.source === 'LIVE'
 
+  // KPI 전일대비 uses the unfiltered (daily-tailed) series.
   const [creditPrev, creditCurr] = lastTwo(data.credit.series)
   const creditDelta = creditCurr.total - creditPrev.total
   const creditDeltaPct = pctChange(creditCurr.total, creditPrev.total)
@@ -54,7 +60,23 @@ export default function App() {
   const deposit = latestVal(data.deposit.series)
   const ratio = latestVal(data.creditRatio.series)
 
-  const sentiment = computeSentiment(data)
+  // Charts + sentiment gauge reflect the selected leverage period window.
+  const fCredit = filterByPeriod(data.credit.series, levPeriod)
+  const fUnsettled = filterByPeriod(data.unsettled.series, levPeriod)
+  const fDeposit = filterByPeriod(data.deposit.series, levPeriod)
+  const fLending = filterByPeriod(data.lending.series, levPeriod)
+  const fRatio = filterByPeriod(data.creditRatio.series, levPeriod)
+  const fTurnover = filterByPeriod(data.turnover.series, levPeriod)
+
+  const sentimentInput = {
+    credit: { series: fCredit },
+    creditRatio: { series: fRatio },
+    deposit: { series: fDeposit },
+    lending: { series: fLending },
+    turnover: { series: fTurnover },
+    unsettled: { series: fUnsettled },
+  } as unknown as DashboardData
+  const sentiment = computeSentiment(sentimentInput)
 
   const depositLatest = data.deposit.series[data.deposit.series.length - 1]
   const lendingLatest = data.lending.series[data.lending.series.length - 1]
@@ -78,7 +100,18 @@ export default function App() {
 
       <RealtimeSection />
 
-      <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '4px 0 20px' }} />
+      <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '4px 0 16px' }} />
+
+      <div className="lev-period-bar">
+        <div>
+          <strong style={{ fontSize: 15 }}>레버리지 · 투자심리 지표</strong>
+          <span className="badge sample" style={{ marginLeft: 8, fontSize: 11 }}>샘플(장기)</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>차트 기간</span>
+          <PeriodSelector periods={LEVERAGE_PERIODS} value={levPeriod} onChange={setLevPeriod} />
+        </div>
+      </div>
 
       <section className="kpi-row">
         <KpiCard
@@ -116,13 +149,13 @@ export default function App() {
           <div className="panel-head">
             <div>
               <h2>신용거래융자 잔고 추이</h2>
-              <div className="panel-sub">코스피 · 코스닥 분리 (stacked), 최근 12개월</div>
+              <div className="panel-sub">코스피 · 코스닥 분리 (stacked) · {levPeriod}</div>
             </div>
             <div className="panel-latest">
               합계 <strong>{formatEok(creditCurr.total)}</strong>
             </div>
           </div>
-          <CreditBalanceChart data={data.credit.series} />
+          <CreditBalanceChart data={fCredit} />
         </div>
 
         <div className="panel">
@@ -147,7 +180,7 @@ export default function App() {
               <strong>{formatEok(unsettled.curr)}</strong>
             </div>
           </div>
-          <MarginCallRiskChart data={data.unsettled.series} />
+          <MarginCallRiskChart data={fUnsettled} />
         </div>
 
         <div className="panel">
@@ -161,7 +194,7 @@ export default function App() {
             </div>
           </div>
           <SimpleLineChart
-            data={data.deposit.series}
+            data={fDeposit}
             color="var(--accent)"
             gradientId="gDeposit"
             valueFormatter={(v) => formatEokShort(v)}
@@ -182,7 +215,7 @@ export default function App() {
             </div>
           </div>
           <SimpleLineChart
-            data={data.creditRatio.series}
+            data={fRatio}
             color="var(--kosdaq)"
             gradientId="gRatio"
             valueFormatter={(v) => `${v.toFixed(2)}%`}
@@ -201,7 +234,7 @@ export default function App() {
             </div>
           </div>
           <SimpleLineChart
-            data={data.lending.series}
+            data={fLending}
             color="#8b5cf6"
             gradientId="gLending"
             valueFormatter={(v) => formatEokShort(v)}
@@ -222,7 +255,7 @@ export default function App() {
             </div>
           </div>
           <SimpleLineChart
-            data={data.turnover.series}
+            data={fTurnover}
             color="#12b76a"
             gradientId="gTurnover"
             valueFormatter={(v) => `${v.toFixed(0)}%`}

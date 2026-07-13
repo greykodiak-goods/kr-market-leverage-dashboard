@@ -1,4 +1,6 @@
-import { useQuote, useUsdKrw } from '../hooks/useQuote'
+import { useState } from 'react'
+import { useQuote, useFxQuote } from '../hooks/useQuote'
+import type { QuotePeriod } from '../lib/quotes'
 import { krxStatus, nowKst } from '../lib/market'
 import { RealtimeQuoteCard } from './RealtimeQuoteCard'
 import { format } from 'date-fns'
@@ -11,15 +13,20 @@ const SYMBOL_ADR = 'SKHYV' // SK hynix ADS (NASDAQ, 2026-07-10 상장). 구 OTC 
 const ADR_ORDINARY_RATIO = 0.1 // 1 ADR = 원주 1/10
 
 export function RealtimeSection() {
-  const krx = useQuote(SYMBOL_KRX)
-  const adr = useQuote(SYMBOL_ADR)
-  const fx = useUsdKrw()
+  const [krxPeriod, setKrxPeriod] = useState<QuotePeriod>('1D')
+  const [adrPeriod, setAdrPeriod] = useState<QuotePeriod>('1D')
+  const [fxPeriod, setFxPeriod] = useState<QuotePeriod>('1D')
+
+  const krx = useQuote(SYMBOL_KRX, krxPeriod)
+  const adr = useQuote(SYMBOL_ADR, adrPeriod)
+  const fx = useFxQuote(fxPeriod)
   const status = krxStatus()
 
-  // ADR premium/discount vs KRX (참고용, ratio·환율 가정 기반)
+  // ADR premium/discount vs KRX. meta.regularMarketPrice is current regardless of
+  // the selected chart period, so premium stays correct even in long-range views.
   let premiumNode: React.ReactNode = null
   if (adr.data && krx.data && fx.data) {
-    const fxRate = fx.data
+    const fxRate = fx.data.price
     const adrKrwPerAdr = adr.data.price * fxRate // 1 ADR의 원화 가격
     const impliedPerShare = adrKrwPerAdr / ADR_ORDINARY_RATIO // ADR 환산 원주 1주 가격
     const premiumPct = (impliedPerShare / krx.data.price - 1) * 100
@@ -59,8 +66,8 @@ export function RealtimeSection() {
     <section style={{ marginBottom: 16 }}>
       <div className="header" style={{ marginBottom: 12 }}>
         <div>
-          <h1 style={{ fontSize: 18 }}>SK하이닉스 실시간(근실시간) 시세</h1>
-          <div className="subtitle">KRX 원주 · NASDAQ ADR · ~25초 폴링 자동 갱신</div>
+          <h1 style={{ fontSize: 18 }}>SK하이닉스 실시간(근실시간) 시세 · 장기 히스토리</h1>
+          <div className="subtitle">KRX 원주 · NASDAQ ADR · 원/달러 · 기간 버튼으로 최대 20년+ 조회</div>
         </div>
         <div className="badges">
           <span className={`badge ${status.isOpen ? 'live' : ''}`}>KRX {status.label}</span>
@@ -68,7 +75,7 @@ export function RealtimeSection() {
         </div>
       </div>
 
-      <div className="grid-2">
+      <div className="grid-3">
         <RealtimeQuoteCard
           title="SK하이닉스"
           symbolLabel="KRX 000660 · 원주"
@@ -77,6 +84,8 @@ export function RealtimeSection() {
           isError={krx.isError}
           color="var(--kospi)"
           gradientId="gQuoteKrx"
+          period={krxPeriod}
+          onPeriodChange={setKrxPeriod}
           tag="KOSPI"
         />
         <RealtimeQuoteCard
@@ -87,8 +96,23 @@ export function RealtimeSection() {
           isError={adr.isError}
           color="var(--kosdaq)"
           gradientId="gQuoteAdr"
+          period={adrPeriod}
+          onPeriodChange={setAdrPeriod}
           tag="NASDAQ ADS"
           extra={premiumNode}
+          shortHistoryNote="2026-07-10 상장 — 상장 이후 데이터만 표시됩니다."
+        />
+        <RealtimeQuoteCard
+          title="원/달러 환율"
+          symbolLabel="USD/KRW · KRW=X"
+          quote={fx.data}
+          isLoading={fx.isLoading}
+          isError={fx.isError}
+          color="#12b76a"
+          gradientId="gQuoteFx"
+          period={fxPeriod}
+          onPeriodChange={setFxPeriod}
+          tag="FX"
         />
       </div>
     </section>

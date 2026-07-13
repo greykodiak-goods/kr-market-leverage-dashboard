@@ -38,6 +38,22 @@ const PROXIES: { name: string; wrap: (url: string) => string }[] = [
   { name: 'direct', wrap: (u) => u }, // works in non-browser / permissive contexts
 ]
 
+// Selectable history periods mapped to Yahoo range/interval + polling policy.
+export type QuotePeriod = '1D' | '5D' | '1M' | '6M' | '1Y' | '5Y' | '10Y' | 'MAX'
+
+export const QUOTE_PERIODS: QuotePeriod[] = ['1D', '5D', '1M', '6M', '1Y', '5Y', '10Y', 'MAX']
+
+export const PERIOD_MAP: Record<QuotePeriod, { range: string; interval: string; live: boolean }> = {
+  '1D': { range: '1d', interval: '1m', live: true },
+  '5D': { range: '5d', interval: '5m', live: true },
+  '1M': { range: '1mo', interval: '1d', live: false },
+  '6M': { range: '6mo', interval: '1d', live: false },
+  '1Y': { range: '1y', interval: '1d', live: false },
+  '5Y': { range: '5y', interval: '1wk', live: false },
+  '10Y': { range: '10y', interval: '1mo', live: false },
+  MAX: { range: 'max', interval: '1mo', live: false },
+}
+
 const CACHE_PREFIX = 'quote-cache:'
 
 function readCache(symbol: string): Quote | null {
@@ -97,7 +113,7 @@ function parseYahoo(symbol: string, json: any, proxyUsed: string): Quote {
   }
 }
 
-async function fetchViaProxies(symbol: string, range: string, interval: string): Promise<Quote> {
+async function fetchViaProxies(symbol: string, range: string, interval: string, cacheKey: string): Promise<Quote> {
   const target = yahooUrl(symbol, range, interval)
   let lastErr: unknown = null
   for (const proxy of PROXIES) {
@@ -109,7 +125,7 @@ async function fetchViaProxies(symbol: string, range: string, interval: string):
       if (!res.ok) throw new Error(`${proxy.name} HTTP ${res.status}`)
       const json = await res.json()
       const quote = parseYahoo(symbol, json, proxy.name)
-      writeCache(symbol, quote)
+      writeCache(cacheKey, quote)
       return quote
     } catch (err) {
       lastErr = err
@@ -117,17 +133,18 @@ async function fetchViaProxies(symbol: string, range: string, interval: string):
     }
   }
   // All proxies failed — fall back to cached last-good, flagged stale.
-  const cached = readCache(symbol)
+  const cached = readCache(cacheKey)
   if (cached) return { ...cached, stale: true }
   throw new Error(`all providers failed for ${symbol}: ${String(lastErr)}`)
 }
 
-export async function getQuote(symbol: string): Promise<Quote> {
-  return fetchViaProxies(symbol, '1d', '1m')
+export async function getQuote(symbol: string, period: QuotePeriod = '1D'): Promise<Quote> {
+  const { range, interval } = PERIOD_MAP[period]
+  return fetchViaProxies(symbol, range, interval, `${symbol}:${period}`)
 }
 
-// FX helper: KRW per 1 USD via Yahoo 'KRW=X'.
-export async function getUsdKrw(): Promise<number> {
-  const q = await fetchViaProxies('KRW=X', '1d', '5m')
-  return q.price
+// FX quote (KRW per 1 USD) via Yahoo 'KRW=X', with selectable history period.
+export async function getFxQuote(period: QuotePeriod = '1D'): Promise<Quote> {
+  const { range, interval } = PERIOD_MAP[period]
+  return fetchViaProxies('KRW=X', range, interval, `KRW=X:${period}`)
 }

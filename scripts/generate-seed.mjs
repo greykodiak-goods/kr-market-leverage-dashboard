@@ -1,8 +1,12 @@
-// Generates ~12 months of realistic daily seed data for the dashboard.
-// Values are modeled on typical 2025-2026 Korean market magnitudes (units: 억원 = 100M KRW),
-// with plausible trends, weekly cycles and noise. This is SAMPLE data used so the
-// dashboard renders fully even when live KRX/FreeSIS endpoints are blocked.
-// The live fetch script (fetch-data.mjs) overwrites these files when it succeeds.
+// Generates ~20 years of realistic SAMPLE data for the leverage/sentiment charts.
+// Structure per series: monthly points from 2006 up to ~13 months ago, then
+// daily business days for the most recent ~13 months (so KPI 전일대비 stays daily
+// while long-range views 1Y/5Y/10Y/20Y have history).
+//
+// Values are modeled on typical Korean-market magnitudes (units: 억원 = 100M KRW)
+// with a long-term trend, cyclical variation, and rough shocks for the 2008
+// global financial crisis and the 2020 COVID crash. This is SAMPLE data so the
+// dashboard renders fully; the live fetch script overwrites it when it succeeds.
 
 import { writeFileSync, mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -12,27 +16,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const OUT = join(__dirname, '..', 'public', 'data')
 mkdirSync(OUT, { recursive: true })
 
-const DAYS = 365
-const today = new Date('2026-07-10T00:00:00+09:00') // last KRX business day in seed window
+const END = new Date(Date.UTC(2026, 6, 10)) // 2026-07-10 (last business day of window)
+const START_YEAR = 2006
 
-function isWeekday(d) {
-  const day = d.getUTCDay()
-  return day !== 0 && day !== 6
-}
-
-// Build the business-day date axis (weekdays only) for the last ~12 months.
-const dates = []
-for (let i = DAYS; i >= 0; i--) {
-  const d = new Date(today)
-  d.setUTCDate(d.getUTCDate() - i)
-  if (isWeekday(d)) dates.push(d)
-}
-
-function iso(d) {
-  return d.toISOString().slice(0, 10)
-}
-
-// Deterministic pseudo-random so seed data is stable across runs.
+// ---- deterministic pseudo-random ----------------------------------------
 let _s = 20260710
 function rnd() {
   _s = (_s * 1103515245 + 12345) & 0x7fffffff
@@ -41,93 +28,128 @@ function rnd() {
 function noise(amp) {
   return (rnd() - 0.5) * 2 * amp
 }
-
-const n = dates.length
-// t in [0,1] across the window
-const T = (i) => i / (n - 1)
-
-// --- Model builders -------------------------------------------------------
-
-// Credit balance (신용거래융자 잔고), 억원. KOSPI rises into a spring peak then eases.
-function creditKospi(i) {
-  const t = T(i)
-  const base = 92000 + 34000 * Math.sin(Math.PI * (t * 0.9 + 0.05)) // hump peaking mid-window
-  const drift = 6000 * t
-  return Math.round(base + drift + noise(1200))
-}
-function creditKosdaq(i) {
-  const t = T(i)
-  const base = 78000 + 22000 * Math.sin(Math.PI * (t * 0.9 + 0.08))
-  const drift = 3000 * t
-  return Math.round(base + drift + noise(1000))
+function gauss(y, center, width) {
+  return Math.exp(-Math.pow((y - center) / width, 2))
 }
 
-// Margin call / 미수금 (억원): spikes on volatile days.
-function unsettled(i) {
-  const t = T(i)
-  const base = 2600 + 700 * Math.sin(Math.PI * 3 * t)
-  const spike = rnd() > 0.94 ? 900 + rnd() * 1400 : 0
-  return Math.round(Math.max(1500, base + spike + noise(300)))
+// yearFloat from a Date (e.g. 2020.21)
+function yearFloat(d) {
+  const y = d.getUTCFullYear()
+  const start = Date.UTC(y, 0, 1)
+  const end = Date.UTC(y + 1, 0, 1)
+  return y + (d.getTime() - start) / (end - start)
 }
 
-// Investor deposits 투자자예탁금 (억원) ~ 50조원 = 500,000억
-function deposit(i) {
-  const t = T(i)
-  const base = 505000 + 45000 * Math.cos(Math.PI * (t * 1.1)) // was higher, dips, recovers
-  return Math.round(base + noise(6000))
+// linear interpolation across yearly anchors { [year]: value }
+function interp(anchors, y) {
+  const years = Object.keys(anchors).map(Number).sort((a, b) => a - b)
+  if (y <= years[0]) return anchors[years[0]]
+  if (y >= years[years.length - 1]) return anchors[years[years.length - 1]]
+  for (let i = 0; i < years.length - 1; i++) {
+    if (y >= years[i] && y <= years[i + 1]) {
+      const t = (y - years[i]) / (years[i + 1] - years[i])
+      return anchors[years[i]] * (1 - t) + anchors[years[i + 1]] * t
+    }
+  }
+  return anchors[years[years.length - 1]]
 }
 
-// Market cap (시가총액, 억원) for credit-ratio calc ~ 2,600조 total (KOSPI+KOSDAQ)
-function marketCap(i) {
-  const t = T(i)
-  return Math.round(25800000 + 2200000 * Math.sin(Math.PI * (t * 0.9 + 0.05)) + noise(120000))
+// ---- anchors (조원 unless noted) -----------------------------------------
+const T = 10000 // 조 -> 억
+
+const creditTotal = { 2006: 7.5, 2007: 9.5, 2008: 4.5, 2009: 6.5, 2010: 7.8, 2011: 7.0, 2012: 5.2, 2013: 5.0, 2014: 5.5, 2015: 7.2, 2016: 6.8, 2017: 9.5, 2018: 9.8, 2019: 9.2, 2020: 19.0, 2021: 23.0, 2022: 16.5, 2023: 17.8, 2024: 19.0, 2025: 20.0, 2026: 18.6 }
+const depositA = { 2006: 11, 2007: 14, 2008: 10, 2009: 15, 2010: 16, 2011: 17, 2012: 18, 2013: 17, 2014: 17.5, 2015: 21, 2016: 22, 2017: 26, 2018: 25, 2019: 27, 2020: 65, 2021: 67, 2022: 50, 2023: 50, 2024: 52, 2025: 54, 2026: 46.4 }
+const lendingA = { 2006: 5, 2007: 8, 2008: 6, 2009: 9, 2010: 15, 2011: 20, 2012: 24, 2013: 28, 2014: 35, 2015: 42, 2016: 48, 2017: 55, 2018: 58, 2019: 56, 2020: 60, 2021: 70, 2022: 66, 2023: 72, 2024: 76, 2025: 79, 2026: 81.7 }
+const ratioA = { 2006: 0.55, 2007: 0.62, 2008: 0.35, 2009: 0.5, 2010: 0.55, 2011: 0.5, 2012: 0.4, 2013: 0.4, 2014: 0.42, 2015: 0.55, 2016: 0.5, 2017: 0.62, 2018: 0.65, 2019: 0.6, 2020: 0.85, 2021: 0.95, 2022: 0.72, 2023: 0.75, 2024: 0.72, 2025: 0.71, 2026: 0.706 }
+const unsettledA = { 2006: 2200, 2007: 2600, 2008: 5500, 2009: 3000, 2010: 2400, 2011: 2800, 2012: 2000, 2013: 1900, 2014: 2000, 2015: 2600, 2016: 2300, 2017: 2800, 2018: 3000, 2019: 2500, 2020: 4200, 2021: 3200, 2022: 2800, 2023: 2700, 2024: 2650, 2025: 2680, 2026: 2702 }
+
+// COVID March-2020 deep V and 2008 Q4 shocks (localized on top of anchors)
+const covid = (y) => gauss(y, 2020.21, 0.12)
+const gfc = (y) => gauss(y, 2008.83, 0.33)
+
+function creditAt(d, daily) {
+  const y = yearFloat(d)
+  const total = interp(creditTotal, y) * T * (1 - 0.45 * covid(y)) + noise(daily ? 900 : 1500)
+  const kosdaqShare = 0.42 + 0.05 * Math.sin(y * 1.3)
+  const kosdaq = Math.round(total * kosdaqShare)
+  const kospi = Math.round(total - kosdaq)
+  return { kospi, kosdaq, total: kospi + kosdaq }
+}
+function depositAt(d, daily) {
+  const y = yearFloat(d)
+  return Math.round(interp(depositA, y) * T * (1 - 0.15 * covid(y)) + noise(daily ? 3000 : 6000))
+}
+function lendingAt(d, daily) {
+  const y = yearFloat(d)
+  return Math.round(interp(lendingA, y) * T * (1 + 0.1 * covid(y)) + noise(daily ? 5000 : 9000))
+}
+function ratioAt(d) {
+  const y = yearFloat(d)
+  return +Math.max(0.2, interp(ratioA, y) * (1 - 0.4 * covid(y)) + noise(0.01)).toFixed(3)
+}
+function unsettledAt(d, daily) {
+  const y = yearFloat(d)
+  const base = interp(unsettledA, y) + 3000 * gfc(y) + 3500 * covid(y)
+  const spike = daily && rnd() > 0.94 ? 900 + rnd() * 1400 : 0
+  return Math.round(Math.max(1200, base + spike + noise(daily ? 300 : 500)))
+}
+function turnoverAt(d) {
+  const y = yearFloat(d)
+  const v = 26 + 8 * Math.sin(y * 2.1) + 20 * covid(y) + 10 * gfc(y) + noise(3)
+  return +Math.max(10, v).toFixed(2)
 }
 
-// Securities lending balance 대차잔고 (억원) ~ 75조
-function lending(i) {
-  const t = T(i)
-  return Math.round(720000 + 90000 * t + 40000 * Math.sin(Math.PI * 2 * t) + noise(9000))
+// ---- build date axis: monthly history + recent daily ---------------------
+function iso(d) {
+  return d.toISOString().slice(0, 10)
+}
+function isWeekday(d) {
+  const day = d.getUTCDay()
+  return day !== 0 && day !== 6
 }
 
-// --- Assemble series ------------------------------------------------------
+// daily window: last 13 months
+const dailyStart = new Date(Date.UTC(END.getUTCFullYear(), END.getUTCMonth() - 13, 1))
 
-const creditSeries = dates.map((d, i) => {
-  const kospi = creditKospi(i)
-  const kosdaq = creditKosdaq(i)
-  return { date: iso(d), kospi, kosdaq, total: kospi + kosdaq }
+const dates = []
+// monthly points (day 15) from START_YEAR up to dailyStart
+let m = new Date(Date.UTC(START_YEAR, 0, 15))
+while (m < dailyStart) {
+  dates.push({ d: new Date(m), daily: false })
+  m = new Date(Date.UTC(m.getUTCFullYear(), m.getUTCMonth() + 1, 15))
+}
+// daily business days
+let cur = new Date(dailyStart)
+while (cur <= END) {
+  if (isWeekday(cur)) dates.push({ d: new Date(cur), daily: true })
+  cur = new Date(cur.getTime() + 86400000)
+}
+
+// ---- assemble series -----------------------------------------------------
+const creditSeries = dates.map(({ d, daily }) => {
+  const c = creditAt(d, daily)
+  return { date: iso(d), kospi: c.kospi, kosdaq: c.kosdaq, total: c.total }
 })
-
-const unsettledSeries = dates.map((d, i) => ({ date: iso(d), value: unsettled(i) }))
-const depositSeries = dates.map((d, i) => ({ date: iso(d), value: deposit(i) }))
-const lendingSeries = dates.map((d, i) => ({ date: iso(d), value: lending(i) }))
-
-const creditRatioSeries = dates.map((d, i) => {
-  const credit = creditSeries[i].total
-  const cap = marketCap(i)
-  return { date: iso(d), value: +((credit / cap) * 100).toFixed(3) }
-})
-
-// 예탁금 회전율 (%) = 거래대금 / 예탁금. Model daily turnover of deposits.
-const turnoverSeries = dates.map((d, i) => {
-  const t = T(i)
-  const val = 30 + 12 * Math.sin(Math.PI * 4 * t) + noise(4)
-  return { date: iso(d), value: +Math.max(12, val).toFixed(2) }
-})
+const unsettledSeries = dates.map(({ d, daily }) => ({ date: iso(d), value: unsettledAt(d, daily) }))
+const depositSeries = dates.map(({ d, daily }) => ({ date: iso(d), value: depositAt(d, daily) }))
+const lendingSeries = dates.map(({ d, daily }) => ({ date: iso(d), value: lendingAt(d, daily) }))
+const creditRatioSeries = dates.map(({ d }) => ({ date: iso(d), value: ratioAt(d) }))
+const turnoverSeries = dates.map(({ d }) => ({ date: iso(d), value: turnoverAt(d) }))
 
 const meta = {
-  source: 'SEED', // 'SEED' = sample data; live fetch sets 'LIVE'
+  source: 'SEED',
   sourceLabel: '샘플 데이터 (KRX/FreeSIS 실데이터 미연동)',
   generatedAt: new Date().toISOString(),
-  asOf: iso(dates[dates.length - 1]),
+  asOf: iso(END),
+  start: iso(dates[0].d),
   unit: '억원',
   notes:
-    '금융투자협회 FreeSIS / KRX 정보데이터시스템 공개 통계 구조를 반영한 현실적 샘플입니다. 실데이터 연동 시 scripts/fetch-data.mjs 가 이 파일들을 갱신합니다.',
+    '약 20년(2006~) 장기 샘플: 과거는 월 단위, 최근 13개월은 일 단위. 2008 금융위기·2020 코로나 변동을 대략 반영한 현실적 샘플이며 실제 수치와 다릅니다. 실제 장기 데이터는 KRX/금융투자협회 연동 예정입니다.',
 }
 
 function save(name, series) {
   writeFileSync(join(OUT, name), JSON.stringify({ meta, series }, null, 0))
 }
-
 save('credit-balance.json', creditSeries)
 save('unsettled.json', unsettledSeries)
 save('deposit.json', depositSeries)
@@ -135,4 +157,6 @@ save('lending.json', lendingSeries)
 save('credit-ratio.json', creditRatioSeries)
 save('turnover.json', turnoverSeries)
 
-console.log(`Wrote 6 seed files to ${OUT} (${n} business days, asOf ${meta.asOf})`)
+console.log(
+  `Wrote 6 seed files: ${dates.length} points (${dates.filter((x) => !x.daily).length} monthly + ${dates.filter((x) => x.daily).length} daily), ${meta.start}~${meta.asOf}`,
+)

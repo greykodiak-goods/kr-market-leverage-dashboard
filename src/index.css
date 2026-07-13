@@ -189,6 +189,58 @@ body {
   margin-bottom: 16px;
 }
 
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+/* Period selector buttons */
+.period-selector {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+  flex-wrap: wrap;
+}
+
+.period-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+  line-height: 1.4;
+  transition: background 0.12s, color 0.12s;
+}
+.period-btn:hover {
+  color: var(--text);
+}
+.period-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.lev-period-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.quote-card .period-selector {
+  margin: 4px 0 6px;
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -297,6 +349,12 @@ body {
   border: 1px solid var(--border) !important;
   background: var(--panel) !important;
   box-shadow: var(--shadow) !important;
+}
+
+@media (max-width: 1000px) {
+  .grid-3 {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 900px) {

@@ -9,7 +9,7 @@ import {
 } from 'recharts'
 import type { CreditPoint } from '../types'
 import { formatEok, formatEokShort } from '../lib/format'
-import { monthlyTicks, tickDate, tickDateLong } from './chartUtils'
+import { adaptiveTicks, adaptiveTickFormatter, tickDateLong } from './chartUtils'
 
 interface Props {
   data: CreditPoint[]
@@ -30,7 +30,9 @@ function CreditTooltip({ active, payload, label }: any) {
 }
 
 export function CreditBalanceChart({ data }: Props) {
-  const ticks = monthlyTicks(data.map((d) => d.date))
+  const dates = data.map((d) => d.date)
+  const ticks = adaptiveTicks(dates)
+  const fmt = adaptiveTickFormatter(dates)
   return (
     <ResponsiveContainer width="100%" height={300}>
       <AreaChart data={data} margin={{ top: 8, right: 12, left: 4, bottom: 0 }}>
@@ -45,7 +47,7 @@ export function CreditBalanceChart({ data }: Props) {
           </linearGradient>
         </defs>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-        <XAxis dataKey="date" ticks={ticks} tickFormatter={tickDate} tickLine={false} axisLine={{ stroke: 'var(--border)' }} />
+        <XAxis dataKey="date" ticks={ticks} tickFormatter={fmt} tickLine={false} axisLine={{ stroke: 'var(--border)' }} />
         <YAxis
           tickFormatter={(v) => formatEokShort(v)}
           tickLine={false}

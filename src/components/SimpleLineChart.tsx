@@ -9,7 +9,7 @@ import {
   YAxis,
 } from 'recharts'
 import type { ValuePoint } from '../types'
-import { monthlyTicks, tickDate, tickDateLong } from './chartUtils'
+import { adaptiveTicks, adaptiveTickFormatter, tickDateLong } from './chartUtils'
 
 interface Props {
   data: ValuePoint[]
@@ -28,7 +28,9 @@ export function SimpleLineChart({
   valueFormatter,
   tooltipLabel,
 }: Props) {
-  const ticks = monthlyTicks(data.map((d) => d.date))
+  const dates = data.map((d) => d.date)
+  const ticks = adaptiveTicks(dates)
+  const fmt = adaptiveTickFormatter(dates)
 
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (!active || !payload || !payload.length) return null
@@ -52,7 +54,7 @@ export function SimpleLineChart({
           </linearGradient>
         </defs>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-        <XAxis dataKey="date" ticks={ticks} tickFormatter={tickDate} tickLine={false} axisLine={{ stroke: 'var(--border)' }} />
+        <XAxis dataKey="date" ticks={ticks} tickFormatter={fmt} tickLine={false} axisLine={{ stroke: 'var(--border)' }} />
         <YAxis
           tickFormatter={valueFormatter}
           tickLine={false}

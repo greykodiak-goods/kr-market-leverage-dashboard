@@ -11,7 +11,7 @@ import {
 } from 'recharts'
 import type { ValuePoint } from '../types'
 import { formatEok, formatEokShort } from '../lib/format'
-import { monthlyTicks, tickDate, tickDateLong } from './chartUtils'
+import { adaptiveTicks, adaptiveTickFormatter, tickDateLong } from './chartUtils'
 
 interface Props {
   data: ValuePoint[]
@@ -29,7 +29,9 @@ function RiskTooltip({ active, payload, label }: any) {
 }
 
 export function MarginCallRiskChart({ data }: Props) {
-  const ticks = monthlyTicks(data.map((d) => d.date))
+  const dates = data.map((d) => d.date)
+  const ticks = adaptiveTicks(dates)
+  const fmt = adaptiveTickFormatter(dates)
   const values = data.map((d) => d.value)
   const avg = values.reduce((s, v) => s + v, 0) / values.length
   // Highlight zone: 반대매매 위험은 미수금이 평균을 크게 웃돌 때 커진다.
@@ -45,7 +47,7 @@ export function MarginCallRiskChart({ data }: Props) {
           </linearGradient>
         </defs>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-        <XAxis dataKey="date" ticks={ticks} tickFormatter={tickDate} tickLine={false} axisLine={{ stroke: 'var(--border)' }} />
+        <XAxis dataKey="date" ticks={ticks} tickFormatter={fmt} tickLine={false} axisLine={{ stroke: 'var(--border)' }} />
         <YAxis tickFormatter={(v) => formatEokShort(v)} tickLine={false} axisLine={false} width={48} />
         <Tooltip content={<RiskTooltip />} />
         <ReferenceLine
