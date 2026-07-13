@@ -1,4 +1,4 @@
-import type { IndicatorResult } from './indicators'
+import type { IndicatorResult } from '../../lib/indicators'
 import type { ScenarioKey } from './outlook'
 
 export type ScenarioStatus = 'active' | 'watch' | 'inactive'

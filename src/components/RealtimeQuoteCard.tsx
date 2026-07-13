@@ -19,9 +19,13 @@ interface Props {
   extra?: React.ReactNode
   shortHistoryNote?: string // shown when a long period returns little data (e.g. newly-listed ADR)
   info?: string
+  indexPoints?: boolean // render as plain index points (no currency symbol)
 }
 
-function money(v: number, currency: string) {
+function money(v: number, currency: string, indexPoints?: boolean) {
+  if (indexPoints) {
+    return v.toLocaleString('ko-KR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  }
   const digits = currency === 'USD' ? 2 : 0
   const symbol = currency === 'USD' ? '$' : '₩'
   return `${symbol}${v.toLocaleString('ko-KR', { minimumFractionDigits: digits, maximumFractionDigits: digits })}`
@@ -47,7 +51,9 @@ export function RealtimeQuoteCard({
   extra,
   shortHistoryNote,
   info,
+  indexPoints,
 }: Props) {
+  const m = (v: number) => money(v, quote?.currency ?? '', indexPoints)
   const up = quote ? quote.change > 0 : false
   const down = quote ? quote.change < 0 : false
   // KR convention: up = red, down = blue
@@ -85,19 +91,19 @@ export function RealtimeQuoteCard({
         <>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
             <div style={{ fontSize: 30, fontWeight: 700, letterSpacing: '-0.02em' }}>
-              {money(quote.price, quote.currency)}
+              {m(quote.price)}
             </div>
             <div style={{ color: changeColor, fontSize: 15, fontWeight: 600 }}>
-              {arrow} {money(Math.abs(quote.change), quote.currency)} ({quote.change >= 0 ? '+' : '-'}
+              {arrow} {m(Math.abs(quote.change))} ({quote.change >= 0 ? '+' : '-'}
               {Math.abs(quote.changePct).toFixed(2)}%)
               <span style={{ color: 'var(--text-faint)', fontWeight: 400, fontSize: 12, marginLeft: 6 }}>{changeLabel}</span>
             </div>
           </div>
 
           <div style={{ display: 'flex', gap: 16, margin: '8px 0 6px', fontSize: 12, color: 'var(--text-dim)' }}>
-            <span>고 {money(quote.dayHigh, quote.currency)}</span>
-            <span>저 {money(quote.dayLow, quote.currency)}</span>
-            <span>기준 {money(quote.previousClose, quote.currency)}</span>
+            <span>고 {m(quote.dayHigh)}</span>
+            <span>저 {m(quote.dayLow)}</span>
+            <span>기준 {m(quote.previousClose)}</span>
           </div>
 
           {extra}

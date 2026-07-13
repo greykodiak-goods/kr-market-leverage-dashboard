@@ -38,12 +38,14 @@ export const DEFAULT_KEYWORDS: Keyword[] = [
   { id: 'war', label: '전쟁', category: 'geo', matchTerms: ['전쟁', 'war'] },
   { id: 'taiwan', label: '대만', category: 'geo', matchTerms: ['대만', 'taiwan', 'tsmc'] },
   { id: 'chinasemi', label: '중국 반도체', category: 'geo', matchTerms: ['중국 반도체', '중국반도체', 'china chip'] },
+  { id: 'iran', label: '이란', category: 'geo', matchTerms: ['이란', 'iran'] },
+  { id: 'oman', label: '오만', category: 'geo', matchTerms: ['오만', 'oman'] },
   // 종목
   { id: 'hynix', label: 'SK하이닉스', category: 'stock', matchTerms: ['sk하이닉스', '하이닉스', 'sk hynix', 'hynix'] },
   { id: 'hynixadr', label: 'SK하이닉스 ADR', category: 'stock', matchTerms: ['adr', 'skhyv'] },
 ]
 
-const STORAGE_KEY = 'news-keywords-v2'
+const STORAGE_KEY = 'news-keywords-v3'
 
 export interface KeywordState {
   enabledIds: string[]
