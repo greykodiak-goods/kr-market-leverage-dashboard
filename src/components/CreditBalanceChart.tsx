@@ -1,0 +1,77 @@
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
+import type { CreditPoint } from '../types'
+import { formatEok, formatEokShort } from '../lib/format'
+import { monthlyTicks, tickDate, tickDateLong } from './chartUtils'
+
+interface Props {
+  data: CreditPoint[]
+}
+
+function CreditTooltip({ active, payload, label }: any) {
+  if (!active || !payload || !payload.length) return null
+  const kospi = payload.find((p: any) => p.dataKey === 'kospi')?.value ?? 0
+  const kosdaq = payload.find((p: any) => p.dataKey === 'kosdaq')?.value ?? 0
+  return (
+    <div className="recharts-default-tooltip" style={{ padding: '8px 12px' }}>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 4 }}>{tickDateLong(label)}</div>
+      <div style={{ fontSize: 13 }}>합계: <strong>{formatEok(kospi + kosdaq)}</strong></div>
+      <div style={{ fontSize: 12, color: 'var(--kospi)' }}>코스피: {formatEok(kospi)}</div>
+      <div style={{ fontSize: 12, color: 'var(--kosdaq)' }}>코스닥: {formatEok(kosdaq)}</div>
+    </div>
+  )
+}
+
+export function CreditBalanceChart({ data }: Props) {
+  const ticks = monthlyTicks(data.map((d) => d.date))
+  return (
+    <ResponsiveContainer width="100%" height={300}>
+      <AreaChart data={data} margin={{ top: 8, right: 12, left: 4, bottom: 0 }}>
+        <defs>
+          <linearGradient id="gKospi" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--kospi)" stopOpacity={0.55} />
+            <stop offset="100%" stopColor="var(--kospi)" stopOpacity={0.05} />
+          </linearGradient>
+          <linearGradient id="gKosdaq" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--kosdaq)" stopOpacity={0.55} />
+            <stop offset="100%" stopColor="var(--kosdaq)" stopOpacity={0.05} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+        <XAxis dataKey="date" ticks={ticks} tickFormatter={tickDate} tickLine={false} axisLine={{ stroke: 'var(--border)' }} />
+        <YAxis
+          tickFormatter={(v) => formatEokShort(v)}
+          tickLine={false}
+          axisLine={false}
+          width={54}
+        />
+        <Tooltip content={<CreditTooltip />} />
+        <Area
+          type="monotone"
+          dataKey="kosdaq"
+          stackId="1"
+          stroke="var(--kosdaq)"
+          fill="url(#gKosdaq)"
+          strokeWidth={1.5}
+          name="코스닥"
+        />
+        <Area
+          type="monotone"
+          dataKey="kospi"
+          stackId="1"
+          stroke="var(--kospi)"
+          fill="url(#gKospi)"
+          strokeWidth={1.5}
+          name="코스피"
+        />
+      </AreaChart>
+    </ResponsiveContainer>
+  )
+}

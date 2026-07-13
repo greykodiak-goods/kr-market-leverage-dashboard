@@ -1,0 +1,319 @@
+:root {
+  --bg: #f5f6f8;
+  --panel: #ffffff;
+  --panel-2: #fafbfc;
+  --border: #e4e7ec;
+  --text: #1a2233;
+  --text-dim: #667085;
+  --text-faint: #98a2b3;
+  --accent: #2f6feb;
+  --kospi: #2f6feb;
+  --kosdaq: #f79009;
+  --danger: #e5484d;
+  --danger-bg: #fdecec;
+  --up: #e5484d;   /* KR convention: 상승 = red */
+  --down: #2f6feb; /* 하락 = blue */
+  --shadow: 0 1px 3px rgba(16, 24, 40, 0.06), 0 1px 2px rgba(16, 24, 40, 0.04);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel-2: #1c2430;
+    --border: #262d38;
+    --text: #e6edf3;
+    --text-dim: #9aa4b2;
+    --text-faint: #6e7681;
+    --accent: #4d8bff;
+    --kospi: #4d8bff;
+    --kosdaq: #f7a83b;
+    --danger: #ff5c60;
+    --danger-bg: #2a1518;
+    --up: #ff5c60;
+    --down: #4d8bff;
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 24px 20px 64px;
+}
+
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.header h1 {
+  font-size: 22px;
+  margin: 0 0 4px;
+  letter-spacing: -0.01em;
+}
+
+.header .subtitle {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.badges {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.badge {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.badge.sample {
+  color: #b54708;
+  background: #fffaeb;
+  border-color: #fedf89;
+}
+
+@media (prefers-color-scheme: dark) {
+  .badge.sample {
+    color: #f7a83b;
+    background: #2a2010;
+    border-color: #5a4412;
+  }
+}
+
+.badge.live {
+  color: #067647;
+  background: #ecfdf3;
+  border-color: #abefc6;
+}
+
+/* KPI row */
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.kpi-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 18px;
+  box-shadow: var(--shadow);
+}
+
+.kpi-card .label {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+
+.kpi-card .value {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.kpi-card .value .unit {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-dim);
+  margin-left: 2px;
+}
+
+.kpi-card .change {
+  margin-top: 8px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.change .up {
+  color: var(--up);
+}
+.change .down {
+  color: var(--down);
+}
+.change .muted {
+  color: var(--text-faint);
+}
+
+/* Grid layout */
+.grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 18px 8px;
+  box-shadow: var(--shadow);
+}
+
+.panel .panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.panel h2 {
+  font-size: 15px;
+  margin: 0 0 2px;
+}
+
+.panel .panel-sub {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+}
+
+.panel .panel-latest {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.panel .panel-latest strong {
+  color: var(--text);
+  font-size: 15px;
+}
+
+/* Sentiment gauge card */
+.gauge-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.gauge-legend {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.gauge-legend .row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  padding: 3px 0;
+  color: var(--text-dim);
+  border-top: 1px dashed var(--border);
+}
+.gauge-legend .row:first-child {
+  border-top: none;
+}
+.gauge-legend .row .bar {
+  flex: 1;
+  height: 6px;
+  margin: 0 8px;
+  align-self: center;
+  background: var(--panel-2);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.gauge-legend .row .bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.footer {
+  margin-top: 24px;
+  font-size: 12px;
+  color: var(--text-faint);
+  line-height: 1.6;
+}
+
+.footer a {
+  color: var(--text-dim);
+}
+
+.loading,
+.error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 60vh;
+  color: var(--text-dim);
+  font-size: 14px;
+}
+.error {
+  color: var(--danger);
+}
+
+.recharts-cartesian-axis-tick-value {
+  fill: var(--text-faint);
+  font-size: 11px;
+}
+.recharts-default-tooltip {
+  border-radius: 8px !important;
+  border: 1px solid var(--border) !important;
+  background: var(--panel) !important;
+  box-shadow: var(--shadow) !important;
+}
+
+@media (max-width: 900px) {
+  .kpi-row {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .grid,
+  .grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  .kpi-row {
+    grid-template-columns: 1fr;
+  }
+  .header h1 {
+    font-size: 19px;
+  }
+}
