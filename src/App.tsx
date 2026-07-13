@@ -11,7 +11,7 @@ import {
   pctChange,
 } from './lib/format'
 import type { DashboardData, ValuePoint } from './types'
-import { filterByPeriod, LEVERAGE_PERIODS } from './lib/period'
+import { sliceForPeriod, LEVERAGE_PERIODS } from './lib/period'
 import type { LeveragePeriod } from './lib/period'
 import { KpiCard } from './components/KpiCard'
 import { CreditBalanceChart } from './components/CreditBalanceChart'
@@ -19,7 +19,11 @@ import { MarginCallRiskChart } from './components/MarginCallRiskChart'
 import { SimpleLineChart } from './components/SimpleLineChart'
 import { SentimentGauge } from './components/SentimentGauge'
 import { RealtimeSection } from './components/RealtimeSection'
+import { NewsFeed } from './components/NewsFeed'
+import { ForecastCard } from './components/ForecastCard'
 import { PeriodSelector } from './components/PeriodSelector'
+import { InfoTip } from './components/InfoTip'
+import { TOOLTIPS } from './lib/tooltips'
 import { tickDateLong } from './components/chartUtils'
 
 function lastTwo<T>(arr: T[]): [T, T] {
@@ -38,7 +42,7 @@ function latestVal(series: ValuePoint[]) {
 }
 
 export default function App() {
-  const [levPeriod, setLevPeriod] = useState<LeveragePeriod>('1Y')
+  const [levPeriod, setLevPeriod] = useState<LeveragePeriod>('6M')
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['dashboard'],
     queryFn: fetchDashboardData,
@@ -50,6 +54,8 @@ export default function App() {
 
   const meta = data.credit.meta
   const isLive = meta.source === 'LIVE'
+  // 기준일: 표시 데이터셋의 최신 포인트 날짜에서 동적 계산 (하드코딩 금지)
+  const asOfDate = data.credit.series[data.credit.series.length - 1]?.date ?? meta.asOf
 
   // KPI 전일대비 uses the unfiltered (daily-tailed) series.
   const [creditPrev, creditCurr] = lastTwo(data.credit.series)
@@ -60,13 +66,14 @@ export default function App() {
   const deposit = latestVal(data.deposit.series)
   const ratio = latestVal(data.creditRatio.series)
 
-  // Charts + sentiment gauge reflect the selected leverage period window.
-  const fCredit = filterByPeriod(data.credit.series, levPeriod)
-  const fUnsettled = filterByPeriod(data.unsettled.series, levPeriod)
-  const fDeposit = filterByPeriod(data.deposit.series, levPeriod)
-  const fLending = filterByPeriod(data.lending.series, levPeriod)
-  const fRatio = filterByPeriod(data.creditRatio.series, levPeriod)
-  const fTurnover = filterByPeriod(data.turnover.series, levPeriod)
+  // Charts + sentiment gauge reflect the selected leverage period window
+  // (downsampled for long spans).
+  const fCredit = sliceForPeriod(data.credit.series, levPeriod)
+  const fUnsettled = sliceForPeriod(data.unsettled.series, levPeriod)
+  const fDeposit = sliceForPeriod(data.deposit.series, levPeriod)
+  const fLending = sliceForPeriod(data.lending.series, levPeriod)
+  const fRatio = sliceForPeriod(data.creditRatio.series, levPeriod)
+  const fTurnover = sliceForPeriod(data.turnover.series, levPeriod)
 
   const sentimentInput = {
     credit: { series: fCredit },
@@ -93,7 +100,9 @@ export default function App() {
           <span className={`badge ${isLive ? 'live' : 'sample'}`}>
             {isLive ? '실데이터' : '샘플 데이터'}
           </span>
-          <span className="badge">기준일 {tickDateLong(meta.asOf)}</span>
+          <span className="badge" title={isLive ? undefined : '샘플 시계열의 최신 날짜 · 실데이터 연동 시 자동 갱신'}>
+            {isLive ? '기준일' : '샘플 기준일'} {tickDateLong(asOfDate)}
+          </span>
           <span className="badge">단위 {meta.unit}</span>
         </div>
       </header>
@@ -119,28 +128,36 @@ export default function App() {
           value={formatEokShort(creditCurr.total)}
           unit="원"
           changeText={`${formatSignedEok(creditDelta)} (${formatSignedPercent(creditDeltaPct)})`}
+          changeLabel="전일대비"
           direction={dir(creditDelta)}
+          info={TOOLTIPS.credit}
         />
         <KpiCard
           label="미수금"
           value={formatEokShort(unsettled.curr)}
           unit="원"
           changeText={`${formatSignedEok(unsettled.delta)} (${formatSignedPercent(pctChange(unsettled.curr, unsettled.prev))})`}
+          changeLabel="전일대비"
           direction={dir(unsettled.delta)}
           invertColor
+          info={TOOLTIPS.unsettled}
         />
         <KpiCard
           label="투자자예탁금"
           value={formatEokShort(deposit.curr)}
           unit="원"
           changeText={`${formatSignedEok(deposit.delta)} (${formatSignedPercent(pctChange(deposit.curr, deposit.prev))})`}
+          changeLabel="전일대비"
           direction={dir(deposit.delta)}
+          info={TOOLTIPS.deposit}
         />
         <KpiCard
           label="신용잔고율 (신용융자/시총)"
           value={formatPercent(ratio.curr, 3)}
           changeText={formatSignedPercent(ratio.delta, 3) + 'p'}
+          changeLabel="전일대비"
           direction={dir(ratio.delta)}
+          info={TOOLTIPS.creditRatio}
         />
       </section>
 
@@ -148,7 +165,7 @@ export default function App() {
         <div className="panel">
           <div className="panel-head">
             <div>
-              <h2>신용거래융자 잔고 추이</h2>
+              <h2>신용거래융자 잔고 추이<InfoTip text={TOOLTIPS.credit} /></h2>
               <div className="panel-sub">코스피 · 코스닥 분리 (stacked) · {levPeriod}</div>
             </div>
             <div className="panel-latest">
@@ -161,7 +178,7 @@ export default function App() {
         <div className="panel">
           <div className="panel-head">
             <div>
-              <h2>종합 과열 게이지</h2>
+              <h2>종합 과열 게이지<InfoTip text={TOOLTIPS.gauge} /></h2>
               <div className="panel-sub">레버리지·심리 지표 0~100 환산</div>
             </div>
           </div>
@@ -173,7 +190,7 @@ export default function App() {
         <div className="panel">
           <div className="panel-head">
             <div>
-              <h2>미수금 & 반대매매 위험</h2>
+              <h2>미수금 &amp; 반대매매 위험<InfoTip text={TOOLTIPS.unsettled} /></h2>
               <div className="panel-sub">미수금 급증 시 반대매매 물량 확대</div>
             </div>
             <div className="panel-latest">
@@ -186,7 +203,7 @@ export default function App() {
         <div className="panel">
           <div className="panel-head">
             <div>
-              <h2>투자자예탁금</h2>
+              <h2>투자자예탁금<InfoTip text={TOOLTIPS.deposit} /></h2>
               <div className="panel-sub">대기 매수자금 추이</div>
             </div>
             <div className="panel-latest">
@@ -207,7 +224,7 @@ export default function App() {
         <div className="panel">
           <div className="panel-head">
             <div>
-              <h2>신용잔고율</h2>
+              <h2>신용잔고율<InfoTip text={TOOLTIPS.creditRatio} /></h2>
               <div className="panel-sub">신용융자 / 시가총액 (%) · 과열도</div>
             </div>
             <div className="panel-latest">
@@ -226,7 +243,7 @@ export default function App() {
         <div className="panel">
           <div className="panel-head">
             <div>
-              <h2>대차잔고</h2>
+              <h2>대차잔고<InfoTip text={TOOLTIPS.lending} /></h2>
               <div className="panel-sub">공매도 선행지표</div>
             </div>
             <div className="panel-latest">
@@ -247,7 +264,7 @@ export default function App() {
         <div className="panel">
           <div className="panel-head">
             <div>
-              <h2>예탁금 회전율</h2>
+              <h2>예탁금 회전율<InfoTip text={TOOLTIPS.turnover} /></h2>
               <div className="panel-sub">거래대금 / 예탁금 (%) · 매매 활발도</div>
             </div>
             <div className="panel-latest">
@@ -274,6 +291,13 @@ export default function App() {
         </div>
       </section>
 
+      <hr style={{ border: 'none', borderTop: '1px solid var(--border)', margin: '8px 0 20px' }} />
+
+      <section className="grid-news">
+        <NewsFeed />
+        <ForecastCard />
+      </section>
+
       <footer className="footer">
         <div>
           데이터 출처: 금융투자협회 FreeSIS(freesis.kofia.or.kr), KRX 정보데이터시스템(data.krx.co.kr).
@@ -282,7 +306,7 @@ export default function App() {
             ? '실데이터 연동됨.'
             : '현재 표시 데이터는 위 기관 공개 통계 구조를 반영한 샘플이며, 실제 수치와 다를 수 있습니다.'}
         </div>
-        <div>기준일 {tickDateLong(meta.asOf)} · 생성 {new Date(meta.generatedAt).toLocaleString('ko-KR')} · 단위 {meta.unit}(100만원의 100배)</div>
+        <div>{isLive ? '기준일' : '샘플 기준일'} {tickDateLong(asOfDate)} · 생성 {new Date(meta.generatedAt).toLocaleString('ko-KR')} · 단위 {meta.unit}(100만원의 100배)</div>
         <div>본 대시보드는 정보 제공 목적이며 투자 자문이 아닙니다.</div>
       </footer>
     </div>

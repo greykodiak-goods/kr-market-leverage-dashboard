@@ -3,6 +3,8 @@ import { useQuote, useFxQuote } from '../hooks/useQuote'
 import type { QuotePeriod } from '../lib/quotes'
 import { krxStatus, nowKst } from '../lib/market'
 import { RealtimeQuoteCard } from './RealtimeQuoteCard'
+import { InfoTip } from './InfoTip'
+import { TOOLTIPS } from '../lib/tooltips'
 import { format } from 'date-fns'
 
 const SYMBOL_KRX = '000660.KS'
@@ -54,6 +56,7 @@ export function RealtimeSection() {
             {disc ? '+' : ''}
             {premiumPct.toFixed(2)}% {disc ? '프리미엄' : '디스카운트'}
           </strong>
+          <InfoTip text={TOOLTIPS.premium} />
         </div>
         <div style={{ color: 'var(--text-faint)', fontSize: 11 }}>
           ※ 공식 비율 1 ADR = 원주 1/10 (SEC 424B4) · 신규 상장 초기라 괴리(프리미엄)가 클 수 있음
@@ -87,6 +90,7 @@ export function RealtimeSection() {
           period={krxPeriod}
           onPeriodChange={setKrxPeriod}
           tag="KOSPI"
+          info={TOOLTIPS.hynixKrx}
         />
         <RealtimeQuoteCard
           title="SK하이닉스 ADR"
@@ -101,6 +105,7 @@ export function RealtimeSection() {
           tag="NASDAQ ADS"
           extra={premiumNode}
           shortHistoryNote="2026-07-10 상장 — 상장 이후 데이터만 표시됩니다."
+          info={TOOLTIPS.hynixAdr}
         />
         <RealtimeQuoteCard
           title="원/달러 환율"
@@ -113,6 +118,7 @@ export function RealtimeSection() {
           period={fxPeriod}
           onPeriodChange={setFxPeriod}
           tag="FX"
+          info={TOOLTIPS.fx}
         />
       </div>
     </section>

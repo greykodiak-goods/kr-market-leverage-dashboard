@@ -1,13 +1,26 @@
+import { InfoTip } from './InfoTip'
+
 interface KpiCardProps {
   label: string
   value: string
   unit?: string
   changeText?: string
+  changeLabel?: string
   direction?: 'up' | 'down' | 'flat'
   invertColor?: boolean // when true, up is treated as "bad" (e.g. 미수금 증가)
+  info?: string
 }
 
-export function KpiCard({ label, value, unit, changeText, direction = 'flat', invertColor }: KpiCardProps) {
+export function KpiCard({
+  label,
+  value,
+  unit,
+  changeText,
+  changeLabel = '전일대비',
+  direction = 'flat',
+  invertColor,
+  info,
+}: KpiCardProps) {
   let cls = 'muted'
   let arrow = '→'
   if (direction === 'up') {
@@ -20,7 +33,10 @@ export function KpiCard({ label, value, unit, changeText, direction = 'flat', in
 
   return (
     <div className="kpi-card">
-      <div className="label">{label}</div>
+      <div className="label">
+        {label}
+        {info && <InfoTip text={info} />}
+      </div>
       <div className="value">
         {value}
         {unit && <span className="unit">{unit}</span>}
@@ -30,7 +46,7 @@ export function KpiCard({ label, value, unit, changeText, direction = 'flat', in
           <span className={cls}>
             {arrow} {changeText}
           </span>
-          <span className="muted">전일대비</span>
+          <span className="muted">{changeLabel}</span>
         </div>
       )}
     </div>

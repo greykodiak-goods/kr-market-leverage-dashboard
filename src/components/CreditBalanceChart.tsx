@@ -9,7 +9,7 @@ import {
 } from 'recharts'
 import type { CreditPoint } from '../types'
 import { formatEok, formatEokShort } from '../lib/format'
-import { adaptiveTicks, adaptiveTickFormatter, tickDateLong } from './chartUtils'
+import { toTs, tsLong, timeAxisTicks, timeTickFormatter } from './chartUtils'
 
 interface Props {
   data: CreditPoint[]
@@ -21,7 +21,7 @@ function CreditTooltip({ active, payload, label }: any) {
   const kosdaq = payload.find((p: any) => p.dataKey === 'kosdaq')?.value ?? 0
   return (
     <div className="recharts-default-tooltip" style={{ padding: '8px 12px' }}>
-      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 4 }}>{tickDateLong(label)}</div>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 4 }}>{tsLong(label)}</div>
       <div style={{ fontSize: 13 }}>합계: <strong>{formatEok(kospi + kosdaq)}</strong></div>
       <div style={{ fontSize: 12, color: 'var(--kospi)' }}>코스피: {formatEok(kospi)}</div>
       <div style={{ fontSize: 12, color: 'var(--kosdaq)' }}>코스닥: {formatEok(kosdaq)}</div>
@@ -31,11 +31,12 @@ function CreditTooltip({ active, payload, label }: any) {
 
 export function CreditBalanceChart({ data }: Props) {
   const dates = data.map((d) => d.date)
-  const ticks = adaptiveTicks(dates)
-  const fmt = adaptiveTickFormatter(dates)
+  const rows = data.map((d) => ({ ...d, ts: toTs(d.date) }))
+  const ticks = timeAxisTicks(dates)
+  const fmt = timeTickFormatter(dates)
   return (
     <ResponsiveContainer width="100%" height={300}>
-      <AreaChart data={data} margin={{ top: 8, right: 12, left: 4, bottom: 0 }}>
+      <AreaChart data={rows} margin={{ top: 8, right: 12, left: 4, bottom: 0 }}>
         <defs>
           <linearGradient id="gKospi" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="var(--kospi)" stopOpacity={0.55} />
@@ -47,7 +48,16 @@ export function CreditBalanceChart({ data }: Props) {
           </linearGradient>
         </defs>
         <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-        <XAxis dataKey="date" ticks={ticks} tickFormatter={fmt} tickLine={false} axisLine={{ stroke: 'var(--border)' }} />
+        <XAxis
+          dataKey="ts"
+          type="number"
+          scale="time"
+          domain={['dataMin', 'dataMax']}
+          ticks={ticks}
+          tickFormatter={fmt}
+          tickLine={false}
+          axisLine={{ stroke: 'var(--border)' }}
+        />
         <YAxis
           tickFormatter={(v) => formatEokShort(v)}
           tickLine={false}

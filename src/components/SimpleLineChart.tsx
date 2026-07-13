@@ -9,7 +9,7 @@ import {
   YAxis,
 } from 'recharts'
 import type { ValuePoint } from '../types'
-import { adaptiveTicks, adaptiveTickFormatter, tickDateLong } from './chartUtils'
+import { toTs, tsLong, timeAxisTicks, timeTickFormatter } from './chartUtils'
 
 interface Props {
   data: ValuePoint[]
@@ -29,14 +29,15 @@ export function SimpleLineChart({
   tooltipLabel,
 }: Props) {
   const dates = data.map((d) => d.date)
-  const ticks = adaptiveTicks(dates)
-  const fmt = adaptiveTickFormatter(dates)
+  const rows = data.map((d) => ({ ...d, ts: toTs(d.date) }))
+  const ticks = timeAxisTicks(dates)
+  const fmt = timeTickFormatter(dates)
 
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (!active || !payload || !payload.length) return null
     return (
       <div className="recharts-default-tooltip" style={{ padding: '8px 12px' }}>
-        <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 4 }}>{tickDateLong(label)}</div>
+        <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 4 }}>{tsLong(label)}</div>
         <div style={{ fontSize: 13 }}>
           {tooltipLabel}: <strong>{valueFormatter(payload[0].value)}</strong>
         </div>
@@ -46,7 +47,7 @@ export function SimpleLineChart({
 
   return (
     <ResponsiveContainer width="100%" height={height}>
-      <ComposedChart data={data} margin={{ top: 8, right: 12, left: 4, bottom: 0 }}>
+      <ComposedChart data={rows} margin={{ top: 8, right: 12, left: 4, bottom: 0 }}>
         <defs>
           <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor={color} stopOpacity={0.35} />

@@ -3,6 +3,7 @@ import type { Quote, QuotePeriod } from '../lib/quotes'
 import { QUOTE_PERIODS } from '../lib/quotes'
 import { IntradayChart } from './IntradayChart'
 import { PeriodSelector } from './PeriodSelector'
+import { InfoTip } from './InfoTip'
 
 interface Props {
   title: string
@@ -17,6 +18,7 @@ interface Props {
   tag?: string
   extra?: React.ReactNode
   shortHistoryNote?: string // shown when a long period returns little data (e.g. newly-listed ADR)
+  info?: string
 }
 
 function money(v: number, currency: string) {
@@ -44,6 +46,7 @@ export function RealtimeQuoteCard({
   tag,
   extra,
   shortHistoryNote,
+  info,
 }: Props) {
   const up = quote ? quote.change > 0 : false
   const down = quote ? quote.change < 0 : false
@@ -63,6 +66,7 @@ export function RealtimeQuoteCard({
           <h2 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             {title}
             {tag && <span className="badge" style={{ fontSize: 11 }}>{tag}</span>}
+            {info && <InfoTip text={info} />}
           </h2>
           <div className="panel-sub">{symbolLabel}</div>
         </div>

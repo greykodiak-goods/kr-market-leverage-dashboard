@@ -1,7 +1,8 @@
 // Generates ~20 years of realistic SAMPLE data for the leverage/sentiment charts.
-// Structure per series: monthly points from 2006 up to ~13 months ago, then
-// daily business days for the most recent ~13 months (so KPI 전일대비 stays daily
-// while long-range views 1Y/5Y/10Y/20Y have history).
+// UNIFORM WEEKLY cadence across the entire 2006~2026 window (one point every 7
+// days) so time spacing is even — this avoids the chart distortion that occurs
+// when point density varies across the range. Period buttons (1Y/5Y/10Y/20Y)
+// just slice the tail of this uniform series.
 //
 // Values are modeled on typical Korean-market magnitudes (units: 억원 = 100M KRW)
 // with a long-term trend, cyclical variation, and rough shocks for the 2008
@@ -108,22 +109,28 @@ function isWeekday(d) {
   return day !== 0 && day !== 6
 }
 
-// daily window: last 13 months
-const dailyStart = new Date(Date.UTC(END.getUTCFullYear(), END.getUTCMonth() - 13, 1))
+// Cadence: DAILY business days for the most recent 6 years (so 1M~1Y views are
+// truly day-level), WEEKLY for the older 2006~ history (kept lighter). The charts
+// use a time-scale X axis, so mixed spacing does not distort; long views are
+// downsampled at display time for performance.
+const DAILY_YEARS = 6
+const dailyStart = new Date(Date.UTC(END.getUTCFullYear() - DAILY_YEARS, END.getUTCMonth(), END.getUTCDate()))
 
 const dates = []
-// monthly points (day 15) from START_YEAR up to dailyStart
-let m = new Date(Date.UTC(START_YEAR, 0, 15))
-while (m < dailyStart) {
-  dates.push({ d: new Date(m), daily: false })
-  m = new Date(Date.UTC(m.getUTCFullYear(), m.getUTCMonth() + 1, 15))
+// weekly older history
+let cur = new Date(Date.UTC(START_YEAR, 0, 2))
+while (cur < dailyStart) {
+  const day = isWeekday(cur) ? cur : new Date(cur.getTime() + 86400000)
+  dates.push({ d: new Date(day), daily: false })
+  cur = new Date(cur.getTime() + 7 * 86400000)
 }
-// daily business days
-let cur = new Date(dailyStart)
-while (cur <= END) {
-  if (isWeekday(cur)) dates.push({ d: new Date(cur), daily: true })
-  cur = new Date(cur.getTime() + 86400000)
+// daily business days for the recent window
+let dcur = new Date(dailyStart)
+while (dcur <= END) {
+  if (isWeekday(dcur)) dates.push({ d: new Date(dcur), daily: true })
+  dcur = new Date(dcur.getTime() + 86400000)
 }
+if (iso(dates[dates.length - 1].d) !== iso(END) && isWeekday(END)) dates.push({ d: new Date(END), daily: true })
 
 // ---- assemble series -----------------------------------------------------
 const creditSeries = dates.map(({ d, daily }) => {
@@ -143,8 +150,9 @@ const meta = {
   asOf: iso(END),
   start: iso(dates[0].d),
   unit: '억원',
+  cadence: 'daily-recent+weekly-history',
   notes:
-    '약 20년(2006~) 장기 샘플: 과거는 월 단위, 최근 13개월은 일 단위. 2008 금융위기·2020 코로나 변동을 대략 반영한 현실적 샘플이며 실제 수치와 다릅니다. 실제 장기 데이터는 KRX/금융투자협회 연동 예정입니다.',
+    '약 20년(2006~) 샘플: 최근 6년 일 단위, 과거는 주 단위. 2008 금융위기·2020 코로나 변동을 대략 반영한 현실적 샘플이며 실제 수치와 다릅니다. 실제 데이터는 KRX/금융투자협회 연동 시 자동 갱신됩니다.',
 }
 
 function save(name, series) {
