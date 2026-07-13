@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react'
 
-const STORAGE_KEY = 'dashboard-section-order-v1'
+const STORAGE_KEY = 'dashboard-section-order-v2'
 
 // Persisted section ordering. The registry supplies the default id order; user
 // reordering (drag or ▲▼) is stored as an id array in localStorage.

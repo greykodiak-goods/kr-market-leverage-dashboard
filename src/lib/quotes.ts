@@ -29,9 +29,13 @@ export interface Quote {
   fetchedAt: number // epoch ms
 }
 
+import { HAS_CUSTOM_PROXY, customProxyWrap } from './proxyConfig'
+
 // Prioritized CORS proxies. Each entry wraps a target URL. The array order is
-// the fallback order; the first that returns valid JSON wins.
+// the fallback order; the first that returns valid JSON wins. The dedicated
+// Cloudflare Worker (proxyConfig.CUSTOM_PROXY), when set, takes priority.
 const PROXIES: { name: string; wrap: (url: string) => string }[] = [
+  ...(HAS_CUSTOM_PROXY ? [{ name: 'custom-worker', wrap: customProxyWrap }] : []),
   { name: 'cors.sh', wrap: (u) => `https://proxy.cors.sh/${u}` },
   { name: 'allorigins', wrap: (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}` },
   { name: 'codetabs', wrap: (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}` },

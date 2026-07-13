@@ -50,10 +50,14 @@ export function useKeywords() {
     [state, persist],
   )
 
+  const resetKeywords = useCallback(() => {
+    persist({ enabledIds: DEFAULT_KEYWORDS.map((k) => k.id), custom: [] })
+  }, [persist])
+
   const enabledKeywords = useMemo(
     () => allKeywords.filter((k) => state.enabledIds.includes(k.id)),
     [allKeywords, state.enabledIds],
   )
 
-  return { allKeywords, enabledIds: state.enabledIds, enabledKeywords, toggle, addCustom, removeCustom }
+  return { allKeywords, enabledIds: state.enabledIds, enabledKeywords, toggle, addCustom, removeCustom, resetKeywords }
 }

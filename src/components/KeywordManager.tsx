@@ -7,9 +7,10 @@ interface Props {
   onToggle: (id: string) => void
   onAdd: (label: string, category: CategoryId) => void
   onRemove: (id: string) => void
+  onReset: () => void
 }
 
-export function KeywordManager({ allKeywords, enabledIds, onToggle, onAdd, onRemove }: Props) {
+export function KeywordManager({ allKeywords, enabledIds, onToggle, onAdd, onRemove, onReset }: Props) {
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState('')
   const [cat, setCat] = useState<CategoryId>('tech')
@@ -34,14 +35,24 @@ export function KeywordManager({ allKeywords, enabledIds, onToggle, onAdd, onRem
                     const on = enabledIds.includes(k.id)
                     return (
                       <span key={k.id} className={`kw-chip${on ? ' on' : ''}`}>
-                        <button type="button" className="kw-chip-btn" onClick={() => onToggle(k.id)} aria-pressed={on}>
-                          {k.label}
+                        <button
+                          type="button"
+                          className="kw-chip-btn"
+                          onClick={() => onToggle(k.id)}
+                          aria-pressed={on}
+                          title={on ? '끄기' : '켜기'}
+                        >
+                          {on ? '' : '＋'}{k.label}
                         </button>
-                        {k.custom && (
-                          <button type="button" className="kw-chip-x" title="삭제" onClick={() => onRemove(k.id)}>
-                            ×
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          className="kw-chip-x"
+                          title={k.custom ? '삭제' : '목록에서 제거'}
+                          aria-label={`${k.label} 제거`}
+                          onClick={() => onRemove(k.id)}
+                        >
+                          ×
+                        </button>
                       </span>
                     )
                   })}
@@ -78,6 +89,13 @@ export function KeywordManager({ allKeywords, enabledIds, onToggle, onAdd, onRem
               }}
             >
               추가
+            </button>
+          </div>
+
+          <div className="kw-footer">
+            <span>칩 클릭=on/off · ×=제거 · 커스텀은 완전 삭제</span>
+            <button type="button" className="kw-reset" onClick={onReset}>
+              기본값 복원
             </button>
           </div>
         </div>

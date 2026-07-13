@@ -8,11 +8,15 @@ import { CATEGORIES, type CategoryId, type Keyword } from '../lib/keywords'
 
 type SortMode = 'recent' | 'hot'
 
+const MAX_AGE_MS = 5 * 24 * 3600_000 // hide items older than 5 days by default
+
 export function NewsFeed() {
-  const { allKeywords, enabledIds, enabledKeywords, toggle, addCustom, removeCustom } = useKeywords()
+  const { allKeywords, enabledIds, enabledKeywords, toggle, addCustom, removeCustom, resetKeywords } = useKeywords()
   const { data, isLoading, isError, error } = useNews(enabledKeywords)
   const [sort, setSort] = useState<SortMode>('hot')
   const [catFilter, setCatFilter] = useState<CategoryId | 'all'>('all')
+  const [includeOld, setIncludeOld] = useState(false)
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
   const kwById = useMemo(() => {
     const m = new Map<string, Keyword>()
@@ -23,15 +27,24 @@ export function NewsFeed() {
   const items = useMemo(() => {
     let list = data?.items ?? []
     if (catFilter !== 'all') {
-      list = list.filter((it) =>
-        it.matchedKeywordIds.some((id) => kwById.get(id)?.category === catFilter),
-      )
+      list = list.filter((it) => it.matchedKeywordIds.some((id) => kwById.get(id)?.category === catFilter))
     }
-    const sorted = [...list].sort((a, b) =>
-      sort === 'recent' ? b.published - a.published : b.score - a.score,
-    )
+    if (!includeOld) {
+      const cutoff = Date.now() - MAX_AGE_MS
+      list = list.filter((it) => it.published >= cutoff)
+    }
+    const sorted = [...list].sort((a, b) => (sort === 'recent' ? b.published - a.published : b.score - a.score))
     return sorted.slice(0, 40)
-  }, [data, sort, catFilter, kwById])
+  }, [data, sort, catFilter, kwById, includeOld])
+
+  const toggleExpand = (id: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+
+  const totalClustered = data?.items.length ?? 0
 
   return (
     <section className="panel news-panel">
@@ -39,7 +52,8 @@ export function NewsFeed() {
         <div>
           <h2>하이닉스 영향 키워드 뉴스</h2>
           <div className="panel-sub">
-            Google 뉴스 실시간 · 교차보도·상관도·최신성 합성 화제 랭킹
+            Google 뉴스 · 사건 단위 클러스터링(중복 병합)
+            {data && ` · ${totalClustered}건 사건`}
             {data?.stale && ' · 캐시(갱신실패)'}
             {data?.partial && ' · 일부 배치 실패'}
           </div>
@@ -70,6 +84,9 @@ export function NewsFeed() {
               {c.label}
             </button>
           ))}
+          <button className={`cat-tab${includeOld ? ' active' : ''}`} onClick={() => setIncludeOld((v) => !v)} title="5일 초과 뉴스 표시">
+            {includeOld ? '오래된 뉴스 포함' : '최근 5일만'}
+          </button>
         </div>
         <KeywordManager
           allKeywords={allKeywords}
@@ -77,6 +94,7 @@ export function NewsFeed() {
           onToggle={toggle}
           onAdd={addCustom}
           onRemove={removeCustom}
+          onReset={resetKeywords}
         />
       </div>
 
@@ -88,7 +106,7 @@ export function NewsFeed() {
           <div style={{ fontSize: 11, marginTop: 4, color: 'var(--text-faint)' }}>{String((error as Error)?.message ?? '')}</div>
         </div>
       ) : items.length === 0 ? (
-        <div className="news-empty">표시할 뉴스가 없습니다. 키워드를 켜거나 카테고리 필터를 바꿔보세요.</div>
+        <div className="news-empty">표시할 뉴스가 없습니다. 키워드를 켜거나 필터를 바꿔보세요.</div>
       ) : (
         <ul className="news-list">
           {items.map((it) => (
@@ -105,10 +123,21 @@ export function NewsFeed() {
                   {it.clusterSize > 1 && (
                     <>
                       <span className="news-dot">·</span>
-                      <span>{it.clusterSize}개 매체</span>
+                      <button className="news-cluster-btn" onClick={() => toggleExpand(it.id)}>
+                        {it.clusterSize}개 매체 보도 {expanded.has(it.id) ? '▲' : '▾'}
+                      </button>
                     </>
                   )}
                 </div>
+                {expanded.has(it.id) && it.sources.length > 1 && (
+                  <div className="news-sources">
+                    {it.sources.map((s, i) => (
+                      <a key={i} href={s.link} target="_blank" rel="noopener noreferrer">
+                        {s.source || '매체'}
+                      </a>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="news-chips">
                 {it.matchedKeywordIds.slice(0, 4).map((id) => (
@@ -116,6 +145,9 @@ export function NewsFeed() {
                     {kwById.get(id)?.label ?? id}
                   </span>
                 ))}
+                {it.matchedKeywordIds.length > 4 && (
+                  <span className="news-kw-chip">+{it.matchedKeywordIds.length - 4}</span>
+                )}
               </div>
             </li>
           ))}
@@ -123,7 +155,8 @@ export function NewsFeed() {
       )}
 
       <div className="news-foot">
-        출처: Google 뉴스 RSS · 헤드라인/링크만 표기(원문은 각 매체). 폴링 5분 · 조회수 대용은 교차보도량+상관도+최신성 합성치입니다.
+        출처: Google 뉴스 RSS · 헤드라인/링크만 표기(원문은 각 매체). 동일 사건은 한 카드로 병합, "N개 매체 보도"로 표시.
+        화제도 = 교차보도량+상관도+최신성 합성치(조회수 대용).
       </div>
     </section>
   )
