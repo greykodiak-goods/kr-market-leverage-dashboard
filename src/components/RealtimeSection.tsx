@@ -6,8 +6,9 @@ import { format } from 'date-fns'
 const SYMBOL_KRX = '000660.KS'
 const SYMBOL_ADR = 'SKHYV' // SK hynix ADS (NASDAQ, 2026-07-10 상장). 구 OTC HXSCL/HXSCF는 상장폐지됨.
 
-// ADR 1주가 나타내는 원주 수 — 공시 미확인 가정치. 프리미엄은 참고용.
-const ADR_ORDINARY_RATIO = 0.125 // 1 ADR ≈ 1/8 원주 (가정)
+// ADR 1주가 나타내는 원주 수 — 공식 비율(SEC 424B4 / SK하이닉스 나스닥 ADR 상장 공시).
+// 10 ADR = 원주 1주.
+const ADR_ORDINARY_RATIO = 0.1 // 1 ADR = 원주 1/10
 
 export function RealtimeSection() {
   const krx = useQuote(SYMBOL_KRX)
@@ -48,7 +49,7 @@ export function RealtimeSection() {
           </strong>
         </div>
         <div style={{ color: 'var(--text-faint)', fontSize: 11 }}>
-          ※ 비율 가정치 1 ADR = {ADR_ORDINARY_RATIO} 원주 · 환율/비율 가정 기반 참고값
+          ※ 공식 비율 1 ADR = 원주 1/10 (SEC 424B4) · 신규 상장 초기라 괴리(프리미엄)가 클 수 있음
         </div>
       </div>
     )
