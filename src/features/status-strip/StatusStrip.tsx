@@ -24,7 +24,7 @@ function signPct(v: number | null | undefined) {
 // symbols poll continuously regardless of the active tab.
 export function StatusStrip() {
   const hynix = useQuote('000660.KS', '1D')
-  const adr = useQuote('SKHYV', '1D')
+  const adr = useQuote('SKHY', '1D')
   const sox = useQuote('^SOX', '1D')
   const fx = useFxQuote('1D')
   const vix = useQuote('^VIX', '1D')

@@ -14,7 +14,7 @@ export function OpportunitySignals() {
   const vix = useQuote('^VIX', '1M')
   const krw = useFxQuote('1D')
   const tnx = useQuote('^TNX', '1D')
-  const adr = useQuote('SKHYV', '1D')
+  const adr = useQuote('SKHY', '1D')
 
   const ind = useMemo(() => {
     if (!hynix.data?.intraday?.length) return null

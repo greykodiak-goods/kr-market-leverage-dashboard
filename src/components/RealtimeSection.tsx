@@ -8,7 +8,7 @@ import { TOOLTIPS } from '../lib/tooltips'
 import { format } from 'date-fns'
 
 const SYMBOL_KRX = '000660.KS'
-const SYMBOL_ADR = 'SKHYV' // SK hynix ADS (NASDAQ, 2026-07-10 상장). 구 OTC HXSCL/HXSCF는 상장폐지됨.
+const SYMBOL_ADR = 'SKHY' // SK hynix 정식 ADR (NasdaqGM). 구 when-issued 티커 SKHYV·OTC HXSCL/HXSCF는 폐지·전환됨.
 
 // ADR 1주가 나타내는 원주 수 — 공식 비율(SEC 424B4 / SK하이닉스 나스닥 ADR 상장 공시).
 // 10 ADR = 원주 1주.
@@ -94,7 +94,7 @@ export function RealtimeSection() {
         />
         <RealtimeQuoteCard
           title="SK하이닉스 ADR"
-          symbolLabel="NASDAQ SKHYV · 미국예탁증서"
+          symbolLabel="NASDAQ SKHY · 미국예탁증서"
           quote={adr.data}
           isLoading={adr.isLoading}
           isError={adr.isError}
@@ -104,7 +104,7 @@ export function RealtimeSection() {
           onPeriodChange={setAdrPeriod}
           tag="NASDAQ ADS"
           extra={premiumNode}
-          shortHistoryNote="2026-07-10 상장 — 상장 이후 데이터만 표시됩니다."
+          shortHistoryNote="신규 상장 ADR — 상장 이후 데이터만 표시될 수 있습니다."
           info={TOOLTIPS.hynixAdr}
         />
         <RealtimeQuoteCard
