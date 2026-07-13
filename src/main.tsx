@@ -9,6 +9,10 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 1000 * 60 * 30,
+      // Keep cache alive across tab round-trips: switching tabs unmounts a tab's
+      // sections (stopping their polling); the cache survives ~5min so re-entry
+      // paints instantly and only live queries re-fetch in the background.
+      gcTime: 1000 * 60 * 5,
       refetchOnWindowFocus: false,
       retry: 1,
     },

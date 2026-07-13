@@ -3,14 +3,18 @@ import { useQuery } from '@tanstack/react-query'
 import { fetchDashboardData } from './lib/data'
 import { tickDateLong } from './components/chartUtils'
 import { DashboardLayout } from './features/dashboard-layout/DashboardLayout'
-import { useSectionOrder } from './features/dashboard-layout/useSectionOrder'
-import { DEFAULT_ORDER } from './dashboard/sections'
+import { useTabLayout } from './features/dashboard-layout/useTabLayout'
+import { useTabHash } from './features/dashboard-layout/useTabHash'
+import { TabBar } from './features/dashboard-layout/TabBar'
+import { StatusStrip } from './features/status-strip/StatusStrip'
 
-// Thin composition root: header controls + data-driven section layout + footer.
-// All feature logic lives under src/features/*; section order is a registry.
+// Thin composition root: header + always-on KPI strip + topic tab bar +
+// per-tab draggable section layout + footer. Only the active tab's sections
+// mount, so inactive-tab polling stops automatically.
 export default function App() {
   const [editing, setEditing] = useState(false)
-  const { order, setOrder, move, reset } = useSectionOrder(DEFAULT_ORDER)
+  const [tab, selectTab] = useTabHash()
+  const { layout, setTabOrder, move, reset } = useTabLayout()
 
   // Header/footer meta only (deduped with feature sections via shared query key).
   const { data } = useQuery({ queryKey: ['dashboard'], queryFn: fetchDashboardData })
@@ -23,7 +27,7 @@ export default function App() {
       <header className="header">
         <div>
           <h1>국내증시 레버리지 · 투자심리 대시보드</h1>
-          <div className="subtitle">시나리오 전망 · 실시간 시세 · 시장 온도 · 뉴스</div>
+          <div className="subtitle">하이닉스 · 반도체 · 시장 · 뉴스 — 주제별 탭</div>
         </div>
         <div className="badges">
           <span className={`badge ${isLive ? 'live' : 'sample'}`}>{isLive ? '실데이터' : '샘플 데이터'}</span>
@@ -43,15 +47,29 @@ export default function App() {
         </div>
       </header>
 
+      <StatusStrip />
+
+      <TabBar active={tab} onSelect={selectTab} />
+
       {editing && (
-        <div className="edit-hint">드래그(⠿) 또는 ▲▼ 버튼으로 섹션 순서를 바꾸세요. 배치는 자동 저장됩니다.</div>
+        <div className="edit-hint">
+          현재 탭 안에서 드래그(⠿) 또는 ▲▼로 섹션 순서를 바꾸세요. 탭별로 자동 저장됩니다. (탭 간 이동은 미지원)
+        </div>
       )}
 
-      <DashboardLayout editing={editing} order={order} onReorder={setOrder} onMove={move} />
+      <div id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`}>
+        <DashboardLayout
+          key={tab}
+          editing={editing}
+          order={layout[tab]}
+          onReorder={(next) => setTabOrder(tab, next)}
+          onMove={(id, dir) => move(tab, id, dir)}
+        />
+      </div>
 
       <footer className="footer">
         <div>
-          데이터 출처: 금융투자협회 FreeSIS(freesis.kofia.or.kr), KRX 정보데이터시스템(data.krx.co.kr), Yahoo Finance(시세), Google 뉴스.
+          데이터 출처: 금융투자협회 FreeSIS, KRX 정보데이터시스템, Yahoo Finance(시세), Google 뉴스.
           {' '}
           {isLive ? '실데이터 연동됨.' : '레버리지 지표는 공개통계 구조를 반영한 샘플이며 실제 수치와 다를 수 있습니다.'}
         </div>

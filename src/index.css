@@ -326,6 +326,102 @@ body {
   background: var(--accent);
 }
 
+/* Always-on KPI status strip */
+.status-strip {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  scrollbar-width: thin;
+}
+.status-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 12px;
+  border-right: 1px solid var(--border);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.status-kpi:last-child {
+  border-right: none;
+}
+.status-label {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.status-value {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.status-sub {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Topic tab bar */
+.tabbar {
+  display: flex;
+  gap: 4px;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--bg);
+  padding: 8px 0 10px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+}
+.tab-btn {
+  flex-shrink: 0;
+  scroll-snap-align: start;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.tab-btn:hover {
+  color: var(--text);
+}
+.tab-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.tab-btn .tab-short {
+  display: none;
+}
+
+@media (max-width: 560px) {
+  .tab-btn {
+    padding: 8px 13px;
+    font-size: 13px;
+  }
+  .tab-btn .tab-full {
+    display: none;
+  }
+  .tab-btn .tab-short {
+    display: inline;
+  }
+  .status-value {
+    font-size: 14px;
+  }
+}
+
 /* Dashboard edit / reorder */
 .dash-section {
   margin-bottom: 16px;
