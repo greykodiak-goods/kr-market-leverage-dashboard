@@ -24,6 +24,8 @@ export interface Quote {
   dayLow: number
   fiftyTwoWeekLow: number
   fiftyTwoWeekHigh: number
+  avg20Volume: number // 20-bar average volume (0 if unavailable)
+  lastVolume: number // latest bar volume (0 if unavailable)
   marketTime: number // epoch seconds
   intraday: IntradayPoint[]
   stale: boolean // true when served from cache after a failed refresh
@@ -94,12 +96,21 @@ function parseYahoo(symbol: string, json: any, proxyUsed: string): Quote {
   const prev = meta.chartPreviousClose ?? meta.previousClose ?? price
   const timestamps: number[] = result.timestamp ?? []
   const closes: (number | null)[] = result.indicators?.quote?.[0]?.close ?? []
+  const volumes: (number | null)[] = result.indicators?.quote?.[0]?.volume ?? []
 
   const intraday: IntradayPoint[] = []
+  const vols: number[] = []
   for (let i = 0; i < timestamps.length; i++) {
     const c = closes[i]
-    if (c != null && !Number.isNaN(c)) intraday.push({ t: timestamps[i], price: c })
+    if (c != null && !Number.isNaN(c)) {
+      intraday.push({ t: timestamps[i], price: c })
+      const v = volumes[i]
+      if (v != null && !Number.isNaN(v) && v > 0) vols.push(v)
+    }
   }
+  const lastVols = vols.slice(-20)
+  const avg20Volume = lastVols.length ? Math.round(lastVols.reduce((s, v) => s + v, 0) / lastVols.length) : 0
+  const lastVolume = vols.length ? vols[vols.length - 1] : 0
 
   return {
     symbol,
@@ -113,6 +124,8 @@ function parseYahoo(symbol: string, json: any, proxyUsed: string): Quote {
     dayLow: meta.regularMarketDayLow ?? (intraday.length ? Math.min(...intraday.map((p) => p.price)) : price),
     fiftyTwoWeekLow: meta.fiftyTwoWeekLow ?? (intraday.length ? Math.min(...intraday.map((p) => p.price)) : price),
     fiftyTwoWeekHigh: meta.fiftyTwoWeekHigh ?? (intraday.length ? Math.max(...intraday.map((p) => p.price)) : price),
+    avg20Volume,
+    lastVolume,
     marketTime: meta.regularMarketTime ?? Math.floor(Date.now() / 1000),
     intraday,
     stale: false,

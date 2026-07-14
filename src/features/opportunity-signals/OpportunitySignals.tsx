@@ -1,8 +1,11 @@
 import { useMemo } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { useQuote, useFxQuote } from '../../hooks/useQuote'
 import { computeIndicators, type Candle } from '../../lib/indicators'
 import { computeRelativeStrength } from '../../lib/rs'
 import { computeSignals } from './signals'
+import { fetchStockLending } from '../../lib/data'
+import { pctChangeOver } from '../short-covering/lib/covering'
 import { InfoTip } from '../../components/InfoTip'
 import { TOOLTIPS } from '../../lib/tooltips'
 
@@ -15,6 +18,12 @@ export function OpportunitySignals() {
   const krw = useFxQuote('1D')
   const tnx = useQuote('^TNX', '1D')
   const adr = useQuote('SKHY', '1D')
+  const lendingQ = useQuery({ queryKey: ['hynix-lending'], queryFn: fetchStockLending })
+
+  const lendingDrop5Pct = useMemo(() => {
+    const vals = lendingQ.data?.series.map((p) => p.amountEok) ?? []
+    return vals.length ? pctChangeOver(vals, 5) : null
+  }, [lendingQ.data])
 
   const ind = useMemo(() => {
     if (!hynix.data?.intraday?.length) return null
@@ -44,8 +53,9 @@ export function OpportunitySignals() {
         krw: krw.data ?? null,
         tnx: tnx.data ?? null,
         adrPremiumPct,
+        lendingDrop5Pct,
       }),
-    [ind, hynix.data, rsTrend, vix.data, krw.data, tnx.data, adrPremiumPct],
+    [ind, hynix.data, rsTrend, vix.data, krw.data, tnx.data, adrPremiumPct, lendingDrop5Pct],
   )
 
   const metCount = signals.filter((s) => s.met).length

@@ -20,6 +20,7 @@ export interface SignalInputs {
   krw: Quote | null // USD/KRW
   tnx: Quote | null // ^TNX
   adrPremiumPct: number | null
+  lendingDrop5Pct?: number | null // hynix 대차잔고 최근 5일 % 변화
 }
 
 function smaVal(ind: IndicatorResult | null, period: number): number | null {
@@ -107,6 +108,15 @@ export function computeSignals(inp: SignalInputs): Signal[] {
     met: inp.tnx != null && inp.tnx.changePct > 2,
     detail: inp.tnx != null ? `${inp.tnx.price.toFixed(2)}% (${inp.tnx.changePct >= 0 ? '+' : ''}${inp.tnx.changePct.toFixed(2)}%)` : '데이터 대기',
     tone: 'watch-risk',
+  })
+
+  // 9) 대차잔고 급감 = 숏 상환(커버) 관찰 (최근 5일 −5%↓)
+  out.push({
+    id: 'lendingDrop',
+    label: '대차잔고 급감 (상환 관찰, 5일 −5%↓)',
+    met: inp.lendingDrop5Pct != null && inp.lendingDrop5Pct <= -5,
+    detail: inp.lendingDrop5Pct != null ? `대차잔고 5일 ${inp.lendingDrop5Pct >= 0 ? '+' : ''}${inp.lendingDrop5Pct.toFixed(1)}%` : '데이터 대기',
+    tone: 'watch-up',
   })
 
   return out

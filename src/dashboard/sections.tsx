@@ -1,5 +1,6 @@
 import type { ComponentType } from 'react'
 import { HynixGroupSection } from '../features/hynix/HynixGroupSection'
+import { ShortCoveringSection } from '../features/short-covering/ShortCoveringSection'
 import { OpportunitySignals } from '../features/opportunity-signals/OpportunitySignals'
 import { SemiconductorSection } from '../features/semiconductor/SemiconductorSection'
 import { MacroSection } from '../features/macro/MacroSection'
@@ -42,6 +43,7 @@ export interface SectionDef {
 // draggable section (they move together).
 export const SECTIONS: SectionDef[] = [
   { id: 'hynix', tab: 'hynix', title: '하이닉스 종목 (시세 + 기술적 전망)', Component: HynixGroupSection },
+  { id: 'short-covering', tab: 'hynix', title: '🩳 공매도·대차 상환 모니터', Component: ShortCoveringSection },
   { id: 'signals', tab: 'hynix', title: '⚡ 기회 · 관찰 신호 보드', Component: OpportunitySignals },
   { id: 'semiconductor', tab: 'semi', title: '반도체 업황 · 상대강도', Component: SemiconductorSection },
   { id: 'leverage', tab: 'market', title: '시장 온도 · 레버리지', Component: LeverageSection },

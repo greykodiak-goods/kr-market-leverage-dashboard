@@ -170,6 +170,9 @@ body {
 .change .down {
   color: var(--down);
 }
+.change .cover {
+  color: #12b76a;
+}
 .change .muted {
   color: var(--text-faint);
 }
@@ -662,6 +665,93 @@ body {
 .signal-detail {
   font-size: 11.5px;
   color: var(--text-dim);
+}
+
+/* Short-covering monitor */
+.short-covering h3 {
+  font-weight: 700;
+}
+.cover-dir {
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.aux-card {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  min-width: 0;
+}
+.aux-title {
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.aux-note {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin: 2px 0 8px;
+}
+.cover-est-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cover-est-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--text-dim);
+  padding: 4px 0;
+  border-top: 1px dashed var(--border);
+}
+.cover-est-row:first-child {
+  border-top: none;
+}
+.squeeze-badge {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-faint);
+  margin-left: auto;
+}
+.squeeze-badge.on {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+.squeeze-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+.squeeze-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-faint);
+  padding: 4px 0;
+}
+.squeeze-list li.met {
+  color: var(--text);
+}
+.sq-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  opacity: 0.4;
+  flex-shrink: 0;
+}
+.squeeze-list li.met .sq-dot {
+  opacity: 1;
+  background: var(--danger);
 }
 
 /* Info tooltip */

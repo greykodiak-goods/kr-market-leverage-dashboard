@@ -21,6 +21,9 @@ export function KpiCard({
   invertColor,
   info,
 }: KpiCardProps) {
+  // Default: KR convention (up = red, down = blue). invertColor flips the
+  // *meaning* so a decrease reads positive (green) and an increase negative
+  // (red) — e.g. 대차잔고·공매도 감소 = 상환(긍정).
   let cls = 'muted'
   let arrow = '→'
   if (direction === 'up') {
@@ -28,7 +31,7 @@ export function KpiCard({
     cls = invertColor ? 'up' : 'up'
   } else if (direction === 'down') {
     arrow = '▼'
-    cls = 'down'
+    cls = invertColor ? 'cover' : 'down'
   }
 
   return (

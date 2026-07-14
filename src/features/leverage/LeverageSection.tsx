@@ -160,7 +160,7 @@ export function LeverageSection() {
           <div className="panel-head">
             <div>
               <h2>대차잔고<InfoTip text={TOOLTIPS.lending} /></h2>
-              <div className="panel-sub">공매도 선행지표</div>
+              <div className="panel-sub">공매도 선행지표 · 감소는 광의의 디레버리징/상환 관점 (종목별 상환은 하이닉스 탭 🩳 모니터)</div>
             </div>
             <div className="panel-latest"><strong>{formatEok(lendingLatest.value)}</strong></div>
           </div>
