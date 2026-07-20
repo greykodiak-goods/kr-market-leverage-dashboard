@@ -57,7 +57,7 @@ export default function App() {
         </div>
       )}
 
-      <div id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`}>
+      <div key={tab} id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`} className="tab-panel">
         <DashboardLayout
           key={tab}
           editing={editing}

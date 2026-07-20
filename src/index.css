@@ -383,13 +383,21 @@ body {
   position: sticky;
   top: 0;
   z-index: 20;
-  background: var(--bg);
   padding: 8px 0 10px;
   margin-bottom: 8px;
   border-bottom: 1px solid var(--border);
   overflow-x: auto;
   scroll-snap-type: x proximity;
   scrollbar-width: thin;
+  /* Same scroll-position-aware edge fade as .status-strip: hints there's
+     more to scroll to on narrow screens, self-clears once fully scrolled. */
+  background:
+    linear-gradient(to right, var(--bg), var(--bg)) left / 20px 100% no-repeat,
+    linear-gradient(to left, var(--bg), var(--bg)) right / 20px 100% no-repeat,
+    linear-gradient(to right, rgba(0, 0, 0, 0.16), rgba(0, 0, 0, 0)) left / 14px 100% no-repeat,
+    linear-gradient(to left, rgba(0, 0, 0, 0.16), rgba(0, 0, 0, 0)) right / 14px 100% no-repeat,
+    var(--bg);
+  background-attachment: local, local, scroll, scroll, scroll;
 }
 .tab-btn {
   flex-shrink: 0;
@@ -403,7 +411,8 @@ body {
   padding: 8px 16px;
   border-radius: 10px;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  transform: scale(1);
+  transition: background 0.15s, color 0.15s, border-color 0.15s, transform 0.15s ease-out, box-shadow 0.15s;
 }
 .tab-btn:hover {
   color: var(--text);
@@ -412,9 +421,33 @@ body {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
+  transform: scale(1.05);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 .tab-btn .tab-short {
   display: none;
+}
+
+/* Tab content fade/slide-in on tab switch */
+.tab-panel {
+  animation: tab-panel-in 0.18s ease-out;
+}
+@keyframes tab-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tab-btn,
+  .tab-panel {
+    animation: none;
+    transition: none;
+  }
 }
 
 @media (max-width: 560px) {
