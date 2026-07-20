@@ -22,7 +22,7 @@ export function SemiconductorSection() {
     [rs],
   )
 
-  const trendLabel = rs ? (rs.trend === 'up' ? '하이닉스 상대강세' : rs.trend === 'down' ? '하이닉스 상대약세' : '중립') : '—'
+  const trendLabel = rs ? (rs.trend === 'up' ? '추세 강세' : rs.trend === 'down' ? '추세 약세' : '추세 중립') : '—'
   const trendColor = rs?.trend === 'up' ? 'var(--up)' : rs?.trend === 'down' ? 'var(--down)' : 'var(--text-dim)'
 
   return (
