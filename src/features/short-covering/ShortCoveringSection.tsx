@@ -236,7 +236,12 @@ export function ShortCoveringSection() {
               <h3 style={{ margin: 0, fontSize: 14 }}>공매도 잔고 &amp; 비중<InfoTip text={TOOLTIPS.shortBalance} /></h3>
               <div className="panel-sub">막대=잔고(억원) · 라인=비중(%) · 둘 다 우하향이면 커버링 관찰</div>
             </div>
-            {isSeed && <span className="badge sample" style={{ fontSize: 10 }}>샘플</span>}
+            {isSeed && short && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                <span className="badge sample" style={{ fontSize: 10 }}>샘플</span>
+                <InfoTip label="샘플 데이터 설명" text={`${short.meta.sourceLabel} · 기준일 ${short.meta.asOf}. ${short.meta.notes}`} />
+              </span>
+            )}
           </div>
           <ResponsiveContainer width="100%" height={200}>
             <ComposedChart data={shortRows} margin={{ top: 8, right: 12, left: 4, bottom: 0 }}>

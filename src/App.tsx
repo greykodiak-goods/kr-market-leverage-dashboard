@@ -7,6 +7,7 @@ import { useTabLayout } from './features/dashboard-layout/useTabLayout'
 import { useTabHash } from './features/dashboard-layout/useTabHash'
 import { TabBar } from './features/dashboard-layout/TabBar'
 import { StatusStrip } from './features/status-strip/StatusStrip'
+import { InfoTip } from './components/InfoTip'
 
 // Thin composition root: header + always-on KPI strip + topic tab bar +
 // per-tab draggable section layout + footer. Only the active tab's sections
@@ -32,9 +33,19 @@ export default function App() {
         <div className="badges">
           <span className={`badge ${isLive ? 'live' : 'sample'}`}>{isLive ? '실데이터' : '샘플 데이터'}</span>
           {asOfDate && (
-            <span className="badge" title={isLive ? undefined : '샘플 시계열의 최신 날짜 · 실데이터 연동 시 자동 갱신'}>
+            <span className="badge">
               {isLive ? '기준일' : '샘플 기준일'} {tickDateLong(asOfDate)}
             </span>
+          )}
+          {meta && (
+            <InfoTip
+              label="데이터 범위 설명"
+              text={
+                isLive
+                  ? `${meta.sourceLabel} · 기준일 ${tickDateLong(meta.asOf)}. 하이닉스 시세·ADR·환율·전망은 이와 별개로 항상 실시간 연동됩니다.`
+                  : `이 배지는 레버리지·수급(신용융자·대차 등) 지표 기준입니다: ${meta.sourceLabel} · 샘플 기준일 ${tickDateLong(meta.asOf)}. 하이닉스 시세·ADR·환율·전망은 이와 별개로 실시간 연동됩니다.`
+              }
+            />
           )}
           <button className={`edit-toggle${editing ? ' on' : ''}`} onClick={() => setEditing((e) => !e)}>
             {editing ? '편집 완료' : '배치 편집'}

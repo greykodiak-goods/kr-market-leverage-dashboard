@@ -86,6 +86,10 @@ export function LeverageSection() {
         <div>
           <strong style={{ fontSize: 15 }}>시장 온도 · 레버리지 · 투자심리</strong>
           <span className="badge sample" style={{ marginLeft: 8, fontSize: 11 }}>샘플(장기)</span>
+          <InfoTip
+            label="샘플 데이터 설명"
+            text={`${data.credit.meta.sourceLabel} · 기준일 ${data.credit.meta.asOf}. ${data.credit.meta.notes}`}
+          />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>차트 기간</span>
