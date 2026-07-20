@@ -25,7 +25,7 @@ function fmt(v: number, currency: string, unit: MiniUnit): string {
 }
 
 export function QuoteMiniCard({ symbol, label, tag, unit = 'auto', color = 'var(--accent)', info, period = '1D', highlight }: Props) {
-  const { data, isLoading, isError } = useQuote(symbol, period)
+  const { data, isLoading, isError, isRefetching, refetch } = useQuote(symbol, period)
   const up = data ? data.change > 0 : false
   const down = data ? data.change < 0 : false
   const cc = up ? 'var(--up)' : down ? 'var(--down)' : 'var(--text-faint)'
@@ -47,7 +47,12 @@ export function QuoteMiniCard({ symbol, label, tag, unit = 'auto', color = 'var(
           <div className="skeleton skeleton-spark" />
         </div>
       ) : isError && !data ? (
-        <div className="mini-loading err">시세 실패</div>
+        <div className="mini-loading err">
+          시세 실패
+          <button type="button" className="retry-btn" onClick={() => refetch()} disabled={isRefetching}>
+            {isRefetching ? '재시도 중…' : '↻ 재시도'}
+          </button>
+        </div>
       ) : data ? (
         <>
           <div className="mini-price">{fmt(data.price, data.currency, unit)}</div>

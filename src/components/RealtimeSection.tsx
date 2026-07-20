@@ -85,6 +85,8 @@ export function RealtimeSection() {
           quote={krx.data}
           isLoading={krx.isLoading}
           isError={krx.isError}
+          onRetry={() => krx.refetch()}
+          isRefetching={krx.isRefetching}
           color="var(--kospi)"
           gradientId="gQuoteKrx"
           period={krxPeriod}
@@ -98,6 +100,8 @@ export function RealtimeSection() {
           quote={adr.data}
           isLoading={adr.isLoading}
           isError={adr.isError}
+          onRetry={() => adr.refetch()}
+          isRefetching={adr.isRefetching}
           color="var(--kosdaq)"
           gradientId="gQuoteAdr"
           period={adrPeriod}
@@ -113,6 +117,8 @@ export function RealtimeSection() {
           quote={fx.data}
           isLoading={fx.isLoading}
           isError={fx.isError}
+          onRetry={() => fx.refetch()}
+          isRefetching={fx.isRefetching}
           color="#12b76a"
           gradientId="gQuoteFx"
           period={fxPeriod}

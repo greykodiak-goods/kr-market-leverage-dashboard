@@ -24,7 +24,7 @@ function won(v: number | null | undefined) {
 
 export function ForecastCard() {
   // 1Y daily history (range=1y, interval=1d) → ~250 closes for indicators.
-  const { data, isLoading, isError } = useQuote('000660.KS', '1Y')
+  const { data, isLoading, isError, isRefetching, refetch } = useQuote('000660.KS', '1Y')
 
   const result = useMemo(() => {
     if (!data?.intraday?.length) return null
@@ -98,7 +98,13 @@ export function ForecastCard() {
           <div className="skeleton skeleton-chart-lg" />
         </div>
       ) : isError && !result ? (
-        <div className="news-empty err">기술적 지표용 시세를 가져오지 못했습니다 (프록시 응답 없음).</div>
+        <div className="news-empty err">
+          기술적 지표용 시세를 가져오지 못했습니다 (프록시 응답 없음).
+          <br />
+          <button type="button" className="retry-btn" onClick={() => refetch()} disabled={isRefetching}>
+            {isRefetching ? '재시도 중…' : '↻ 다시 시도'}
+          </button>
+        </div>
       ) : !result ? (
         <div className="news-empty">데이터가 충분하지 않습니다.</div>
       ) : (

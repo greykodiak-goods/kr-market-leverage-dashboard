@@ -15,6 +15,8 @@ interface Props {
   gradientId: string
   period: QuotePeriod
   onPeriodChange: (p: QuotePeriod) => void
+  onRetry?: () => void
+  isRefetching?: boolean
   tag?: string
   extra?: React.ReactNode
   shortHistoryNote?: string // shown when a long period returns little data (e.g. newly-listed ADR)
@@ -47,6 +49,8 @@ export function RealtimeQuoteCard({
   gradientId,
   period,
   onPeriodChange,
+  onRetry,
+  isRefetching,
   tag,
   extra,
   shortHistoryNote,
@@ -87,8 +91,13 @@ export function RealtimeQuoteCard({
           <div className="skeleton skeleton-chart" />
         </div>
       ) : isError && !quote ? (
-        <div style={{ height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--danger)', fontSize: 13, textAlign: 'center', padding: 12 }}>
+        <div style={{ height: 180, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--danger)', fontSize: 13, textAlign: 'center', padding: 12 }}>
           시세를 가져오지 못했습니다.<br />(CORS 프록시 전부 응답 없음)
+          {onRetry && (
+            <button type="button" className="retry-btn" onClick={onRetry} disabled={isRefetching}>
+              {isRefetching ? '재시도 중…' : '↻ 다시 시도'}
+            </button>
+          )}
         </div>
       ) : quote ? (
         <>

@@ -1054,6 +1054,28 @@ body {
 .news-empty.err {
   color: var(--danger);
 }
+.retry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.retry-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.retry-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
 .news-foot {
   font-size: 11px;
   color: var(--text-faint);

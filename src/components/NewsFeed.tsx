@@ -12,7 +12,7 @@ const MAX_AGE_MS = 5 * 24 * 3600_000 // hide items older than 5 days by default
 
 export function NewsFeed() {
   const { allKeywords, enabledIds, enabledKeywords, toggle, addCustom, removeCustom, resetKeywords } = useKeywords()
-  const { data, isLoading, isError, error } = useNews(enabledKeywords)
+  const { data, isLoading, isError, error, isRefetching, refetch } = useNews(enabledKeywords)
   const [sort, setSort] = useState<SortMode>('hot')
   const [catFilter, setCatFilter] = useState<CategoryId | 'all'>('all')
   const [includeOld, setIncludeOld] = useState(false)
@@ -111,6 +111,9 @@ export function NewsFeed() {
         <div className="news-empty err">
           뉴스를 불러오지 못했습니다. Google 뉴스 속도제한일 수 있습니다 — 잠시 후 자동 재시도합니다.
           <div style={{ fontSize: 11, marginTop: 4, color: 'var(--text-faint)' }}>{String((error as Error)?.message ?? '')}</div>
+          <button type="button" className="retry-btn" onClick={() => refetch()} disabled={isRefetching}>
+            {isRefetching ? '재시도 중…' : '↻ 지금 다시 시도'}
+          </button>
         </div>
       ) : items.length === 0 ? (
         <div className="news-empty">표시할 뉴스가 없습니다. 키워드를 켜거나 필터를 바꿔보세요.</div>
