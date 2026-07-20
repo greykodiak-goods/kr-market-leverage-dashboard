@@ -133,19 +133,35 @@ export function NewsFeed() {
                   {it.clusterSize > 1 && (
                     <>
                       <span className="news-dot">·</span>
-                      <button className="news-cluster-btn" onClick={() => toggleExpand(it.id)}>
-                        {it.clusterSize}개 매체 보도 {expanded.has(it.id) ? '▲' : '▾'}
+                      <button
+                        className="news-cluster-btn"
+                        aria-expanded={expanded.has(it.id)}
+                        onClick={() => toggleExpand(it.id)}
+                      >
+                        {it.clusterSize}개 매체 보도
+                        <span className={`news-cluster-chevron${expanded.has(it.id) ? ' open' : ''}`}>▾</span>
                       </button>
                     </>
                   )}
                 </div>
                 {expanded.has(it.id) && it.sources.length > 1 && (
-                  <div className="news-sources">
-                    {it.sources.map((s, i) => (
-                      <a key={i} href={s.link} target="_blank" rel="noopener noreferrer">
-                        {s.source || '매체'}
-                      </a>
-                    ))}
+                  <div className="news-sources-wrap">
+                    <div className="news-sources">
+                      {it.sources.map((s, i) => (
+                        <a
+                          key={i}
+                          href={s.link}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="news-source-pill"
+                        >
+                          <span className="news-source-avatar" style={{ background: sourceColor(s.source) }}>
+                            {sourceInitial(s.source)}
+                          </span>
+                          {s.source || '매체'}
+                        </a>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
@@ -178,4 +194,19 @@ function timeAgo(ms: number): string {
   } catch {
     return ''
   }
+}
+
+// Google News RSS only exposes the outlet name (no stable publisher domain for
+// favicons), so we derive a deterministic color + initial as a lightweight
+// stand-in "logo" instead of fetching per-outlet icons.
+function sourceInitial(source: string): string {
+  const trimmed = source.trim()
+  return trimmed ? Array.from(trimmed)[0].toUpperCase() : '?'
+}
+
+function sourceColor(source: string): string {
+  let hash = 0
+  for (const ch of source) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0
+  const hue = hash % 360
+  return `hsl(${hue} 55% 42%)`
 }
