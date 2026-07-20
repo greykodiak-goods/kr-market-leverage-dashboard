@@ -336,11 +336,19 @@ body {
   overflow-x: auto;
   padding: 10px 12px;
   margin-bottom: 12px;
-  background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
   box-shadow: var(--shadow);
   scrollbar-width: thin;
+  /* Scroll-position-aware edge fade: hints there's more content to scroll to,
+     and disappears on its own once you've scrolled past that edge. */
+  background:
+    linear-gradient(to right, var(--panel), var(--panel)) left / 24px 100% no-repeat,
+    linear-gradient(to left, var(--panel), var(--panel)) right / 24px 100% no-repeat,
+    linear-gradient(to right, rgba(0, 0, 0, 0.16), rgba(0, 0, 0, 0)) left / 16px 100% no-repeat,
+    linear-gradient(to left, rgba(0, 0, 0, 0.16), rgba(0, 0, 0, 0)) right / 16px 100% no-repeat,
+    var(--panel);
+  background-attachment: local, local, scroll, scroll, scroll;
 }
 .status-kpi {
   display: flex;
