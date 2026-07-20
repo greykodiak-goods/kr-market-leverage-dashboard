@@ -1479,10 +1479,22 @@ body {
 
 @media (max-width: 1000px) {
   .grid-3 {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .grid-3 > *:last-child {
+    grid-column: span 2;
   }
   .grid-news {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 700px) {
+  .grid-3 {
+    grid-template-columns: 1fr;
+  }
+  .grid-3 > *:last-child {
+    grid-column: auto;
   }
 }
 
