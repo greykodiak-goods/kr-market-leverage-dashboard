@@ -583,6 +583,54 @@ body {
   color: var(--danger);
   font-size: 12px;
 }
+
+/* Loading skeletons — reserve the same footprint as loaded content to avoid layout jump */
+.skeleton {
+  background: linear-gradient(90deg, var(--border) 25%, var(--panel-2) 37%, var(--border) 63%);
+  background-size: 400% 100%;
+  animation: skeleton-shimmer 1.4s ease infinite;
+  border-radius: 4px;
+}
+@keyframes skeleton-shimmer {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; }
+}
+.mini-skeleton .skeleton-price {
+  height: 19px;
+  width: 70%;
+  margin-bottom: 6px;
+}
+.mini-skeleton .skeleton-change {
+  height: 12px;
+  width: 45%;
+  margin-bottom: 8px;
+}
+.mini-skeleton .skeleton-spark {
+  height: 28px;
+  width: 100%;
+}
+.quote-skeleton .skeleton-price {
+  height: 30px;
+  width: 45%;
+  margin-bottom: 10px;
+}
+.quote-skeleton .skeleton-change {
+  height: 15px;
+  width: 30%;
+  margin-bottom: 14px;
+}
+.quote-skeleton .skeleton-meta {
+  height: 12px;
+  width: 60%;
+  margin-bottom: 10px;
+}
+.quote-skeleton .skeleton-chart {
+  height: 120px;
+  width: 100%;
+}
 .mini-card.placeholder {
   background: var(--panel-2);
   border-style: dashed;

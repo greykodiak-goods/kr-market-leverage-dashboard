@@ -41,7 +41,11 @@ export function QuoteMiniCard({ symbol, label, tag, unit = 'auto', color = 'var(
         {tag && <span className="mini-tag">{tag}</span>}
       </div>
       {isLoading && !data ? (
-        <div className="mini-loading">…</div>
+        <div className="mini-skeleton" aria-label="시세 불러오는 중">
+          <div className="skeleton skeleton-price" />
+          <div className="skeleton skeleton-change" />
+          <div className="skeleton skeleton-spark" />
+        </div>
       ) : isError && !data ? (
         <div className="mini-loading err">시세 실패</div>
       ) : data ? (

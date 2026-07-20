@@ -80,8 +80,11 @@ export function RealtimeQuoteCard({
       </div>
 
       {isLoading && !quote ? (
-        <div style={{ height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', fontSize: 13 }}>
-          시세 불러오는 중…
+        <div className="quote-skeleton" aria-label="시세 불러오는 중">
+          <div className="skeleton skeleton-price" />
+          <div className="skeleton skeleton-change" />
+          <div className="skeleton skeleton-meta" />
+          <div className="skeleton skeleton-chart" />
         </div>
       ) : isError && !quote ? (
         <div style={{ height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--danger)', fontSize: 13, textAlign: 'center', padding: 12 }}>
