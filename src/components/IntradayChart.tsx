@@ -43,8 +43,8 @@ export function IntradayChart({ data, color, gradientId, currency, height = 120 
     if (!active || !payload || !payload.length) return null
     const p = payload[0].payload
     return (
-      <div className="recharts-default-tooltip" style={{ padding: '6px 10px' }}>
-        <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>{tipFmt(p.t)}</div>
+      <div className="recharts-default-tooltip">
+        <div className="tooltip-label">{tipFmt(p.t)}</div>
         <div style={{ fontSize: 13 }}>{priceFmt(p.price)}</div>
       </div>
     )
@@ -69,7 +69,7 @@ export function IntradayChart({ data, color, gradientId, currency, height = 120 
           interval="preserveStartEnd"
         />
         <YAxis hide domain={['dataMin', 'dataMax']} />
-        <Tooltip content={<CustomTooltip />} />
+        <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'var(--text-faint)', strokeDasharray: '3 3' }} />
         <Area type="monotone" dataKey="price" stroke={color} strokeWidth={1.6} fill={`url(#${gradientId})`} dot={false} isAnimationActive={false} />
       </AreaChart>
     </ResponsiveContainer>

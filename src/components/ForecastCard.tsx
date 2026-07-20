@@ -65,8 +65,8 @@ export function ForecastCard() {
     if (!active || !payload || !payload.length) return null
     const row = payload[0].payload
     return (
-      <div className="recharts-default-tooltip" style={{ padding: '6px 10px' }}>
-        <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>{format(new Date(row.t * 1000), 'yyyy.MM.dd')}</div>
+      <div className="recharts-default-tooltip">
+        <div className="tooltip-label">{format(new Date(row.t * 1000), 'yyyy.MM.dd')}</div>
         {row.price != null && <div style={{ fontSize: 13 }}>종가 {won(row.price)}</div>}
         {row.projMid != null && row.price == null && (
           <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
@@ -141,7 +141,7 @@ export function ForecastCard() {
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
               <XAxis dataKey="t" tickFormatter={axisFmt} tickLine={false} axisLine={{ stroke: 'var(--border)' }} minTickGap={40} />
               <YAxis tickFormatter={(v) => `${Math.round(v / 1000)}k`} tickLine={false} axisLine={false} width={44} domain={['auto', 'auto']} />
-              <Tooltip content={<Tip />} />
+              <Tooltip content={<Tip />} cursor={{ stroke: 'var(--text-faint)', strokeDasharray: '3 3' }} />
               <Line type="monotone" dataKey="price" stroke="var(--kospi)" strokeWidth={1.7} dot={false} name="종가" isAnimationActive={false} connectNulls={false} />
               <Line type="monotone" dataKey="sma20" stroke="#f79009" strokeWidth={1} dot={false} name="SMA20" isAnimationActive={false} connectNulls />
               <Line type="monotone" dataKey="sma60" stroke="#8b5cf6" strokeWidth={1} dot={false} name="SMA60" isAnimationActive={false} connectNulls />

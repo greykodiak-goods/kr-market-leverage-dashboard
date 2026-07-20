@@ -20,8 +20,8 @@ function CreditTooltip({ active, payload, label }: any) {
   const kospi = payload.find((p: any) => p.dataKey === 'kospi')?.value ?? 0
   const kosdaq = payload.find((p: any) => p.dataKey === 'kosdaq')?.value ?? 0
   return (
-    <div className="recharts-default-tooltip" style={{ padding: '8px 12px' }}>
-      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 4 }}>{tsLong(label)}</div>
+    <div className="recharts-default-tooltip">
+      <div className="tooltip-label">{tsLong(label)}</div>
       <div style={{ fontSize: 13 }}>합계: <strong>{formatEok(kospi + kosdaq)}</strong></div>
       <div style={{ fontSize: 12, color: 'var(--kospi)' }}>코스피: {formatEok(kospi)}</div>
       <div style={{ fontSize: 12, color: 'var(--kosdaq)' }}>코스닥: {formatEok(kosdaq)}</div>
@@ -64,7 +64,7 @@ export function CreditBalanceChart({ data }: Props) {
           axisLine={false}
           width={54}
         />
-        <Tooltip content={<CreditTooltip />} />
+        <Tooltip content={<CreditTooltip />} cursor={{ stroke: 'var(--text-faint)', strokeDasharray: '3 3' }} />
         <Area
           type="monotone"
           dataKey="kosdaq"

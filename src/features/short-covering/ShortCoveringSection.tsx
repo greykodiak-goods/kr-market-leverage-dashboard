@@ -215,10 +215,11 @@ export function ShortCoveringSection() {
               <XAxis dataKey="ts" type="number" scale="time" domain={['dataMin', 'dataMax']} ticks={lendTicks} tickFormatter={lendFmt} tickLine={false} axisLine={{ stroke: 'var(--border)' }} />
               <YAxis tickFormatter={(v) => formatEokShort(v)} tickLine={false} axisLine={false} width={54} />
               <Tooltip
+                cursor={{ stroke: 'var(--text-faint)', strokeDasharray: '3 3' }}
                 content={({ active, payload, label }: any) =>
                   active && payload?.length ? (
-                    <div className="recharts-default-tooltip" style={{ padding: '8px 12px' }}>
-                      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 4 }}>{tsLong(label)}</div>
+                    <div className="recharts-default-tooltip">
+                      <div className="tooltip-label">{tsLong(label)}</div>
                       <div style={{ fontSize: 13 }}>대차잔고 <strong>{formatEok(payload[0].value)}</strong></div>
                     </div>
                   ) : null
@@ -250,10 +251,11 @@ export function ShortCoveringSection() {
               <YAxis yAxisId="amt" tickFormatter={(v) => formatEokShort(v)} tickLine={false} axisLine={false} width={50} />
               <YAxis yAxisId="ratio" orientation="right" tickFormatter={(v) => `${v.toFixed(2)}%`} tickLine={false} axisLine={false} width={48} />
               <Tooltip
+                cursor={{ stroke: 'var(--text-faint)', strokeDasharray: '3 3' }}
                 content={({ active, payload, label }: any) =>
                   active && payload?.length ? (
-                    <div className="recharts-default-tooltip" style={{ padding: '8px 12px' }}>
-                      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 4 }}>{tsLong(label)}</div>
+                    <div className="recharts-default-tooltip">
+                      <div className="tooltip-label">{tsLong(label)}</div>
                       <div style={{ fontSize: 12 }}>잔고 {formatEok(payload.find((p: any) => p.dataKey === 'amount')?.value ?? 0)}</div>
                       <div style={{ fontSize: 12, color: 'var(--kosdaq)' }}>비중 {(payload.find((p: any) => p.dataKey === 'ratio')?.value ?? 0).toFixed(3)}%</div>
                     </div>

@@ -21,8 +21,8 @@ function RiskTooltip({ active, payload, label }: any) {
   if (!active || !payload || !payload.length) return null
   const v = payload[0].value
   return (
-    <div className="recharts-default-tooltip" style={{ padding: '8px 12px' }}>
-      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 4 }}>{tsLong(label)}</div>
+    <div className="recharts-default-tooltip">
+      <div className="tooltip-label">{tsLong(label)}</div>
       <div style={{ fontSize: 13 }}>미수금: <strong>{formatEok(v)}</strong></div>
     </div>
   )
@@ -59,7 +59,7 @@ export function MarginCallRiskChart({ data }: Props) {
           axisLine={{ stroke: 'var(--border)' }}
         />
         <YAxis tickFormatter={(v) => formatEokShort(v)} tickLine={false} axisLine={false} width={48} />
-        <Tooltip content={<RiskTooltip />} />
+        <Tooltip content={<RiskTooltip />} cursor={{ stroke: 'var(--text-faint)', strokeDasharray: '3 3' }} />
         <ReferenceLine
           y={riskLine}
           stroke="var(--danger)"
