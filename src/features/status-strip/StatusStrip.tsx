@@ -1,6 +1,7 @@
 import { useQuote, useFxQuote } from '../../hooks/useQuote'
 import { useOutlook } from '../scenario-outlook/useOutlook'
 import type { ScenarioKey } from '../scenario-outlook/outlook'
+import { changeArrow } from '../../lib/format'
 
 const ADR_ORDINARY_RATIO = 0.1 // 1 ADR = 원주 1/10 (SEC 424B4)
 
@@ -16,7 +17,7 @@ function pctColor(v: number | null | undefined) {
 }
 function signPct(v: number | null | undefined) {
   if (v == null) return '—'
-  return `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`
+  return `${changeArrow(v)} ${v >= 0 ? '+' : ''}${v.toFixed(2)}%`
 }
 
 // Always-on KPI strip between header and tab bar. Numbers + badges only (no

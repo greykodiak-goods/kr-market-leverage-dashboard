@@ -33,3 +33,10 @@ export function pctChange(curr: number, prev: number): number {
   if (!prev) return 0
   return ((curr - prev) / prev) * 100
 }
+
+// Shared up/down/neutral glyph so every quote display (status strip, mini
+// cards, realtime cards) agrees on the same arrows for the same state.
+export function changeArrow(value: number | null | undefined): string {
+  if (value == null || value === 0) return '→'
+  return value > 0 ? '▲' : '▼'
+}

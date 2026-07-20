@@ -4,6 +4,7 @@ import { QUOTE_PERIODS } from '../lib/quotes'
 import { IntradayChart } from './IntradayChart'
 import { PeriodSelector } from './PeriodSelector'
 import { InfoTip } from './InfoTip'
+import { changeArrow } from '../lib/format'
 
 interface Props {
   title: string
@@ -62,7 +63,7 @@ export function RealtimeQuoteCard({
   const down = quote ? quote.change < 0 : false
   // KR convention: up = red, down = blue
   const changeColor = up ? 'var(--up)' : down ? 'var(--down)' : 'var(--text-faint)'
-  const arrow = up ? '▲' : down ? '▼' : '→'
+  const arrow = changeArrow(quote?.change)
   const changeLabel = period === '1D' ? '전일대비' : '기간대비'
 
   // Detect a long period that only returned a short history window.

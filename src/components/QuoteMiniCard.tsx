@@ -2,6 +2,7 @@ import { useQuote } from '../hooks/useQuote'
 import type { QuotePeriod } from '../lib/quotes'
 import { Sparkline } from './Sparkline'
 import { InfoTip } from './InfoTip'
+import { changeArrow } from '../lib/format'
 
 export type MiniUnit = 'auto' | 'index' | 'percent'
 
@@ -29,7 +30,7 @@ export function QuoteMiniCard({ symbol, label, tag, unit = 'auto', color = 'var(
   const up = data ? data.change > 0 : false
   const down = data ? data.change < 0 : false
   const cc = up ? 'var(--up)' : down ? 'var(--down)' : 'var(--text-faint)'
-  const arrow = up ? '▲' : down ? '▼' : '·'
+  const arrow = changeArrow(data?.change)
 
   return (
     <div className={`mini-card${highlight ? ' highlight' : ''}`}>
