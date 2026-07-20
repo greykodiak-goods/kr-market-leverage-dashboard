@@ -89,7 +89,14 @@ export function ForecastCard() {
       <div className="disclaimer" role="note">⚠️ {DISCLAIMER}</div>
 
       {isLoading && !result ? (
-        <div className="news-empty">지표 계산용 시세 불러오는 중…</div>
+        <div aria-label="지표 계산용 시세 불러오는 중">
+          <div className="skeleton-kpi-row">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="skeleton" />
+            ))}
+          </div>
+          <div className="skeleton skeleton-chart-lg" />
+        </div>
       ) : isError && !result ? (
         <div className="news-empty err">기술적 지표용 시세를 가져오지 못했습니다 (프록시 응답 없음).</div>
       ) : !result ? (

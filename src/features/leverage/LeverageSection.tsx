@@ -39,7 +39,17 @@ export function LeverageSection() {
   const [levPeriod, setLevPeriod] = useState<LeveragePeriod>('6M')
   const { data, isLoading, isError, error } = useQuery({ queryKey: ['dashboard'], queryFn: fetchDashboardData })
 
-  if (isLoading) return <div className="news-empty">시장 온도 데이터 불러오는 중…</div>
+  if (isLoading)
+    return (
+      <div aria-label="시장 온도 데이터 불러오는 중">
+        <div className="skeleton-kpi-row">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="skeleton" />
+          ))}
+        </div>
+        <div className="skeleton skeleton-chart-lg" />
+      </div>
+    )
   if (isError || !data)
     return <div className="news-empty err">데이터 로드 실패: {String((error as Error)?.message ?? 'unknown')}</div>
 

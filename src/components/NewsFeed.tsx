@@ -99,7 +99,14 @@ export function NewsFeed() {
       </div>
 
       {isLoading && !data ? (
-        <div className="news-empty">뉴스 불러오는 중…</div>
+        <ul className="skeleton-news-list" aria-label="뉴스 불러오는 중" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+          {Array.from({ length: 5 }).map((_, i) => (
+            <li key={i} className="skeleton-news-item">
+              <div className="skeleton skeleton-title" />
+              <div className="skeleton skeleton-meta" />
+            </li>
+          ))}
+        </ul>
       ) : isError && !data ? (
         <div className="news-empty err">
           뉴스를 불러오지 못했습니다. Google 뉴스 속도제한일 수 있습니다 — 잠시 후 자동 재시도합니다.

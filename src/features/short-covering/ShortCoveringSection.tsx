@@ -129,7 +129,14 @@ export function ShortCoveringSection() {
       </div>
 
       {loading && !lending ? (
-        <div className="news-empty">상환 모니터 데이터 불러오는 중…</div>
+        <div aria-label="상환 모니터 데이터 불러오는 중">
+          <div className="skeleton-kpi-row">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="skeleton" />
+            ))}
+          </div>
+          <div className="skeleton skeleton-chart-lg" />
+        </div>
       ) : (
         <>
           {/* KPI row */}
