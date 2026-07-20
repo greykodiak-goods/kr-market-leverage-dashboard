@@ -879,6 +879,7 @@ body {
 
 /* Info tooltip */
 .info-tip {
+  position: relative;
   border: none;
   background: transparent;
   color: var(--text-faint);
@@ -889,6 +890,14 @@ body {
   margin-left: 5px;
   vertical-align: middle;
   border-radius: 50%;
+}
+.info-tip::before {
+  /* Invisible hit-area expansion: the visible ⓘ glyph is ~17x13px, well
+     under the WCAG 2.5.8 24x24 minimum touch target — this widens the
+     tappable area without changing the glyph's visual size or layout. */
+  content: '';
+  position: absolute;
+  inset: -7px;
 }
 .info-tip:hover,
 .info-tip:focus-visible {
