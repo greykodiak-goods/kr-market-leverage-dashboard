@@ -4,7 +4,7 @@ import { QUOTE_PERIODS } from '../lib/quotes'
 import { IntradayChart } from './IntradayChart'
 import { PeriodSelector } from './PeriodSelector'
 import { InfoTip } from './InfoTip'
-import { changeArrow } from '../lib/format'
+import { changeArrow, formatPercent } from '../lib/format'
 
 interface Props {
   title: string
@@ -108,7 +108,7 @@ export function RealtimeQuoteCard({
             </div>
             <div style={{ color: changeColor, fontSize: 15, fontWeight: 600 }}>
               {arrow} {m(Math.abs(quote.change))} ({quote.change >= 0 ? '+' : '-'}
-              {Math.abs(quote.changePct).toFixed(2)}%)
+              {formatPercent(Math.abs(quote.changePct))})
               <span style={{ color: 'var(--text-faint)', fontWeight: 400, fontSize: 12, marginLeft: 6 }}>{changeLabel}</span>
             </div>
           </div>

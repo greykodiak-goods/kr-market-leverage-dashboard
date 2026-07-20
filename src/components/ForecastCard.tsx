@@ -13,6 +13,7 @@ import { useQuote } from '../hooks/useQuote'
 import { computeIndicators, type Candle } from '../lib/indicators'
 import { InfoTip } from './InfoTip'
 import { TOOLTIPS } from '../lib/tooltips'
+import { formatPercent } from '../lib/format'
 
 const DISCLAIMER =
   '본 지표는 과거 데이터 기반 통계·기술적 참고 정보이며 투자자문·매매권유가 아닙니다. 미래 가격·수익을 보장하지 않습니다.'
@@ -125,7 +126,7 @@ export function ForecastCard() {
             </div>
             <div className="ind-cell">
               <span className="ind-k">볼린저 %B<InfoTip text={TOOLTIPS.maBoll} /></span>
-              <span className="ind-v">{result.bollinger?.pctB != null ? `${result.bollinger.pctB.toFixed(0)}%` : '—'}</span>
+              <span className="ind-v">{result.bollinger?.pctB != null ? formatPercent(result.bollinger.pctB, 0) : '—'}</span>
             </div>
             <div className="ind-cell" style={{ gridColumn: 'span 2' }}>
               <span className="ind-k">MACD</span>

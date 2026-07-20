@@ -1,7 +1,7 @@
 import { useQuote, useFxQuote } from '../../hooks/useQuote'
 import { useOutlook } from '../scenario-outlook/useOutlook'
 import type { ScenarioKey } from '../scenario-outlook/outlook'
-import { changeArrow } from '../../lib/format'
+import { changeArrow, formatSignedPercent } from '../../lib/format'
 
 const ADR_ORDINARY_RATIO = 0.1 // 1 ADR = 원주 1/10 (SEC 424B4)
 
@@ -17,7 +17,7 @@ function pctColor(v: number | null | undefined) {
 }
 function signPct(v: number | null | undefined) {
   if (v == null) return '—'
-  return `${changeArrow(v)} ${v >= 0 ? '+' : ''}${v.toFixed(2)}%`
+  return `${changeArrow(v)} ${formatSignedPercent(v)}`
 }
 
 // Always-on KPI strip between header and tab bar. Numbers + badges only (no
@@ -42,7 +42,7 @@ export function StatusStrip() {
   return (
     <div className="status-strip" aria-label="핵심 지표 요약">
       <Kpi label="하이닉스" value={hynix.data ? `₩${Math.round(hynix.data.price).toLocaleString('ko-KR')}` : '—'} sub={signPct(hynix.data?.changePct)} subColor={pctColor(hynix.data?.changePct)} />
-      <Kpi label="ADR 프리미엄" value={premiumPct != null ? `${premiumPct >= 0 ? '+' : ''}${premiumPct.toFixed(1)}%` : '—'} subColor={pctColor(premiumPct)} />
+      <Kpi label="ADR 프리미엄" value={premiumPct != null ? formatSignedPercent(premiumPct, 1) : '—'} subColor={pctColor(premiumPct)} />
       <Kpi label="SOX" value={sox.data ? sox.data.price.toLocaleString('ko-KR', { maximumFractionDigits: 0 }) : '—'} sub={signPct(sox.data?.changePct)} subColor={pctColor(sox.data?.changePct)} />
       <Kpi label="USD/KRW" value={fx.data ? `₩${Math.round(fx.data.price).toLocaleString('ko-KR')}` : '—'} sub={signPct(fx.data?.changePct)} subColor={pctColor(fx.data?.changePct)} />
       <Kpi label="VIX" value={vix.data ? vix.data.price.toFixed(1) : '—'} sub={signPct(vix.data?.changePct)} subColor={pctColor(vix.data?.changePct)} />

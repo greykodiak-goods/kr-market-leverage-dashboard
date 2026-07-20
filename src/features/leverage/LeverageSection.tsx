@@ -168,7 +168,7 @@ export function LeverageSection() {
             <div className="panel-latest"><strong>{formatPercent(ratio.curr, 3)}</strong></div>
           </div>
           <SimpleLineChart data={fRatio} color="var(--kosdaq)" gradientId="gRatio"
-            valueFormatter={(v) => `${v.toFixed(2)}%`} tooltipLabel="신용잔고율" />
+            valueFormatter={(v) => formatPercent(v)} tooltipLabel="신용잔고율" />
         </div>
         <div className="panel">
           <div className="panel-head">
@@ -190,10 +190,10 @@ export function LeverageSection() {
               <h2>예탁금 회전율<InfoTip text={TOOLTIPS.turnover} /></h2>
               <div className="panel-sub">거래대금 / 예탁금 (%) · 매매 활발도</div>
             </div>
-            <div className="panel-latest"><strong>{turnoverLatest.value.toFixed(2)}%</strong></div>
+            <div className="panel-latest"><strong>{formatPercent(turnoverLatest.value)}</strong></div>
           </div>
           <SimpleLineChart data={fTurnover} color="#12b76a" gradientId="gTurnover"
-            valueFormatter={(v) => `${v.toFixed(0)}%`} tooltipLabel="회전율" />
+            valueFormatter={(v) => formatPercent(v, 0)} tooltipLabel="회전율" />
         </div>
         <div className="panel" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
           <h2 style={{ marginBottom: 10 }}>지표 요약 해설</h2>

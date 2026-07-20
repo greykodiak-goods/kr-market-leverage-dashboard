@@ -15,7 +15,7 @@ import {
 import { fetchShortBalance, fetchStockLending } from '../../lib/data'
 import { useQuote } from '../../hooks/useQuote'
 import { filterByPeriod, type LeveragePeriod } from '../../lib/period'
-import { formatEok, formatEokShort } from '../../lib/format'
+import { formatEok, formatEokShort, formatPercent } from '../../lib/format'
 import { toTs, tsLong, timeAxisTicks, timeTickFormatter } from '../../components/chartUtils'
 import { KpiCard } from '../../components/KpiCard'
 import { PeriodSelector } from '../../components/PeriodSelector'
@@ -153,7 +153,7 @@ export function ShortCoveringSection() {
             />
             <KpiCard
               label="공매도 잔고비중"
-              value={shortLast ? `${shortLast.ratioPct.toFixed(3)}%` : '—'}
+              value={shortLast ? formatPercent(shortLast.ratioPct, 3) : '—'}
               changeText={shortLast ? `${ratioDelta >= 0 ? '+' : ''}${ratioDelta.toFixed(3)}%p` : undefined}
               changeLabel="전일대비"
               direction={ratioDelta < 0 ? 'down' : ratioDelta > 0 ? 'up' : 'flat'}
@@ -249,7 +249,7 @@ export function ShortCoveringSection() {
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
               <XAxis dataKey="ts" type="number" scale="time" domain={['dataMin', 'dataMax']} ticks={shortTicks} tickFormatter={shortFmt} tickLine={false} axisLine={{ stroke: 'var(--border)' }} />
               <YAxis yAxisId="amt" tickFormatter={(v) => formatEokShort(v)} tickLine={false} axisLine={false} width={50} />
-              <YAxis yAxisId="ratio" orientation="right" tickFormatter={(v) => `${v.toFixed(2)}%`} tickLine={false} axisLine={false} width={48} />
+              <YAxis yAxisId="ratio" orientation="right" tickFormatter={(v) => formatPercent(v)} tickLine={false} axisLine={false} width={48} />
               <Tooltip
                 cursor={{ stroke: 'var(--text-faint)', strokeDasharray: '3 3' }}
                 content={({ active, payload, label }: any) =>
@@ -257,7 +257,7 @@ export function ShortCoveringSection() {
                     <div className="recharts-default-tooltip">
                       <div className="tooltip-label">{tsLong(label)}</div>
                       <div style={{ fontSize: 12 }}>잔고 {formatEok(payload.find((p: any) => p.dataKey === 'amount')?.value ?? 0)}</div>
-                      <div style={{ fontSize: 12, color: 'var(--kosdaq)' }}>비중 {(payload.find((p: any) => p.dataKey === 'ratio')?.value ?? 0).toFixed(3)}%</div>
+                      <div style={{ fontSize: 12, color: 'var(--kosdaq)' }}>비중 {formatPercent(payload.find((p: any) => p.dataKey === 'ratio')?.value ?? 0, 3)}</div>
                     </div>
                   ) : null
                 }

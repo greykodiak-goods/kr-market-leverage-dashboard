@@ -5,6 +5,7 @@ import { krxStatus, nowKst } from '../lib/market'
 import { RealtimeQuoteCard } from './RealtimeQuoteCard'
 import { InfoTip } from './InfoTip'
 import { TOOLTIPS } from '../lib/tooltips'
+import { formatSignedPercent } from '../lib/format'
 import { format } from 'date-fns'
 
 const SYMBOL_KRX = '000660.KS'
@@ -53,8 +54,7 @@ export function RealtimeSection() {
         <div>
           KRX 대비{' '}
           <strong style={{ color: disc ? 'var(--up)' : 'var(--down)' }}>
-            {disc ? '+' : ''}
-            {premiumPct.toFixed(2)}% {disc ? '프리미엄' : '디스카운트'}
+            {formatSignedPercent(premiumPct)} {disc ? '프리미엄' : '디스카운트'}
           </strong>
           <InfoTip text={TOOLTIPS.premium} />
         </div>

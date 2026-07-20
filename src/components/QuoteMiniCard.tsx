@@ -2,7 +2,7 @@ import { useQuote } from '../hooks/useQuote'
 import type { QuotePeriod } from '../lib/quotes'
 import { Sparkline } from './Sparkline'
 import { InfoTip } from './InfoTip'
-import { changeArrow } from '../lib/format'
+import { changeArrow, formatPercent } from '../lib/format'
 
 export type MiniUnit = 'auto' | 'index' | 'percent'
 
@@ -18,7 +18,7 @@ interface Props {
 }
 
 function fmt(v: number, currency: string, unit: MiniUnit): string {
-  if (unit === 'percent') return `${v.toFixed(2)}%`
+  if (unit === 'percent') return formatPercent(v)
   if (unit === 'index') return v.toLocaleString('ko-KR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   const sym = currency === 'USD' ? '$' : currency === 'KRW' ? '₩' : ''
   const digits = currency === 'KRW' ? 0 : 2
@@ -58,7 +58,7 @@ export function QuoteMiniCard({ symbol, label, tag, unit = 'auto', color = 'var(
         <>
           <div className="mini-price">{fmt(data.price, data.currency, unit)}</div>
           <div className="mini-change" style={{ color: cc }}>
-            {arrow} {Math.abs(data.changePct).toFixed(2)}%
+            {arrow} {formatPercent(Math.abs(data.changePct))}
             <span className="mini-abs">
               {data.change >= 0 ? '+' : '−'}
               {unit === 'percent'

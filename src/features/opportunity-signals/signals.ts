@@ -1,5 +1,6 @@
 import type { IndicatorResult } from '../../lib/indicators'
 import type { Quote } from '../../lib/quotes'
+import { formatPercent, formatSignedPercent } from '../../lib/format'
 
 export type SignalTone = 'watch-up' | 'watch-risk' | 'neutral'
 
@@ -49,7 +50,7 @@ export function computeSignals(inp: SignalInputs): Signal[] {
   if (inp.price != null && inp.fiftyTwoWeekLow != null && inp.fiftyTwoWeekLow > 0) {
     const gap = (inp.price - inp.fiftyTwoWeekLow) / inp.fiftyTwoWeekLow
     low10 = gap <= 0.1
-    lowDetail = `저점 대비 +${(gap * 100).toFixed(1)}%`
+    lowDetail = `저점 대비 +${formatPercent(gap * 100, 1)}`
   }
   out.push({ id: 'near52wLow', label: '52주 저점 +10% 이내', met: low10, detail: lowDetail, tone: 'watch-up' })
 
@@ -88,7 +89,7 @@ export function computeSignals(inp: SignalInputs): Signal[] {
     id: 'adrPremium',
     label: 'ADR 프리미엄 급변 (±25%↑)',
     met: inp.adrPremiumPct != null && Math.abs(inp.adrPremiumPct) > 25,
-    detail: inp.adrPremiumPct != null ? `프리미엄 ${inp.adrPremiumPct.toFixed(1)}%` : '데이터 대기',
+    detail: inp.adrPremiumPct != null ? `프리미엄 ${formatPercent(inp.adrPremiumPct, 1)}` : '데이터 대기',
     tone: 'watch-risk',
   })
 
@@ -97,7 +98,7 @@ export function computeSignals(inp: SignalInputs): Signal[] {
     id: 'krwSpike',
     label: 'USD/KRW 급등 (+0.5%↑)',
     met: inp.krw != null && inp.krw.changePct > 0.5,
-    detail: inp.krw != null ? `환율 ${Math.round(inp.krw.price).toLocaleString()} (${inp.krw.changePct >= 0 ? '+' : ''}${inp.krw.changePct.toFixed(2)}%)` : '데이터 대기',
+    detail: inp.krw != null ? `환율 ${Math.round(inp.krw.price).toLocaleString()} (${formatSignedPercent(inp.krw.changePct)})` : '데이터 대기',
     tone: 'watch-risk',
   })
 
@@ -106,7 +107,7 @@ export function computeSignals(inp: SignalInputs): Signal[] {
     id: 'tnxSpike',
     label: '미 10년물 금리 급등 (+2%↑)',
     met: inp.tnx != null && inp.tnx.changePct > 2,
-    detail: inp.tnx != null ? `${inp.tnx.price.toFixed(2)}% (${inp.tnx.changePct >= 0 ? '+' : ''}${inp.tnx.changePct.toFixed(2)}%)` : '데이터 대기',
+    detail: inp.tnx != null ? `${formatPercent(inp.tnx.price)} (${formatSignedPercent(inp.tnx.changePct)})` : '데이터 대기',
     tone: 'watch-risk',
   })
 
@@ -115,7 +116,7 @@ export function computeSignals(inp: SignalInputs): Signal[] {
     id: 'lendingDrop',
     label: '대차잔고 급감 (상환 관찰, 5일 −5%↓)',
     met: inp.lendingDrop5Pct != null && inp.lendingDrop5Pct <= -5,
-    detail: inp.lendingDrop5Pct != null ? `대차잔고 5일 ${inp.lendingDrop5Pct >= 0 ? '+' : ''}${inp.lendingDrop5Pct.toFixed(1)}%` : '데이터 대기',
+    detail: inp.lendingDrop5Pct != null ? `대차잔고 5일 ${formatSignedPercent(inp.lendingDrop5Pct, 1)}` : '데이터 대기',
     tone: 'watch-up',
   })
 
