@@ -263,7 +263,7 @@ export async function fetchNews(
 
   const settled = await Promise.allSettled(
     groups.map((g) =>
-      fetchText(rssUrl(g.map((k) => k.label).join(' OR ') + (querySuffix ? ` ${querySuffix}` : ''))),
+      fetchText(rssUrl(g.map((k) => k.queryTerm ?? k.label).join(' OR ') + (querySuffix ? ` ${querySuffix}` : ''))),
     ),
   )
   for (const s of settled) {

@@ -5,10 +5,16 @@
 
 export interface Keyword {
   id: string
-  label: string // display + Google News query term
+  label: string // display (+ default Google News query term)
   category: CategoryId
   matchTerms: string[] // lowercased substrings used to tag an article title
   custom?: boolean
+  // Optional Google News query override. IMPORTANT: multi-word un-quoted terms
+  // OR-joined in one query are parsed by Google as term-level AND/OR crossings
+  // ("블랙록 BlackRock OR 뱅가드" → 블랙록 AND (BlackRock OR 뱅가드)) which
+  // near-zeroes results. Use a single token or a "quoted phrase" here when the
+  // display label is multi-word (e.g. bilingual labels).
+  queryTerm?: string
 }
 
 // Union across ALL catalogs (hynix: tech/macro/geo/stock · giants: mgr/fund/tech/theme).
