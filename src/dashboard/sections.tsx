@@ -6,9 +6,13 @@ import { SemiconductorSection } from '../features/semiconductor/SemiconductorSec
 import { MacroSection } from '../features/macro/MacroSection'
 import { LeverageSection } from '../features/leverage/LeverageSection'
 import { NewsForecastSection } from '../features/news/NewsForecastSection'
+import { MegaInvestorsBoard } from '../features/mega-investors/MegaInvestorsBoard'
+import { MegaInvestorsNews } from '../features/mega-investors/MegaInvestorsNews'
 
 // ---- Tabs (topic grouping) ----------------------------------------------
-export type TabId = 'hynix' | 'semi' | 'market' | 'news'
+// NOTE: 5 tabs = the IA cap (tab-ia-plan §6). Do NOT append a 6th tab —
+// consider sub-groups/accordions inside an existing tab first.
+export type TabId = 'hynix' | 'semi' | 'market' | 'news' | 'giants'
 
 export interface TabDef {
   id: TabId
@@ -21,6 +25,7 @@ export const TABS: TabDef[] = [
   { id: 'semi', label: '🔵 반도체·글로벌', short: '반도체' },
   { id: 'market', label: '🔴 시장·레버리지', short: '시장' },
   { id: 'news', label: '📰 뉴스', short: '뉴스' },
+  { id: 'giants', label: '🏦 큰손 동향', short: '큰손' },
 ]
 
 export const DEFAULT_TAB: TabId = 'hynix'
@@ -49,6 +54,8 @@ export const SECTIONS: SectionDef[] = [
   { id: 'leverage', tab: 'market', title: '시장 온도 · 레버리지', Component: LeverageSection },
   { id: 'macro', tab: 'market', title: '매크로 위험 · 지수', Component: MacroSection },
   { id: 'news', tab: 'news', title: '뉴스 · 기술적 지표', Component: NewsForecastSection },
+  { id: 'mega-investors-ref', tab: 'giants', title: '🏦 세계 초대형 투자사 레퍼런스', Component: MegaInvestorsBoard },
+  { id: 'mega-investors-news', tab: 'giants', title: '🏦 큰손·기관 동향 뉴스', Component: MegaInvestorsNews },
 ]
 
 // Default section-id order per tab (registry order filtered by tab).

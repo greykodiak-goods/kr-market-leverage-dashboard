@@ -8,7 +8,10 @@ type TabLayout = Record<TabId, string[]>
 
 // Reconcile a saved per-tab map with the registry:
 //  (a) drop ids no longer in the registry / not belonging to that tab,
-//  (b) append each tab's default members missing from the saved list.
+//  (b) append each tab's default members missing from the saved list,
+//  (c) tabs present in the registry but absent from the saved map (e.g. a
+//      newly shipped tab like 'giants' for users with an older v4 map) fall
+//      out of `saved[t.id] ?? []` → filled entirely with that tab's defaults.
 function reconcile(saved: Partial<Record<TabId, string[]>>): TabLayout {
   const base = defaultTabLayout()
   const out = {} as TabLayout
