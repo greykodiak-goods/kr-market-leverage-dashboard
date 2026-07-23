@@ -1,0 +1,1292 @@
+{
+  "meta": {
+    "source": "LIVE",
+    "sourceLabel": "공시 LIVE (DART 전자공시 OpenAPI) · 쌍끌이 플로우는 샘플(KIS 키 대기)",
+    "asOf": "2026-07-23",
+    "fetchedAt": "2026-07-23T19:29:36+09:00",
+    "notes": "5%룰·내부자 공시는 사유 발생 후 최대 5영업일(경우에 따라 그 이상) 지연 보고되는 사후 확인 정보. 쌍끌이 플로우 블록은 KIS 키 확보 전까지 샘플."
+  },
+  "sources": {
+    "flow": "seed",
+    "events": "dart",
+    "overhang": "dart",
+    "concentration": "dart"
+  },
+  "config": {
+    "twinStreakThreshold": 3,
+    "zscoreWindow": 60
+  },
+  "flow": {
+    "daily": [
+      {
+        "date": "2026-03-20",
+        "foreignNetEok": -581,
+        "instNetEok": 200,
+        "close": 1817500,
+        "valueEok": 18324,
+        "foreignHoldRatio": 53.56
+      },
+      {
+        "date": "2026-03-23",
+        "foreignNetEok": 618,
+        "instNetEok": -202,
+        "close": 1819000,
+        "valueEok": 22886,
+        "foreignHoldRatio": 53.61
+      },
+      {
+        "date": "2026-03-24",
+        "foreignNetEok": 436,
+        "instNetEok": -443,
+        "close": 1840000,
+        "valueEok": 19627,
+        "foreignHoldRatio": 53.64
+      },
+      {
+        "date": "2026-03-25",
+        "foreignNetEok": 691,
+        "instNetEok": -107,
+        "close": 1852500,
+        "valueEok": 22354,
+        "foreignHoldRatio": 53.69
+      },
+      {
+        "date": "2026-03-26",
+        "foreignNetEok": 374,
+        "instNetEok": 66,
+        "close": 1866500,
+        "valueEok": 20520,
+        "foreignHoldRatio": 53.73
+      },
+      {
+        "date": "2026-03-27",
+        "foreignNetEok": -731,
+        "instNetEok": -28,
+        "close": 1862000,
+        "valueEok": 23582,
+        "foreignHoldRatio": 53.68
+      },
+      {
+        "date": "2026-03-30",
+        "foreignNetEok": -5,
+        "instNetEok": -91,
+        "close": 1870000,
+        "valueEok": 24655,
+        "foreignHoldRatio": 53.69
+      },
+      {
+        "date": "2026-03-31",
+        "foreignNetEok": 816,
+        "instNetEok": -377,
+        "close": 1874500,
+        "valueEok": 16743,
+        "foreignHoldRatio": 53.76
+      },
+      {
+        "date": "2026-04-01",
+        "foreignNetEok": -970,
+        "instNetEok": 377,
+        "close": 1858500,
+        "valueEok": 23918,
+        "foreignHoldRatio": 53.68
+      },
+      {
+        "date": "2026-04-02",
+        "foreignNetEok": 322,
+        "instNetEok": -478,
+        "close": 1846000,
+        "valueEok": 18254,
+        "foreignHoldRatio": 53.71
+      },
+      {
+        "date": "2026-04-03",
+        "foreignNetEok": 73,
+        "instNetEok": -219,
+        "close": 1860500,
+        "valueEok": 21112,
+        "foreignHoldRatio": 53.71
+      },
+      {
+        "date": "2026-04-06",
+        "foreignNetEok": 106,
+        "instNetEok": 251,
+        "close": 1873500,
+        "valueEok": 21624,
+        "foreignHoldRatio": 53.71
+      },
+      {
+        "date": "2026-04-07",
+        "foreignNetEok": -640,
+        "instNetEok": -22,
+        "close": 1856500,
+        "valueEok": 19991,
+        "foreignHoldRatio": 53.66
+      },
+      {
+        "date": "2026-04-08",
+        "foreignNetEok": -58,
+        "instNetEok": -329,
+        "close": 1852500,
+        "valueEok": 16933,
+        "foreignHoldRatio": 53.66
+      },
+      {
+        "date": "2026-04-09",
+        "foreignNetEok": 1158,
+        "instNetEok": -238,
+        "close": 1873500,
+        "valueEok": 18069,
+        "foreignHoldRatio": 53.75
+      },
+      {
+        "date": "2026-04-10",
+        "foreignNetEok": -845,
+        "instNetEok": 705,
+        "close": 1857500,
+        "valueEok": 18036,
+        "foreignHoldRatio": 53.68
+      },
+      {
+        "date": "2026-04-13",
+        "foreignNetEok": -508,
+        "instNetEok": 102,
+        "close": 1863000,
+        "valueEok": 24033,
+        "foreignHoldRatio": 53.64
+      },
+      {
+        "date": "2026-04-14",
+        "foreignNetEok": -572,
+        "instNetEok": -184,
+        "close": 1848500,
+        "valueEok": 16649,
+        "foreignHoldRatio": 53.6
+      },
+      {
+        "date": "2026-04-15",
+        "foreignNetEok": -450,
+        "instNetEok": 21,
+        "close": 1851500,
+        "valueEok": 20659,
+        "foreignHoldRatio": 53.57
+      },
+      {
+        "date": "2026-04-16",
+        "foreignNetEok": -959,
+        "instNetEok": -111,
+        "close": 1832000,
+        "valueEok": 19852,
+        "foreignHoldRatio": 53.49
+      },
+      {
+        "date": "2026-04-17",
+        "foreignNetEok": 487,
+        "instNetEok": 184,
+        "close": 1848500,
+        "valueEok": 24471,
+        "foreignHoldRatio": 53.52
+      },
+      {
+        "date": "2026-04-20",
+        "foreignNetEok": -838,
+        "instNetEok": 219,
+        "close": 1840000,
+        "valueEok": 21263,
+        "foreignHoldRatio": 53.46
+      },
+      {
+        "date": "2026-04-21",
+        "foreignNetEok": -163,
+        "instNetEok": -86,
+        "close": 1854500,
+        "valueEok": 16554,
+        "foreignHoldRatio": 53.43
+      },
+      {
+        "date": "2026-04-22",
+        "foreignNetEok": -561,
+        "instNetEok": -53,
+        "close": 1858000,
+        "valueEok": 23621,
+        "foreignHoldRatio": 53.38
+      },
+      {
+        "date": "2026-04-23",
+        "foreignNetEok": -371,
+        "instNetEok": 309,
+        "close": 1861000,
+        "valueEok": 16534,
+        "foreignHoldRatio": 53.35
+      },
+      {
+        "date": "2026-04-24",
+        "foreignNetEok": -330,
+        "instNetEok": 525,
+        "close": 1843500,
+        "valueEok": 21833,
+        "foreignHoldRatio": 53.32
+      },
+      {
+        "date": "2026-04-27",
+        "foreignNetEok": 728,
+        "instNetEok": 191,
+        "close": 1856000,
+        "valueEok": 20308,
+        "foreignHoldRatio": 53.37
+      },
+      {
+        "date": "2026-04-28",
+        "foreignNetEok": 738,
+        "instNetEok": -260,
+        "close": 1876000,
+        "valueEok": 21777,
+        "foreignHoldRatio": 53.44
+      },
+      {
+        "date": "2026-04-29",
+        "foreignNetEok": 423,
+        "instNetEok": -511,
+        "close": 1886500,
+        "valueEok": 20694,
+        "foreignHoldRatio": 53.46
+      },
+      {
+        "date": "2026-04-30",
+        "foreignNetEok": 945,
+        "instNetEok": -527,
+        "close": 1909500,
+        "valueEok": 22209,
+        "foreignHoldRatio": 53.53
+      },
+      {
+        "date": "2026-05-01",
+        "foreignNetEok": 42,
+        "instNetEok": -225,
+        "close": 1923500,
+        "valueEok": 21364,
+        "foreignHoldRatio": 53.53
+      },
+      {
+        "date": "2026-05-04",
+        "foreignNetEok": -495,
+        "instNetEok": 244,
+        "close": 1921500,
+        "valueEok": 20667,
+        "foreignHoldRatio": 53.5
+      },
+      {
+        "date": "2026-05-05",
+        "foreignNetEok": 75,
+        "instNetEok": -284,
+        "close": 1917500,
+        "valueEok": 18077,
+        "foreignHoldRatio": 53.52
+      },
+      {
+        "date": "2026-05-06",
+        "foreignNetEok": 260,
+        "instNetEok": -475,
+        "close": 1918000,
+        "valueEok": 17587,
+        "foreignHoldRatio": 53.54
+      },
+      {
+        "date": "2026-05-07",
+        "foreignNetEok": 228,
+        "instNetEok": -287,
+        "close": 1908500,
+        "valueEok": 19612,
+        "foreignHoldRatio": 53.57
+      },
+      {
+        "date": "2026-05-08",
+        "foreignNetEok": -867,
+        "instNetEok": 715,
+        "close": 1895000,
+        "valueEok": 22696,
+        "foreignHoldRatio": 53.5
+      },
+      {
+        "date": "2026-05-11",
+        "foreignNetEok": 667,
+        "instNetEok": -345,
+        "close": 1909000,
+        "valueEok": 23694,
+        "foreignHoldRatio": 53.56
+      },
+      {
+        "date": "2026-05-12",
+        "foreignNetEok": 464,
+        "instNetEok": -248,
+        "close": 1924000,
+        "valueEok": 19725,
+        "foreignHoldRatio": 53.6
+      },
+      {
+        "date": "2026-05-13",
+        "foreignNetEok": -239,
+        "instNetEok": -94,
+        "close": 1906500,
+        "valueEok": 19078,
+        "foreignHoldRatio": 53.58
+      },
+      {
+        "date": "2026-05-14",
+        "foreignNetEok": 589,
+        "instNetEok": -337,
+        "close": 1912000,
+        "valueEok": 24004,
+        "foreignHoldRatio": 53.62
+      },
+      {
+        "date": "2026-05-15",
+        "foreignNetEok": 487,
+        "instNetEok": -520,
+        "close": 1929000,
+        "valueEok": 24298,
+        "foreignHoldRatio": 53.66
+      },
+      {
+        "date": "2026-05-18",
+        "foreignNetEok": 221,
+        "instNetEok": -504,
+        "close": 1947500,
+        "valueEok": 20411,
+        "foreignHoldRatio": 53.66
+      },
+      {
+        "date": "2026-05-19",
+        "foreignNetEok": 834,
+        "instNetEok": -207,
+        "close": 1964500,
+        "valueEok": 23743,
+        "foreignHoldRatio": 53.73
+      },
+      {
+        "date": "2026-05-20",
+        "foreignNetEok": 293,
+        "instNetEok": 283,
+        "close": 1969000,
+        "valueEok": 22623,
+        "foreignHoldRatio": 53.75
+      },
+      {
+        "date": "2026-05-21",
+        "foreignNetEok": 559,
+        "instNetEok": -233,
+        "close": 1992500,
+        "valueEok": 16024,
+        "foreignHoldRatio": 53.78
+      },
+      {
+        "date": "2026-05-22",
+        "foreignNetEok": -261,
+        "instNetEok": 409,
+        "close": 1983500,
+        "valueEok": 19504,
+        "foreignHoldRatio": 53.77
+      },
+      {
+        "date": "2026-05-25",
+        "foreignNetEok": 197,
+        "instNetEok": 105,
+        "close": 1977000,
+        "valueEok": 20912,
+        "foreignHoldRatio": 53.78
+      },
+      {
+        "date": "2026-05-26",
+        "foreignNetEok": 6,
+        "instNetEok": 430,
+        "close": 1998000,
+        "valueEok": 20350,
+        "foreignHoldRatio": 53.78
+      },
+      {
+        "date": "2026-05-27",
+        "foreignNetEok": 660,
+        "instNetEok": -426,
+        "close": 2009500,
+        "valueEok": 18781,
+        "foreignHoldRatio": 53.83
+      },
+      {
+        "date": "2026-05-28",
+        "foreignNetEok": -334,
+        "instNetEok": -201,
+        "close": 1996500,
+        "valueEok": 19303,
+        "foreignHoldRatio": 53.82
+      },
+      {
+        "date": "2026-05-29",
+        "foreignNetEok": 668,
+        "instNetEok": -348,
+        "close": 2000500,
+        "valueEok": 23089,
+        "foreignHoldRatio": 53.88
+      },
+      {
+        "date": "2026-06-01",
+        "foreignNetEok": 525,
+        "instNetEok": -524,
+        "close": 2001500,
+        "valueEok": 16224,
+        "foreignHoldRatio": 53.92
+      },
+      {
+        "date": "2026-06-02",
+        "foreignNetEok": 989,
+        "instNetEok": -507,
+        "close": 2019500,
+        "valueEok": 20554,
+        "foreignHoldRatio": 53.99
+      },
+      {
+        "date": "2026-06-03",
+        "foreignNetEok": 55,
+        "instNetEok": -446,
+        "close": 2023000,
+        "valueEok": 18135,
+        "foreignHoldRatio": 54
+      },
+      {
+        "date": "2026-06-04",
+        "foreignNetEok": 684,
+        "instNetEok": -350,
+        "close": 2032500,
+        "valueEok": 21223,
+        "foreignHoldRatio": 54.05
+      },
+      {
+        "date": "2026-06-05",
+        "foreignNetEok": 710,
+        "instNetEok": -449,
+        "close": 2051500,
+        "valueEok": 22186,
+        "foreignHoldRatio": 54.1
+      },
+      {
+        "date": "2026-06-08",
+        "foreignNetEok": -93,
+        "instNetEok": -108,
+        "close": 2075500,
+        "valueEok": 18771,
+        "foreignHoldRatio": 54.09
+      },
+      {
+        "date": "2026-06-09",
+        "foreignNetEok": -850,
+        "instNetEok": 180,
+        "close": 2060000,
+        "valueEok": 21103,
+        "foreignHoldRatio": 54.03
+      },
+      {
+        "date": "2026-06-10",
+        "foreignNetEok": 418,
+        "instNetEok": -560,
+        "close": 2076000,
+        "valueEok": 20603,
+        "foreignHoldRatio": 54.07
+      },
+      {
+        "date": "2026-06-11",
+        "foreignNetEok": 975,
+        "instNetEok": -170,
+        "close": 2100000,
+        "valueEok": 19021,
+        "foreignHoldRatio": 54.14
+      },
+      {
+        "date": "2026-06-12",
+        "foreignNetEok": 940,
+        "instNetEok": -21,
+        "close": 2110000,
+        "valueEok": 23310,
+        "foreignHoldRatio": 54.21
+      },
+      {
+        "date": "2026-06-15",
+        "foreignNetEok": 119,
+        "instNetEok": -11,
+        "close": 2133000,
+        "valueEok": 16254,
+        "foreignHoldRatio": 54.23
+      },
+      {
+        "date": "2026-06-16",
+        "foreignNetEok": 112,
+        "instNetEok": -201,
+        "close": 2143500,
+        "valueEok": 18374,
+        "foreignHoldRatio": 54.25
+      },
+      {
+        "date": "2026-06-17",
+        "foreignNetEok": -349,
+        "instNetEok": -9,
+        "close": 2126000,
+        "valueEok": 21415,
+        "foreignHoldRatio": 54.21
+      },
+      {
+        "date": "2026-06-18",
+        "foreignNetEok": 643,
+        "instNetEok": 90,
+        "close": 2128500,
+        "valueEok": 19496,
+        "foreignHoldRatio": 54.26
+      },
+      {
+        "date": "2026-06-19",
+        "foreignNetEok": -761,
+        "instNetEok": 670,
+        "close": 2115500,
+        "valueEok": 21952,
+        "foreignHoldRatio": 54.2
+      },
+      {
+        "date": "2026-06-22",
+        "foreignNetEok": -885,
+        "instNetEok": 20,
+        "close": 2100500,
+        "valueEok": 17984,
+        "foreignHoldRatio": 54.14
+      },
+      {
+        "date": "2026-06-23",
+        "foreignNetEok": -218,
+        "instNetEok": 95,
+        "close": 2088000,
+        "valueEok": 21333,
+        "foreignHoldRatio": 54.13
+      },
+      {
+        "date": "2026-06-24",
+        "foreignNetEok": 49,
+        "instNetEok": -289,
+        "close": 2082500,
+        "valueEok": 24061,
+        "foreignHoldRatio": 54.13
+      },
+      {
+        "date": "2026-06-25",
+        "foreignNetEok": -137,
+        "instNetEok": 220,
+        "close": 2102500,
+        "valueEok": 21075,
+        "foreignHoldRatio": 54.13
+      },
+      {
+        "date": "2026-06-26",
+        "foreignNetEok": 112,
+        "instNetEok": -353,
+        "close": 2121500,
+        "valueEok": 23561,
+        "foreignHoldRatio": 54.13
+      },
+      {
+        "date": "2026-06-29",
+        "foreignNetEok": -910,
+        "instNetEok": 158,
+        "close": 2108500,
+        "valueEok": 23688,
+        "foreignHoldRatio": 54.05
+      },
+      {
+        "date": "2026-06-30",
+        "foreignNetEok": 1235,
+        "instNetEok": -439,
+        "close": 2132500,
+        "valueEok": 18989,
+        "foreignHoldRatio": 54.15
+      },
+      {
+        "date": "2026-07-01",
+        "foreignNetEok": -639,
+        "instNetEok": 73,
+        "close": 2129500,
+        "valueEok": 22420,
+        "foreignHoldRatio": 54.1
+      },
+      {
+        "date": "2026-07-02",
+        "foreignNetEok": 559,
+        "instNetEok": -594,
+        "close": 2142000,
+        "valueEok": 21491,
+        "foreignHoldRatio": 54.14
+      },
+      {
+        "date": "2026-07-03",
+        "foreignNetEok": 441,
+        "instNetEok": -535,
+        "close": 2160500,
+        "valueEok": 16189,
+        "foreignHoldRatio": 54.18
+      },
+      {
+        "date": "2026-07-06",
+        "foreignNetEok": -483,
+        "instNetEok": 206,
+        "close": 2138500,
+        "valueEok": 16304,
+        "foreignHoldRatio": 54.15
+      },
+      {
+        "date": "2026-07-07",
+        "foreignNetEok": -311,
+        "instNetEok": -206,
+        "close": 2144500,
+        "valueEok": 22332,
+        "foreignHoldRatio": 54.12
+      },
+      {
+        "date": "2026-07-08",
+        "foreignNetEok": 88,
+        "instNetEok": -404,
+        "close": 2169000,
+        "valueEok": 19548,
+        "foreignHoldRatio": 54.12
+      },
+      {
+        "date": "2026-07-09",
+        "foreignNetEok": -870,
+        "instNetEok": 526,
+        "close": 2144500,
+        "valueEok": 22129,
+        "foreignHoldRatio": 54.06
+      },
+      {
+        "date": "2026-07-10",
+        "foreignNetEok": -419,
+        "instNetEok": 305,
+        "close": 2145500,
+        "valueEok": 20250,
+        "foreignHoldRatio": 54.02
+      },
+      {
+        "date": "2026-07-13",
+        "foreignNetEok": -424,
+        "instNetEok": -139,
+        "close": 2156500,
+        "valueEok": 24725,
+        "foreignHoldRatio": 53.99
+      },
+      {
+        "date": "2026-07-14",
+        "foreignNetEok": -298,
+        "instNetEok": 341,
+        "close": 2162000,
+        "valueEok": 17926,
+        "foreignHoldRatio": 53.96
+      },
+      {
+        "date": "2026-07-15",
+        "foreignNetEok": 242,
+        "instNetEok": -496,
+        "close": 2173000,
+        "valueEok": 16536,
+        "foreignHoldRatio": 53.98
+      },
+      {
+        "date": "2026-07-16",
+        "foreignNetEok": 612,
+        "instNetEok": 5,
+        "close": 2188500,
+        "valueEok": 21807,
+        "foreignHoldRatio": 54.02
+      },
+      {
+        "date": "2026-07-17",
+        "foreignNetEok": -2063,
+        "instNetEok": 917,
+        "close": 2074500,
+        "valueEok": 34025,
+        "foreignHoldRatio": 53.86
+      },
+      {
+        "date": "2026-07-20",
+        "foreignNetEok": -2652,
+        "instNetEok": 1130,
+        "close": 1960500,
+        "valueEok": 41108,
+        "foreignHoldRatio": 53.67
+      },
+      {
+        "date": "2026-07-21",
+        "foreignNetEok": -3188,
+        "instNetEok": 979,
+        "close": 1866500,
+        "valueEok": 40999,
+        "foreignHoldRatio": 53.43
+      },
+      {
+        "date": "2026-07-22",
+        "foreignNetEok": -1754,
+        "instNetEok": 222,
+        "close": 1801000,
+        "valueEok": 40764,
+        "foreignHoldRatio": 53.3
+      },
+      {
+        "date": "2026-07-23",
+        "foreignNetEok": -1465,
+        "instNetEok": 853,
+        "close": 1763000,
+        "valueEok": 24726,
+        "foreignHoldRatio": 53.19
+      }
+    ]
+  },
+  "events": [
+    {
+      "type": "insider",
+      "rceptNo": "20260716000582",
+      "rceptDt": "2026-07-16",
+      "reporter": "이승환",
+      "position": "담당 · 비등기임원",
+      "shares": 70,
+      "changeShares": 22,
+      "ratioAfter": 0,
+      "ratioChange": 0,
+      "reason": ""
+    },
+    {
+      "type": "overhang",
+      "rceptNo": "20260713000324",
+      "rceptDt": "2026-07-13",
+      "reporter": "SK하이닉스",
+      "reason": "주요사항보고서(해외증권시장주권등상장)",
+      "subtype": "DR·해외상장"
+    },
+    {
+      "type": "overhang",
+      "rceptNo": "20260710000008",
+      "rceptDt": "2026-07-10",
+      "reporter": "SK하이닉스",
+      "reason": "[기재정정]주요사항보고서(유상증자결정)",
+      "subtype": "유상증자"
+    },
+    {
+      "type": "overhang",
+      "rceptNo": "20260710000002",
+      "rceptDt": "2026-07-10",
+      "reporter": "SK하이닉스",
+      "reason": "[기재정정]주요사항보고서(해외증권시장주권등상장결정)",
+      "subtype": "DR·해외상장"
+    },
+    {
+      "type": "overhang",
+      "rceptNo": "20260710000010",
+      "rceptDt": "2026-07-10",
+      "reporter": "SK하이닉스",
+      "reason": "[발행조건확정]증권신고서(지분증권)",
+      "subtype": "증권신고서"
+    },
+    {
+      "type": "overhang",
+      "rceptNo": "20260706000403",
+      "rceptDt": "2026-07-06",
+      "reporter": "SK하이닉스",
+      "reason": "[기재정정]주요사항보고서(유상증자결정)",
+      "subtype": "유상증자"
+    },
+    {
+      "type": "overhang",
+      "rceptNo": "20260706000444",
+      "rceptDt": "2026-07-06",
+      "reporter": "SK하이닉스",
+      "reason": "[기재정정]증권신고서(지분증권)",
+      "subtype": "증권신고서"
+    },
+    {
+      "type": "insider",
+      "rceptNo": "20260701000532",
+      "rceptDt": "2026-07-01",
+      "reporter": "박상범",
+      "position": "담당 · 비등기임원",
+      "shares": 594,
+      "changeShares": 263,
+      "ratioAfter": 0,
+      "ratioChange": 0,
+      "reason": ""
+    },
+    {
+      "type": "insider",
+      "rceptNo": "20260701000528",
+      "rceptDt": "2026-07-01",
+      "reporter": "최준기",
+      "position": "담당 · 비등기임원",
+      "shares": 2705,
+      "changeShares": -1500,
+      "ratioAfter": 0,
+      "ratioChange": 0,
+      "reason": ""
+    },
+    {
+      "type": "overhang",
+      "rceptNo": "20260630001095",
+      "rceptDt": "2026-06-30",
+      "reporter": "SK하이닉스",
+      "reason": "[기재정정]증권신고서(지분증권)",
+      "subtype": "증권신고서"
+    },
+    {
+      "type": "overhang",
+      "rceptNo": "20260624000423",
+      "rceptDt": "2026-06-24",
+      "reporter": "SK하이닉스",
+      "reason": "주요사항보고서(해외증권시장주권등상장결정)",
+      "subtype": "DR·해외상장"
+    },
+    {
+      "type": "overhang",
+      "rceptNo": "20260624000420",
+      "rceptDt": "2026-06-24",
+      "reporter": "SK하이닉스",
+      "reason": "주요사항보고서(유상증자결정)",
+      "subtype": "유상증자"
+    },
+    {
+      "type": "overhang",
+      "rceptNo": "20260624000511",
+      "rceptDt": "2026-06-24",
+      "reporter": "SK하이닉스",
+      "reason": "증권신고서(지분증권)",
+      "subtype": "증권신고서"
+    },
+    {
+      "type": "insider",
+      "rceptNo": "20260609000454",
+      "rceptDt": "2026-06-09",
+      "reporter": "주영표",
+      "position": "연구위원 · 비등기임원",
+      "shares": 600,
+      "changeShares": 304,
+      "ratioAfter": 0,
+      "ratioChange": 0,
+      "reason": ""
+    },
+    {
+      "type": "insider",
+      "rceptNo": "20260609000450",
+      "rceptDt": "2026-06-09",
+      "reporter": "김현중",
+      "position": "담당 · 비등기임원",
+      "shares": 31,
+      "changeShares": 31,
+      "ratioAfter": 0,
+      "ratioChange": 0,
+      "reason": ""
+    },
+    {
+      "type": "insider",
+      "rceptNo": "20260609000459",
+      "rceptDt": "2026-06-09",
+      "reporter": "최준기",
+      "position": "담당 · 비등기임원",
+      "shares": 4205,
+      "changeShares": 2205,
+      "ratioAfter": 0,
+      "ratioChange": 0,
+      "reason": ""
+    },
+    {
+      "type": "insider",
+      "rceptNo": "20260609000465",
+      "rceptDt": "2026-06-09",
+      "reporter": "강춘호",
+      "position": "담당 · 비등기임원",
+      "shares": 0,
+      "changeShares": -419,
+      "ratioAfter": 0,
+      "ratioChange": 0,
+      "reason": ""
+    },
+    {
+      "type": "insider",
+      "rceptNo": "20260609000462",
+      "rceptDt": "2026-06-09",
+      "reporter": "김주선",
+      "position": "사장 · 비등기임원",
+      "shares": 2881,
+      "changeShares": -1000,
+      "ratioAfter": 0,
+      "ratioChange": 0,
+      "reason": ""
+    },
+    {
+      "type": "major-stock",
+      "rceptNo": "20260609000049",
+      "rceptDt": "2026-06-09",
+      "reporter": "CapitalResearchandManagementCompany",
+      "shares": 25149374,
+      "changeShares": -11581573,
+      "ratioBefore": 5.05,
+      "ratioAfter": 3.53,
+      "ratioChange": -1.52,
+      "reason": "- 투자자금 회수목적으로 장내에서 발행회사의 주식 처분\n-투자자금 회수목적으로 장외에서 발행회사의 주식 처분"
+    },
+    {
+      "type": "insider",
+      "rceptNo": "20260515002407",
+      "rceptDt": "2026-05-15",
+      "reporter": "이동근",
+      "position": "연구위원 · 비등기임원",
+      "shares": 446,
+      "changeShares": 260,
+      "ratioAfter": 0,
+      "ratioChange": 0,
+      "reason": ""
+    },
+    {
+      "type": "insider",
+      "rceptNo": "20260508000567",
+      "rceptDt": "2026-05-08",
+      "reporter": "양명훈",
+      "position": "담당 · 비등기임원",
+      "shares": 168,
+      "changeShares": 42,
+      "ratioAfter": 0,
+      "ratioChange": 0,
+      "reason": ""
+    },
+    {
+      "type": "insider",
+      "rceptNo": "20260506000496",
+      "rceptDt": "2026-05-06",
+      "reporter": "안현",
+      "position": "사장 · 비등기임원",
+      "shares": 8319,
+      "changeShares": 1485,
+      "ratioAfter": 0,
+      "ratioChange": 0,
+      "reason": ""
+    },
+    {
+      "type": "insider",
+      "rceptNo": "20260506000477",
+      "rceptDt": "2026-05-06",
+      "reporter": "손현철",
+      "position": "사외이사 · 등기임원",
+      "shares": 612,
+      "changeShares": 40,
+      "ratioAfter": 0,
+      "ratioChange": 0,
+      "reason": ""
+    },
+    {
+      "type": "insider",
+      "rceptNo": "20260506000487",
+      "rceptDt": "2026-05-06",
+      "reporter": "최강국",
+      "position": "사외이사 · 등기임원",
+      "shares": 40,
+      "changeShares": 40,
+      "ratioAfter": 0,
+      "ratioChange": 0,
+      "reason": ""
+    },
+    {
+      "type": "insider",
+      "rceptNo": "20260506000471",
+      "rceptDt": "2026-05-06",
+      "reporter": "양동훈",
+      "position": "사외이사 · 등기임원",
+      "shares": 612,
+      "changeShares": 40,
+      "ratioAfter": 0,
+      "ratioChange": 0,
+      "reason": ""
+    },
+    {
+      "type": "insider",
+      "rceptNo": "20260506000450",
+      "rceptDt": "2026-05-06",
+      "reporter": "김정원",
+      "position": "사외이사 · 등기임원",
+      "shares": 1028,
+      "changeShares": 40,
+      "ratioAfter": 0,
+      "ratioChange": 0,
+      "reason": ""
+    },
+    {
+      "type": "insider",
+      "rceptNo": "20260506000441",
+      "rceptDt": "2026-05-06",
+      "reporter": "정덕균",
+      "position": "사외이사 · 등기임원",
+      "shares": 1028,
+      "changeShares": 40,
+      "ratioAfter": 0,
+      "ratioChange": 0,
+      "reason": ""
+    },
+    {
+      "type": "insider",
+      "rceptNo": "20260506000431",
+      "rceptDt": "2026-05-06",
+      "reporter": "고승범",
+      "position": "사외이사 · 등기임원",
+      "shares": 65,
+      "changeShares": 65,
+      "ratioAfter": 0,
+      "ratioChange": 0,
+      "reason": ""
+    },
+    {
+      "type": "insider",
+      "rceptNo": "20260506000426",
+      "rceptDt": "2026-05-06",
+      "reporter": "곽노정",
+      "position": "사장 · 등기임원",
+      "shares": 14312,
+      "changeShares": 5878,
+      "ratioAfter": 0,
+      "ratioChange": 0,
+      "reason": ""
+    },
+    {
+      "type": "insider",
+      "rceptNo": "20260429000763",
+      "rceptDt": "2026-04-29",
+      "reporter": "박명수",
+      "position": "담당 · 비등기임원",
+      "shares": 764,
+      "changeShares": 18,
+      "ratioAfter": 0,
+      "ratioChange": 0,
+      "reason": ""
+    },
+    {
+      "type": "insider",
+      "rceptNo": "20260429000772",
+      "rceptDt": "2026-04-29",
+      "reporter": "송창석",
+      "position": "담당 · 비등기임원",
+      "shares": 300,
+      "changeShares": -130,
+      "ratioAfter": 0,
+      "ratioChange": 0,
+      "reason": ""
+    },
+    {
+      "type": "major-stock",
+      "rceptNo": "20260220000091",
+      "rceptDt": "2026-02-20",
+      "reporter": "BlackRockFundAdvisors",
+      "shares": 36407157,
+      "changeShares": 100808,
+      "ratioBefore": 4.99,
+      "ratioAfter": 5,
+      "ratioChange": 0.01,
+      "reason": "- 단순투자목적으로 장내에서 발행회사의 주식 매수"
+    },
+    {
+      "type": "major-stock",
+      "rceptNo": "20260209000019",
+      "rceptDt": "2026-02-09",
+      "reporter": "CapitalResearchandManagementCompany",
+      "shares": 36730947,
+      "changeShares": -13050757,
+      "ratioBefore": 6.84,
+      "ratioAfter": 5.05,
+      "ratioChange": -1.79,
+      "reason": "- 투자자금 회수목적으로 발행회사의 주식 처분"
+    },
+    {
+      "type": "major-stock",
+      "rceptNo": "20251014000142",
+      "rceptDt": "2025-10-14",
+      "reporter": "CapitalResearchandManagementCompany",
+      "shares": 49781704,
+      "changeShares": 49781704,
+      "ratioBefore": 0,
+      "ratioAfter": 6.84,
+      "ratioChange": 6.84,
+      "reason": "- 대표보고자 변경에 따른 신규 보고"
+    },
+    {
+      "type": "major-stock",
+      "rceptNo": "20251014000028",
+      "rceptDt": "2025-10-14",
+      "reporter": "TheCapitalGroupCompanies,Inc.",
+      "shares": 0,
+      "changeShares": -52598236,
+      "ratioBefore": 7.23,
+      "ratioAfter": 0,
+      "ratioChange": -7.23,
+      "reason": "- 대표보고자 변동으로 인한 변동보고 (폐지보고)"
+    },
+    {
+      "type": "major-stock",
+      "rceptNo": "20250708000256",
+      "rceptDt": "2025-07-08",
+      "reporter": "TheCapitalGroupCompanies,Inc.",
+      "shares": 52598236,
+      "changeShares": 3796936,
+      "ratioBefore": 6.7,
+      "ratioAfter": 7.23,
+      "ratioChange": 0.53,
+      "reason": " 특별관계자 변동"
+    },
+    {
+      "type": "major-stock",
+      "rceptNo": "20250211000533",
+      "rceptDt": "2025-02-11",
+      "reporter": "TheCapitalGroupCompanies,Inc.",
+      "shares": 48801300,
+      "changeShares": 11771635,
+      "ratioBefore": 5.09,
+      "ratioAfter": 6.7,
+      "ratioChange": 1.61,
+      "reason": " 특별관계자 및 보유비율 변동"
+    },
+    {
+      "type": "major-stock",
+      "rceptNo": "20241216000307",
+      "rceptDt": "2024-12-16",
+      "reporter": "TheCapitalGroupCompanies,Inc.",
+      "shares": 37029665,
+      "changeShares": 37029665,
+      "ratioBefore": 0,
+      "ratioAfter": 5.09,
+      "ratioChange": 5.09,
+      "reason": "신규보고의무 발생"
+    },
+    {
+      "type": "major-stock",
+      "rceptNo": "20240925000388",
+      "rceptDt": "2024-09-25",
+      "reporter": "국민연금공단",
+      "shares": 53477083,
+      "changeShares": -456915,
+      "ratioBefore": 7.41,
+      "ratioAfter": 7.35,
+      "ratioChange": -0.06,
+      "reason": "단순투자목적에서 일반투자목적으로 보유목적 변경"
+    },
+    {
+      "type": "major-stock",
+      "rceptNo": "20240805000236",
+      "rceptDt": "2024-08-05",
+      "reporter": "국민연금공단",
+      "shares": 53933998,
+      "changeShares": -3589601,
+      "ratioBefore": 7.9,
+      "ratioAfter": 7.41,
+      "ratioChange": -0.49,
+      "reason": "일반투자목적에서 단순투자목적으로 보유목적 변경"
+    }
+  ],
+  "overhang": [
+    {
+      "rceptNo": "20260713000324",
+      "rceptDt": "2026-07-13",
+      "title": "주요사항보고서(해외증권시장주권등상장)",
+      "filer": "SK하이닉스",
+      "kind": "DR·해외상장"
+    },
+    {
+      "rceptNo": "20260710000010",
+      "rceptDt": "2026-07-10",
+      "title": "[발행조건확정]증권신고서(지분증권)",
+      "filer": "SK하이닉스",
+      "kind": "증권신고서"
+    },
+    {
+      "rceptNo": "20260710000002",
+      "rceptDt": "2026-07-10",
+      "title": "[기재정정]주요사항보고서(해외증권시장주권등상장결정)",
+      "filer": "SK하이닉스",
+      "kind": "DR·해외상장"
+    },
+    {
+      "rceptNo": "20260710000008",
+      "rceptDt": "2026-07-10",
+      "title": "[기재정정]주요사항보고서(유상증자결정)",
+      "filer": "SK하이닉스",
+      "kind": "유상증자"
+    },
+    {
+      "rceptNo": "20260706000444",
+      "rceptDt": "2026-07-06",
+      "title": "[기재정정]증권신고서(지분증권)",
+      "filer": "SK하이닉스",
+      "kind": "증권신고서"
+    },
+    {
+      "rceptNo": "20260706000403",
+      "rceptDt": "2026-07-06",
+      "title": "[기재정정]주요사항보고서(유상증자결정)",
+      "filer": "SK하이닉스",
+      "kind": "유상증자"
+    },
+    {
+      "rceptNo": "20260630001095",
+      "rceptDt": "2026-06-30",
+      "title": "[기재정정]증권신고서(지분증권)",
+      "filer": "SK하이닉스",
+      "kind": "증권신고서"
+    },
+    {
+      "rceptNo": "20260624000511",
+      "rceptDt": "2026-06-24",
+      "title": "증권신고서(지분증권)",
+      "filer": "SK하이닉스",
+      "kind": "증권신고서"
+    },
+    {
+      "rceptNo": "20260624000420",
+      "rceptDt": "2026-06-24",
+      "title": "주요사항보고서(유상증자결정)",
+      "filer": "SK하이닉스",
+      "kind": "유상증자"
+    },
+    {
+      "rceptNo": "20260624000423",
+      "rceptDt": "2026-06-24",
+      "title": "주요사항보고서(해외증권시장주권등상장결정)",
+      "filer": "SK하이닉스",
+      "kind": "DR·해외상장"
+    }
+  ],
+  "concentration": {
+    "asOfLabel": "2026 1분기보고서",
+    "totalShares": 712702365,
+    "treasuryShares": 4405344,
+    "majorHolders": [
+      {
+        "name": "최대주주(SK스퀘어 외 특수관계인)",
+        "ratio": 20.5,
+        "asOf": "2026 1분기보고서",
+        "note": "2026 1분기보고서 기준"
+      },
+      {
+        "name": "국민연금공단",
+        "ratio": 7.35,
+        "asOf": "추정",
+        "note": "추정 — 2024-09 이후 5%룰 보고 없음(보고의무 기준 미변동 가능)"
+      },
+      {
+        "name": "BlackRockFundAdvisors",
+        "ratio": 5,
+        "asOf": "2026-02-20",
+        "note": "5%룰 최신 보고 기준"
+      }
+    ],
+    "exitedNotes": [
+      "TheCapitalGroupCompanies,Inc.: 0%로 5% 미만 이탈(2025-10-14 보고, 이후 보고의무 소멸)",
+      "CapitalResearchandManagementCompany: 3.53%로 5% 미만 이탈(2026-06-09 보고, 이후 보고의무 소멸)"
+    ],
+    "freeFloatRatioPct": 78.88,
+    "fivePctSum": 32.85,
+    "sensitivityScore": 3,
+    "sensitivityLabel": "보통",
+    "note": "유통비율 = 100% − (최대주주 합산 + 자사주). 5% 이상 기관·연기금 보유분은 유통물량이되 동시 처분 시 급락 민감 요인 — 분기·공시 기준으로 시차 있음."
+  },
+  "disclaimer": "본 화면은 공시·집계 데이터 기반 참고 정보이며 투자자문·매매권유가 아닙니다. 5%룰·내부자 공시는 사유 발생 후 최대 5영업일(경우에 따라 그 이상) 지연 보고되는 사후 확인 정보입니다."
+}
