@@ -19,6 +19,9 @@ export interface KeywordCatalogConfig {
   defaults: Keyword[]
   categories: { id: CategoryId; label: string }[]
   storageKey: string
+  // Optional Google News query operator appended to every batch query
+  // (e.g. 'when:30d' to bias low-volume catalogs toward recent articles).
+  querySuffix?: string
 }
 
 export const CATEGORIES: { id: CategoryId; label: string }[] = [

@@ -246,7 +246,14 @@ export function clusterItems(raw: { title: string; link: string; source: string;
 
 // cacheKey separates the last-good localStorage fallback per feed (Hynix vs
 // mega-investors) so a total fetch failure never shows another feed's items.
-export async function fetchNews(enabled: Keyword[], cacheKey: string = CACHE_KEY): Promise<NewsResult> {
+// querySuffix (optional) is a Google News operator appended to each batch query
+// (e.g. 'when:30d') — used by low-volume catalogs where relevance-ordered RSS
+// otherwise returns mostly old articles.
+export async function fetchNews(
+  enabled: Keyword[],
+  cacheKey: string = CACHE_KEY,
+  querySuffix?: string,
+): Promise<NewsResult> {
   if (!enabled.length) return { items: [], fetchedAt: Date.now(), stale: false, proxyUsed: '', partial: false }
 
   const groups = batch(enabled, 6)
@@ -255,7 +262,9 @@ export async function fetchNews(enabled: Keyword[], cacheKey: string = CACHE_KEY
   let failed = 0
 
   const settled = await Promise.allSettled(
-    groups.map((g) => fetchText(rssUrl(g.map((k) => k.label).join(' OR ')))),
+    groups.map((g) =>
+      fetchText(rssUrl(g.map((k) => k.label).join(' OR ') + (querySuffix ? ` ${querySuffix}` : ''))),
+    ),
   )
   for (const s of settled) {
     if (s.status === 'fulfilled') {

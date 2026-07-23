@@ -8,13 +8,14 @@ import { HYNIX_KEYWORD_CONFIG, type CategoryId, type Keyword, type KeywordCatalo
 
 type SortMode = 'recent' | 'hot'
 
-const MAX_AGE_MS = 5 * 24 * 3600_000 // hide items older than 5 days by default
+const DEFAULT_MAX_AGE_DAYS = 5 // hide items older than this by default
 
 interface NewsFeedProps {
   catalog?: KeywordCatalogConfig // keyword catalog config (defaults to Hynix feed)
   title?: string
   subtitle?: string
   cacheKey?: string // per-feed localStorage last-good cache (omit = Hynix default)
+  maxAgeDays?: number // default display window (긴 호흡 피드는 더 넓게, e.g. giants 30일)
 }
 
 export function NewsFeed({
@@ -22,9 +23,10 @@ export function NewsFeed({
   title = '하이닉스 영향 키워드 뉴스',
   subtitle,
   cacheKey,
+  maxAgeDays = DEFAULT_MAX_AGE_DAYS,
 }: NewsFeedProps = {}) {
   const { allKeywords, enabledIds, enabledKeywords, toggle, addCustom, removeCustom, resetKeywords } = useKeywords(catalog)
-  const { data, isLoading, isError, error, isRefetching, refetch } = useNews(enabledKeywords, cacheKey)
+  const { data, isLoading, isError, error, isRefetching, refetch } = useNews(enabledKeywords, cacheKey, catalog.querySuffix)
   const [sort, setSort] = useState<SortMode>('hot')
   const [catFilter, setCatFilter] = useState<CategoryId | 'all'>('all')
   const [includeOld, setIncludeOld] = useState(false)
@@ -42,12 +44,12 @@ export function NewsFeed({
       list = list.filter((it) => it.matchedKeywordIds.some((id) => kwById.get(id)?.category === catFilter))
     }
     if (!includeOld) {
-      const cutoff = Date.now() - MAX_AGE_MS
+      const cutoff = Date.now() - maxAgeDays * 24 * 3600_000
       list = list.filter((it) => it.published >= cutoff)
     }
     const sorted = [...list].sort((a, b) => (sort === 'recent' ? b.published - a.published : b.score - a.score))
     return sorted.slice(0, 40)
-  }, [data, sort, catFilter, kwById, includeOld])
+  }, [data, sort, catFilter, kwById, includeOld, maxAgeDays])
 
   const toggleExpand = (id: string) =>
     setExpanded((prev) => {
@@ -114,8 +116,12 @@ export function NewsFeed({
               {c.label}
             </button>
           ))}
-          <button className={`cat-tab${includeOld ? ' active' : ''}`} onClick={() => setIncludeOld((v) => !v)} title="5일 초과 뉴스 표시">
-            {includeOld ? '오래된 뉴스 포함' : '최근 5일만'}
+          <button
+            className={`cat-tab${includeOld ? ' active' : ''}`}
+            onClick={() => setIncludeOld((v) => !v)}
+            title={`${maxAgeDays}일 초과 뉴스 표시`}
+          >
+            {includeOld ? '오래된 뉴스 포함' : `최근 ${maxAgeDays}일만`}
           </button>
         </div>
         <KeywordManager

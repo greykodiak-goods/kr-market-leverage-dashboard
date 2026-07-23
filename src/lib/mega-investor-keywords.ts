@@ -50,6 +50,9 @@ export const MEGA_INVESTOR_KEYWORD_CONFIG: KeywordCatalogConfig = {
   defaults: MEGA_INVESTOR_KEYWORDS,
   categories: MEGA_INVESTOR_CATEGORIES,
   storageKey: 'giants-keywords-v1',
+  // Low-volume keywords + relevance-ordered RSS return mostly old articles →
+  // bias each batch query to the last 30 days (verified working via proxy).
+  querySuffix: 'when:30d',
 }
 
 // Per-feed last-good news cache (separate from the Hynix feed's news-cache-v3).

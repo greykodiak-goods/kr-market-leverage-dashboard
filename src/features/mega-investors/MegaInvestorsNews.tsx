@@ -10,6 +10,7 @@ export function MegaInvestorsNews() {
       title="큰손·기관 동향 뉴스"
       subtitle="초대형 투자사·국부펀드·연기금 관련 뉴스 · 반도체/AI/한국 우선"
       cacheKey={MEGA_INVESTOR_NEWS_CACHE_KEY}
+      maxAgeDays={30} // 저빈도·긴 호흡 피드: 수집(when:30d)과 동일한 30일 창
     />
   )
 }
