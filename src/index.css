@@ -1538,3 +1538,185 @@ body {
     font-size: 19px;
   }
 }
+
+/* ---- Mega investors ("큰손 동향") reference board ---- */
+.mega-panel {
+  padding-bottom: 14px;
+}
+.mega-angles {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px 14px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.mega-angle {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  min-width: 0;
+}
+.mega-angle strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.mega-angle-emoji {
+  flex-shrink: 0;
+}
+@media (max-width: 700px) {
+  .mega-angles {
+    grid-template-columns: 1fr;
+  }
+}
+
+.mega-table-wrap {
+  overflow-x: auto;
+  scrollbar-width: thin;
+  margin-bottom: 4px;
+}
+.mega-table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.mega-table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-faint);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.mega-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.mega-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.mega-table tbody tr:hover {
+  background: var(--panel-2);
+}
+.mega-sort-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.mega-sort-btn:hover {
+  color: var(--text);
+}
+.mega-sort-ind {
+  font-size: 9px;
+  color: var(--accent);
+  min-width: 10px;
+}
+.mega-name {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 120px;
+}
+.mega-name-en {
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+.mega-name-ko {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.mega-type {
+  display: inline-block;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.mega-type-asset-manager {
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.mega-type-sovereign-wealth {
+  border-color: #b58a2c66;
+  color: #b58a2c;
+  background: #b58a2c14;
+}
+.mega-type-pension {
+  border-color: #14975766;
+  color: #149757;
+  background: #14975714;
+}
+.mega-aum {
+  font-weight: 600;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.mega-asof {
+  font-size: 12px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.mega-rel {
+  min-width: 220px;
+}
+.mega-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 3px;
+}
+.mega-tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  white-space: nowrap;
+}
+.mega-rel-note {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.45;
+}
+
+/* below-cutoff collapsible reference sub-section (grey tone) */
+.mega-below {
+  margin: 10px 0 6px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+.mega-below > summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  user-select: none;
+}
+.mega-below[open] > summary {
+  margin-bottom: 8px;
+}
+.mega-table-dim {
+  opacity: 0.82;
+}
+.mega-table-dim .mega-name-en {
+  color: var(--text-dim);
+}
