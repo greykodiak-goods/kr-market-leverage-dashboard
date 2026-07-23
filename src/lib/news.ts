@@ -42,7 +42,7 @@ const PROXIES: { name: string; wrap: (url: string) => string; headers?: Record<s
   { name: 'codetabs', wrap: (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}` },
 ]
 
-const CACHE_KEY = 'news-cache-v3'
+const CACHE_KEY = 'news-cache-v3' // default (Hynix feed); other feeds pass their own
 const REQ_TIMEOUT_MS = 8000
 const SIM_THRESHOLD = 0.55 // token-Jaccard threshold to merge near-duplicates
 
@@ -138,17 +138,17 @@ function batch<T>(arr: T[], size: number): T[][] {
   return out
 }
 
-function readCache(): NewsResult | null {
+function readCache(cacheKey: string): NewsResult | null {
   try {
-    const raw = localStorage.getItem(CACHE_KEY)
+    const raw = localStorage.getItem(cacheKey)
     return raw ? (JSON.parse(raw) as NewsResult) : null
   } catch {
     return null
   }
 }
-function writeCache(r: NewsResult) {
+function writeCache(r: NewsResult, cacheKey: string) {
   try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify(r))
+    localStorage.setItem(cacheKey, JSON.stringify(r))
   } catch {
     /* ignore */
   }
@@ -244,7 +244,9 @@ export function clusterItems(raw: { title: string; link: string; source: string;
   return items
 }
 
-export async function fetchNews(enabled: Keyword[]): Promise<NewsResult> {
+// cacheKey separates the last-good localStorage fallback per feed (Hynix vs
+// mega-investors) so a total fetch failure never shows another feed's items.
+export async function fetchNews(enabled: Keyword[], cacheKey: string = CACHE_KEY): Promise<NewsResult> {
   if (!enabled.length) return { items: [], fetchedAt: Date.now(), stale: false, proxyUsed: '', partial: false }
 
   const groups = batch(enabled, 6)
@@ -265,13 +267,13 @@ export async function fetchNews(enabled: Keyword[]): Promise<NewsResult> {
   }
 
   if (raw.length === 0) {
-    const cached = readCache()
+    const cached = readCache(cacheKey)
     if (cached) return { ...cached, stale: true }
     throw new Error('no news fetched (all batches failed)')
   }
 
   const items = clusterItems(raw, enabled)
   const result: NewsResult = { items, fetchedAt: Date.now(), stale: false, proxyUsed, partial: failed > 0 }
-  writeCache(result)
+  writeCache(result, cacheKey)
   return result
 }

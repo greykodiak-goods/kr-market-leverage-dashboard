@@ -4,15 +4,27 @@ import { ko } from 'date-fns/locale'
 import { useKeywords } from '../hooks/useKeywords'
 import { useNews } from '../hooks/useNews'
 import { KeywordManager } from './KeywordManager'
-import { CATEGORIES, type CategoryId, type Keyword } from '../lib/keywords'
+import { HYNIX_KEYWORD_CONFIG, type CategoryId, type Keyword, type KeywordCatalogConfig } from '../lib/keywords'
 
 type SortMode = 'recent' | 'hot'
 
 const MAX_AGE_MS = 5 * 24 * 3600_000 // hide items older than 5 days by default
 
-export function NewsFeed() {
-  const { allKeywords, enabledIds, enabledKeywords, toggle, addCustom, removeCustom, resetKeywords } = useKeywords()
-  const { data, isLoading, isError, error, isRefetching, refetch } = useNews(enabledKeywords)
+interface NewsFeedProps {
+  catalog?: KeywordCatalogConfig // keyword catalog config (defaults to Hynix feed)
+  title?: string
+  subtitle?: string
+  cacheKey?: string // per-feed localStorage last-good cache (omit = Hynix default)
+}
+
+export function NewsFeed({
+  catalog = HYNIX_KEYWORD_CONFIG,
+  title = '하이닉스 영향 키워드 뉴스',
+  subtitle,
+  cacheKey,
+}: NewsFeedProps = {}) {
+  const { allKeywords, enabledIds, enabledKeywords, toggle, addCustom, removeCustom, resetKeywords } = useKeywords(catalog)
+  const { data, isLoading, isError, error, isRefetching, refetch } = useNews(enabledKeywords, cacheKey)
   const [sort, setSort] = useState<SortMode>('hot')
   const [catFilter, setCatFilter] = useState<CategoryId | 'all'>('all')
   const [includeOld, setIncludeOld] = useState(false)
@@ -50,8 +62,14 @@ export function NewsFeed() {
     <section className="panel news-panel">
       <div className="panel-head" style={{ alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
         <div>
-          <h2>하이닉스 영향 키워드 뉴스</h2>
+          <h2>{title}</h2>
           <div className="panel-sub">
+            {subtitle && (
+              <>
+                {subtitle}
+                <br />
+              </>
+            )}
             Google 뉴스 · 사건 단위 클러스터링(중복 병합)
             {data && ` · ${totalClustered}건 사건`}
             {data?.stale && ' · 캐시(갱신실패)'}
@@ -87,7 +105,7 @@ export function NewsFeed() {
           <button className={`cat-tab${catFilter === 'all' ? ' active' : ''}`} onClick={() => setCatFilter('all')}>
             전체
           </button>
-          {CATEGORIES.map((c) => (
+          {catalog.categories.map((c) => (
             <button
               key={c.id}
               className={`cat-tab${catFilter === c.id ? ' active' : ''}`}
@@ -103,6 +121,7 @@ export function NewsFeed() {
         <KeywordManager
           allKeywords={allKeywords}
           enabledIds={enabledIds}
+          categories={catalog.categories}
           onToggle={toggle}
           onAdd={addCustom}
           onRemove={removeCustom}

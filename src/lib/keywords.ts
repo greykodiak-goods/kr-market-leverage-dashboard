@@ -1,5 +1,7 @@
-// Keyword catalog for the Hynix-impact news feed. Users can toggle/add/remove;
-// selection persists in localStorage.
+// Keyword catalogs for keyword-driven news feeds. Users can toggle/add/remove;
+// selection persists in localStorage (one storage key per catalog). The Hynix
+// catalog below is the default; other feeds (e.g. mega-investors) supply their
+// own KeywordCatalogConfig.
 
 export interface Keyword {
   id: string
@@ -9,7 +11,15 @@ export interface Keyword {
   custom?: boolean
 }
 
-export type CategoryId = 'tech' | 'macro' | 'geo' | 'stock'
+// Union across ALL catalogs (hynix: tech/macro/geo/stock · giants: mgr/fund/tech/theme).
+export type CategoryId = 'tech' | 'macro' | 'geo' | 'stock' | 'mgr' | 'fund' | 'theme'
+
+// A pluggable keyword catalog: defaults + category labels + its own storage key.
+export interface KeywordCatalogConfig {
+  defaults: Keyword[]
+  categories: { id: CategoryId; label: string }[]
+  storageKey: string
+}
 
 export const CATEGORIES: { id: CategoryId; label: string }[] = [
   { id: 'tech', label: '기술·산업' },
@@ -47,24 +57,34 @@ export const DEFAULT_KEYWORDS: Keyword[] = [
 
 const STORAGE_KEY = 'news-keywords-v3'
 
+// Default (Hynix) catalog config — existing behavior/storage key unchanged.
+export const HYNIX_KEYWORD_CONFIG: KeywordCatalogConfig = {
+  defaults: DEFAULT_KEYWORDS,
+  categories: CATEGORIES,
+  storageKey: STORAGE_KEY,
+}
+
 export interface KeywordState {
   enabledIds: string[]
   custom: Keyword[]
 }
 
-export function loadKeywordState(): KeywordState {
+export function loadKeywordState(
+  defaults: Keyword[] = DEFAULT_KEYWORDS,
+  storageKey: string = STORAGE_KEY,
+): KeywordState {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(storageKey)
     if (raw) return JSON.parse(raw) as KeywordState
   } catch {
     /* ignore */
   }
-  return { enabledIds: DEFAULT_KEYWORDS.map((k) => k.id), custom: [] }
+  return { enabledIds: defaults.map((k) => k.id), custom: [] }
 }
 
-export function saveKeywordState(s: KeywordState) {
+export function saveKeywordState(s: KeywordState, storageKey: string = STORAGE_KEY) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(s))
+    localStorage.setItem(storageKey, JSON.stringify(s))
   } catch {
     /* ignore */
   }

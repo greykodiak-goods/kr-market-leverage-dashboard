@@ -1,24 +1,31 @@
 import { useCallback, useMemo, useState } from 'react'
 import {
-  DEFAULT_KEYWORDS,
+  HYNIX_KEYWORD_CONFIG,
   loadKeywordState,
   saveKeywordState,
   type CategoryId,
   type Keyword,
+  type KeywordCatalogConfig,
 } from '../lib/keywords'
 
-export function useKeywords() {
-  const [state, setState] = useState(loadKeywordState)
+// Keyword toggle/add/remove state for ONE catalog. Defaults to the Hynix
+// catalog (100% backward compatible); pass another KeywordCatalogConfig
+// (e.g. mega-investors) to run an independent feed with its own storage key.
+export function useKeywords(cfg: KeywordCatalogConfig = HYNIX_KEYWORD_CONFIG) {
+  const [state, setState] = useState(() => loadKeywordState(cfg.defaults, cfg.storageKey))
 
   const allKeywords: Keyword[] = useMemo(
-    () => [...DEFAULT_KEYWORDS, ...state.custom],
-    [state.custom],
+    () => [...cfg.defaults, ...state.custom],
+    [cfg.defaults, state.custom],
   )
 
-  const persist = useCallback((next: typeof state) => {
-    setState(next)
-    saveKeywordState(next)
-  }, [])
+  const persist = useCallback(
+    (next: typeof state) => {
+      setState(next)
+      saveKeywordState(next, cfg.storageKey)
+    },
+    [cfg.storageKey],
+  )
 
   const toggle = useCallback(
     (id: string) => {
@@ -51,8 +58,8 @@ export function useKeywords() {
   )
 
   const resetKeywords = useCallback(() => {
-    persist({ enabledIds: DEFAULT_KEYWORDS.map((k) => k.id), custom: [] })
-  }, [persist])
+    persist({ enabledIds: cfg.defaults.map((k) => k.id), custom: [] })
+  }, [persist, cfg.defaults])
 
   const enabledKeywords = useMemo(
     () => allKeywords.filter((k) => state.enabledIds.includes(k.id)),

@@ -4,16 +4,17 @@ import { CATEGORIES, type CategoryId, type Keyword } from '../lib/keywords'
 interface Props {
   allKeywords: Keyword[]
   enabledIds: string[]
+  categories?: { id: CategoryId; label: string }[] // per-catalog groups (default: Hynix)
   onToggle: (id: string) => void
   onAdd: (label: string, category: CategoryId) => void
   onRemove: (id: string) => void
   onReset: () => void
 }
 
-export function KeywordManager({ allKeywords, enabledIds, onToggle, onAdd, onRemove, onReset }: Props) {
+export function KeywordManager({ allKeywords, enabledIds, categories = CATEGORIES, onToggle, onAdd, onRemove, onReset }: Props) {
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState('')
-  const [cat, setCat] = useState<CategoryId>('tech')
+  const [cat, setCat] = useState<CategoryId>(categories[0]?.id ?? 'tech')
 
   const enabledCount = enabledIds.length
 
@@ -25,7 +26,7 @@ export function KeywordManager({ allKeywords, enabledIds, onToggle, onAdd, onRem
 
       {open && (
         <div className="kw-panel">
-          {CATEGORIES.map((c) => {
+          {categories.map((c) => {
             const kws = allKeywords.filter((k) => k.category === c.id)
             return (
               <div key={c.id} className="kw-group">
@@ -63,7 +64,7 @@ export function KeywordManager({ allKeywords, enabledIds, onToggle, onAdd, onRem
 
           <div className="kw-add">
             <select value={cat} onChange={(e) => setCat(e.target.value as CategoryId)} aria-label="카테고리">
-              {CATEGORIES.map((c) => (
+              {categories.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.label}
                 </option>

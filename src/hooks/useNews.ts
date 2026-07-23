@@ -5,12 +5,14 @@ import type { Keyword } from '../lib/keywords'
 
 const POLL_MS = 5 * 60_000 // refresh every 5 minutes
 
-export function useNews(enabledKeywords: Keyword[]) {
+// cacheKey (optional) namespaces both the react-query key and the localStorage
+// last-good fallback so multiple feeds (Hynix / mega-investors) never mix.
+export function useNews(enabledKeywords: Keyword[], cacheKey?: string) {
   // Stable key from the enabled set so toggling keywords refetches.
   const key = enabledKeywords.map((k) => k.id).sort().join(',')
   return useQuery<NewsResult>({
-    queryKey: ['news', key],
-    queryFn: () => fetchNews(enabledKeywords),
+    queryKey: ['news', cacheKey ?? 'default', key],
+    queryFn: () => fetchNews(enabledKeywords, cacheKey),
     enabled: enabledKeywords.length > 0,
     refetchInterval: POLL_MS,
     staleTime: POLL_MS,
