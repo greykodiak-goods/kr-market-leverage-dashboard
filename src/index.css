@@ -1720,3 +1720,180 @@ body {
 .mega-table-dim .mega-name-en {
   color: var(--text-dim);
 }
+
+/* ---- 수급 레이더 (hynix-flow-radar) ---- */
+.sd-event-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sd-event {
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  border-radius: 10px;
+  padding: 9px 12px;
+}
+.sd-event-top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sd-tag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.sd-tag.major {
+  color: #6d28d9;
+  background: #f3e8ff;
+}
+.sd-tag.insider {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+.sd-tag.overhang {
+  color: #b45309;
+  background: #fef3c7;
+}
+@media (prefers-color-scheme: dark) {
+  .sd-tag.major {
+    color: #c4b5fd;
+    background: #2e1f52;
+  }
+  .sd-tag.insider {
+    color: #93c5fd;
+    background: #172a54;
+  }
+  .sd-tag.overhang {
+    color: #fcd34d;
+    background: #3a2b0d;
+  }
+}
+.sd-event-reporter {
+  font-size: 13px;
+  font-weight: 600;
+  word-break: break-all;
+}
+.sd-event-pos {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.sd-event-date {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  margin-left: auto;
+  white-space: nowrap;
+}
+.sd-event-body {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  margin-top: 5px;
+  font-size: 12.5px;
+}
+.sd-event-ratio {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.sd-event-shares {
+  font-variant-numeric: tabular-nums;
+}
+.sd-event-shares.sell {
+  color: var(--down);
+}
+.sd-event-shares.buy {
+  color: var(--up);
+}
+.sd-event-reason {
+  color: var(--text-dim);
+  white-space: pre-line;
+}
+.sd-event-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.sd-event-foot a {
+  color: var(--accent);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.sd-event-foot a:hover {
+  text-decoration: underline;
+}
+.sd-overhang-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sd-overhang-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12.5px;
+}
+.sd-overhang-title {
+  color: var(--text);
+  text-decoration: none;
+  flex: 1;
+  min-width: 0;
+}
+.sd-overhang-title:hover {
+  text-decoration: underline;
+}
+.sd-holder-rows {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sd-holder-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+}
+.sd-holder-row strong {
+  font-variant-numeric: tabular-nums;
+}
+.sd-holder-name {
+  color: var(--text-dim);
+  word-break: break-all;
+}
+.sd-holder-free {
+  border-top: 1px dashed var(--border);
+  padding-top: 4px;
+  margin-top: 2px;
+}
+
+/* 수급 레이더 모바일: KPI 4카드 → 2×2 (기획서 §3-B, 전역 1열 규칙보다 우선) */
+@media (max-width: 520px) {
+  .flow-radar .kpi-row {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+  .flow-radar .kpi-card {
+    padding: 12px;
+  }
+  .flow-radar .kpi-card .value {
+    font-size: 17px;
+  }
+  .flow-radar .kpi-card .value .unit {
+    display: block;
+    margin-top: 2px;
+  }
+}
