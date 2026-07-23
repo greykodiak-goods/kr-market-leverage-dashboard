@@ -1168,6 +1168,13 @@ body {
   opacity: 0.6;
   cursor: default;
 }
+.retry-btn-inline {
+  margin-top: 0;
+  margin-left: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  vertical-align: middle;
+}
 .news-foot {
   font-size: 11px;
   color: var(--text-faint);

@@ -55,7 +55,19 @@ export function NewsFeed() {
             Google 뉴스 · 사건 단위 클러스터링(중복 병합)
             {data && ` · ${totalClustered}건 사건`}
             {data?.stale && ' · 캐시(갱신실패)'}
-            {data?.partial && ' · 일부 배치 실패'}
+            {data?.partial && (
+              <>
+                {' · 일부 키워드 배치 실패(속도제한 가능성)'}
+                <button
+                  type="button"
+                  className="retry-btn retry-btn-inline"
+                  onClick={() => refetch()}
+                  disabled={isRefetching}
+                >
+                  {isRefetching ? '재시도 중…' : '↻ 재시도'}
+                </button>
+              </>
+            )}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
