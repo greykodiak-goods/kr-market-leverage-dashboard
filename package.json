@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "fetch-data": "node scripts/fetch-data.mjs",
+    "fetch-supply-demand": "node scripts/fetch-supply-demand.mjs",
     "seed-data": "node scripts/generate-seed.mjs"
   },
   "dependencies": {
