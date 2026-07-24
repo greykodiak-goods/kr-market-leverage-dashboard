@@ -1,0 +1,19 @@
+{
+  /* Convex functions tsconfig — separate from the app build (tsconfig.app.json includes only src/). */
+  "compilerOptions": {
+    "allowJs": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "moduleResolution": "Bundler",
+    "isolatedModules": true,
+    "noEmit": true,
+    "target": "ESNext",
+    "module": "ESNext",
+    "lib": ["ES2021", "DOM"],
+    "forceConsistentCasingInFileNames": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
+  },
+  "include": ["./**/*"],
+  "exclude": ["./_generated"]
+}
