@@ -3,10 +3,11 @@ import { useQuery } from '@tanstack/react-query'
 import { useQuote, useFxQuote } from '../../hooks/useQuote'
 import { computeIndicators, type Candle } from '../../lib/indicators'
 import { computeRelativeStrength } from '../../lib/rs'
-import { computeSignals } from './signals'
-import { fetchStockLending } from '../../lib/data'
+import { computeSignals, computeCreditPulse } from './signals'
+import { fetchStockLending, fetchDashboardData } from '../../lib/data'
 import { pctChangeOver } from '../short-covering/lib/covering'
 import { InfoTip } from '../../components/InfoTip'
+import { Freshness } from '../../components/Freshness'
 import { TOOLTIPS } from '../../lib/tooltips'
 
 const ADR_ORDINARY_RATIO = 0.1 // 1 ADR = 원주 1/10 (SEC 424B4)
@@ -18,12 +19,21 @@ export function OpportunitySignals() {
   const krw = useFxQuote('1D')
   const tnx = useQuote('^TNX', '1D')
   const adr = useQuote('SKHY', '1D')
+  const kospi = useQuote('^KS11', '1D')
   const lendingQ = useQuery({ queryKey: ['hynix-lending'], queryFn: fetchStockLending })
+  // 레버리지 데이터(FreeSIS LIVE) — App 헤더와 같은 쿼리키라 추가 네트워크 비용 없음.
+  const dashQ = useQuery({ queryKey: ['dashboard'], queryFn: fetchDashboardData })
 
   const lendingDrop5Pct = useMemo(() => {
     const vals = lendingQ.data?.series.map((p) => p.amountEok) ?? []
     return vals.length ? pctChangeOver(vals, 5) : null
   }, [lendingQ.data])
+
+  const creditPulse = useMemo(() => {
+    const credit = dashQ.data?.credit
+    if (!credit) return null
+    return computeCreditPulse(credit.series, credit.meta.source === 'LIVE')
+  }, [dashQ.data])
 
   const ind = useMemo(() => {
     if (!hynix.data?.intraday?.length) return null
@@ -54,8 +64,10 @@ export function OpportunitySignals() {
         tnx: tnx.data ?? null,
         adrPremiumPct,
         lendingDrop5Pct,
+        creditPulse,
+        kospi: kospi.data ?? null,
       }),
-    [ind, hynix.data, rsTrend, vix.data, krw.data, tnx.data, adrPremiumPct, lendingDrop5Pct],
+    [ind, hynix.data, rsTrend, vix.data, krw.data, tnx.data, adrPremiumPct, lendingDrop5Pct, creditPulse, kospi.data],
   )
 
   const metCount = signals.filter((s) => s.met).length
@@ -69,7 +81,11 @@ export function OpportunitySignals() {
             <span className="badge" style={{ fontSize: 11, marginLeft: 8 }}>관찰 전용</span>
             <InfoTip text={TOOLTIPS.signalBoard} />
           </h2>
-          <div className="panel-sub">기술적 관찰 포인트 자동 점검 · 충족 {metCount}/{signals.length} · 매매권유 아님</div>
+          <div className="panel-sub">
+            기술적 관찰 포인트 자동 점검 · 충족 {metCount}/{signals.length} · 매매권유 아님
+            {' · '}
+            <Freshness kind="realtime" at={hynix.data?.fetchedAt ?? null} />
+          </div>
         </div>
       </div>
 

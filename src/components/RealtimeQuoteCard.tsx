@@ -1,9 +1,9 @@
-import { format } from 'date-fns'
 import type { Quote, QuotePeriod } from '../lib/quotes'
 import { QUOTE_PERIODS } from '../lib/quotes'
 import { IntradayChart } from './IntradayChart'
 import { PeriodSelector } from './PeriodSelector'
 import { InfoTip } from './InfoTip'
+import { Freshness } from './Freshness'
 import { changeArrow, formatPercent } from '../lib/format'
 
 interface Props {
@@ -130,7 +130,7 @@ export function RealtimeQuoteCard({
           )}
 
           <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 2 }}>
-            최종 갱신 {format(new Date(quote.fetchedAt), 'HH:mm:ss')} · 경로 {quote.proxyUsed}
+            <Freshness kind="realtime" at={quote.fetchedAt} /> · 경로 {quote.proxyUsed}
             {period === '1D' ? ' · 약 30초 지연 시세' : ` · ${period} 히스토리`}
           </div>
         </>

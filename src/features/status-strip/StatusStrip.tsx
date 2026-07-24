@@ -2,6 +2,7 @@ import { useQuote, useFxQuote } from '../../hooks/useQuote'
 import { useOutlook } from '../scenario-outlook/useOutlook'
 import type { ScenarioKey } from '../scenario-outlook/outlook'
 import { changeArrow, formatSignedPercent } from '../../lib/format'
+import { Freshness } from '../../components/Freshness'
 
 const ADR_ORDINARY_RATIO = 0.1 // 1 ADR = 원주 1/10 (SEC 424B4)
 
@@ -50,6 +51,14 @@ export function StatusStrip() {
         <span className="status-label">시나리오(참고)</span>
         <span className="status-value">{scen ? `${scen.emoji} ${scen.label}` : '—'}</span>
       </div>
+      {hynix.data && (
+        <div className="status-kpi">
+          <span className="status-label">시세 갱신</span>
+          <span className="status-value">
+            <Freshness kind="realtime" at={hynix.data.fetchedAt} />
+          </span>
+        </div>
+      )}
     </div>
   )
 }

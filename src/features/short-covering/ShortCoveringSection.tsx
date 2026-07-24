@@ -14,6 +14,7 @@ import {
 } from 'recharts'
 import { fetchShortBalance, fetchStockLending } from '../../lib/data'
 import { useQuote } from '../../hooks/useQuote'
+import { Freshness } from '../../components/Freshness'
 import { filterByPeriod, type LeveragePeriod } from '../../lib/period'
 import { formatEok, formatEokShort, formatPercent } from '../../lib/format'
 import { toTs, tsLong, timeAxisTicks, timeTickFormatter } from '../../components/chartUtils'
@@ -119,6 +120,12 @@ export function ShortCoveringSection() {
           </h2>
           <div className="panel-sub">
             대차잔고 감소 = 숏 상환(커버) 가능성 · 000660 · {isSeed ? '샘플' : '실데이터'}
+            {lending?.meta.asOf && (
+              <>
+                {' · '}
+                <Freshness kind="daily" asOf={lending.meta.asOf} />
+              </>
+            )}
           </div>
         </div>
         {isSeed && <span className="badge sample" style={{ fontSize: 11 }}>실데이터 연동 예정 (주식대차정보 · data.go.kr)</span>}

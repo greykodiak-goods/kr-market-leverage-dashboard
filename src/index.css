@@ -1897,3 +1897,21 @@ body {
     margin-top: 2px;
   }
 }
+
+/* 공용 최신성 표기 (Freshness) — 기준일/최종갱신 + 스테일 경고 */
+.freshness {
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.freshness-stale {
+  color: var(--danger);
+  font-weight: 600;
+  margin-left: 4px;
+}
+.mini-freshness {
+  margin-top: 4px;
+  display: block;
+  font-size: 10px;
+}

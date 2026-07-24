@@ -14,6 +14,7 @@ import type { DashboardData, ValuePoint } from '../../types'
 import { sliceForPeriod, LEVERAGE_PERIODS } from '../../lib/period'
 import type { LeveragePeriod } from '../../lib/period'
 import { KpiCard } from '../../components/KpiCard'
+import { Freshness } from '../../components/Freshness'
 import { CreditBalanceChart } from '../../components/CreditBalanceChart'
 import { MarginCallRiskChart } from '../../components/MarginCallRiskChart'
 import { SimpleLineChart } from '../../components/SimpleLineChart'
@@ -80,15 +81,21 @@ export function LeverageSection() {
   const lendingLatest = data.lending.series[data.lending.series.length - 1]
   const turnoverLatest = data.turnover.series[data.turnover.series.length - 1]
 
+  const isLive = data.credit.meta.source === 'LIVE'
+  const lendingIsLive = data.lending.meta.source === 'LIVE'
+
   return (
     <div>
       <div className="lev-period-bar">
-        <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <strong style={{ fontSize: 15 }}>시장 온도 · 레버리지 · 투자심리</strong>
-          <span className="badge sample" style={{ marginLeft: 8, fontSize: 11 }}>샘플(장기)</span>
+          <span className={`badge ${isLive ? 'live' : 'sample'}`} style={{ fontSize: 11 }}>
+            {isLive ? 'LIVE(금융투자협회)' : '샘플(장기)'}
+          </span>
+          <Freshness kind="daily" asOf={data.credit.meta.asOf} />
           <InfoTip
-            label="샘플 데이터 설명"
-            text={`${data.credit.meta.sourceLabel} · 기준일 ${data.credit.meta.asOf}. ${data.credit.meta.notes}`}
+            label="데이터 출처 설명"
+            text={`${data.credit.meta.sourceLabel} · 기준일 ${data.credit.meta.asOf}. ${data.credit.meta.notes}${isLive && !lendingIsLive ? ' (대차잔고는 아직 샘플 — 아래 패널 배지 참조)' : ''}`}
           />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -163,7 +170,9 @@ export function LeverageSection() {
           <div className="panel-head">
             <div>
               <h2>신용잔고율<InfoTip text={TOOLTIPS.creditRatio} /></h2>
-              <div className="panel-sub">신용융자 / 시가총액 (%) · 과열도</div>
+              <div className="panel-sub">
+                신용융자 / 시가총액 (%) · 과열도{isLive && ' · 파생 근사: FreeSIS 신용융자잔고 ÷ (KOSPI+KOSDAQ 시가총액)'}
+              </div>
             </div>
             <div className="panel-latest"><strong>{formatPercent(ratio.curr, 3)}</strong></div>
           </div>
@@ -173,8 +182,16 @@ export function LeverageSection() {
         <div className="panel">
           <div className="panel-head">
             <div>
-              <h2>대차잔고<InfoTip text={TOOLTIPS.lending} /></h2>
-              <div className="panel-sub">공매도 선행지표 · 감소는 광의의 디레버리징/상환 관점 (종목별 상환은 하이닉스 탭 🩳 모니터)</div>
+              <h2>
+                대차잔고<InfoTip text={TOOLTIPS.lending} />
+                {!lendingIsLive && (
+                  <span className="badge sample" style={{ fontSize: 10, marginLeft: 6 }}>샘플</span>
+                )}
+              </h2>
+              <div className="panel-sub">
+                공매도 선행지표 · 감소는 광의의 디레버리징/상환 관점 (종목별 상환은 하이닉스 탭 🩳 모니터)
+                {!lendingIsLive && ' · 실데이터 연동 예정(필요: KRX 접근 또는 공공데이터포털 키 — FreeSIS 대차통계는 쿼리 미해결)'}
+              </div>
             </div>
             <div className="panel-latest"><strong>{formatEok(lendingLatest.value)}</strong></div>
           </div>
@@ -188,7 +205,9 @@ export function LeverageSection() {
           <div className="panel-head">
             <div>
               <h2>예탁금 회전율<InfoTip text={TOOLTIPS.turnover} /></h2>
-              <div className="panel-sub">거래대금 / 예탁금 (%) · 매매 활발도</div>
+              <div className="panel-sub">
+                거래대금 / 예탁금 (%) · 매매 활발도{isLive && ' · 파생 근사: (KOSPI+KOSDAQ 거래대금) ÷ FreeSIS 예탁금'}
+              </div>
             </div>
             <div className="panel-latest"><strong>{formatPercent(turnoverLatest.value)}</strong></div>
           </div>

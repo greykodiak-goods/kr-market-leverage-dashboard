@@ -2,6 +2,7 @@ import { useQuote } from '../hooks/useQuote'
 import type { QuotePeriod } from '../lib/quotes'
 import { Sparkline } from './Sparkline'
 import { InfoTip } from './InfoTip'
+import { Freshness } from './Freshness'
 import { changeArrow, formatPercent } from '../lib/format'
 
 export type MiniUnit = 'auto' | 'index' | 'percent'
@@ -67,6 +68,7 @@ export function QuoteMiniCard({ symbol, label, tag, unit = 'auto', color = 'var(
             </span>
           </div>
           <Sparkline data={data.intraday} color={down ? 'var(--down)' : up ? 'var(--up)' : color} />
+          <Freshness kind="realtime" at={data.fetchedAt} className="mini-freshness" />
         </>
       ) : null}
     </div>

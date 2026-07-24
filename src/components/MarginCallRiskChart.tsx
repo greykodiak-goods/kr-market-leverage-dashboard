@@ -20,10 +20,17 @@ interface Props {
 function RiskTooltip({ active, payload, label }: any) {
   if (!active || !payload || !payload.length) return null
   const v = payload[0].value
+  const p = payload[0].payload ?? {}
   return (
     <div className="recharts-default-tooltip">
       <div className="tooltip-label">{tsLong(label)}</div>
       <div style={{ fontSize: 13 }}>미수금: <strong>{formatEok(v)}</strong></div>
+      {p.reverseTradeEok != null && (
+        <div style={{ fontSize: 12, color: 'var(--danger)' }}>
+          실제 반대매매: {formatEok(p.reverseTradeEok)}
+          {p.reverseTradeRatioPct != null && ` (미수금 대비 ${p.reverseTradeRatioPct}%)`}
+        </div>
+      )}
     </div>
   )
 }

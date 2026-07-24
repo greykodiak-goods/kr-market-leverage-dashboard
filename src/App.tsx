@@ -8,6 +8,7 @@ import { useTabHash } from './features/dashboard-layout/useTabHash'
 import { TabBar } from './features/dashboard-layout/TabBar'
 import { StatusStrip } from './features/status-strip/StatusStrip'
 import { InfoTip } from './components/InfoTip'
+import { isDailyStale } from './components/Freshness'
 
 // Thin composition root: header + always-on KPI strip + topic tab bar +
 // per-tab draggable section layout + footer. Only the active tab's sections
@@ -33,8 +34,9 @@ export default function App() {
         <div className="badges">
           <span className={`badge ${isLive ? 'live' : 'sample'}`}>{isLive ? '실데이터' : '샘플 데이터'}</span>
           {asOfDate && (
-            <span className="badge">
+            <span className="badge" title={isLive && isDailyStale(asOfDate) ? '기대 갱신 주기(2영업일)를 초과했습니다' : undefined}>
               {isLive ? '기준일' : '샘플 기준일'} {tickDateLong(asOfDate)}
+              {isLive && isDailyStale(asOfDate) && <span style={{ color: 'var(--danger)', fontWeight: 600 }}> ⚠️ 지연</span>}
             </span>
           )}
           {meta && (
@@ -85,7 +87,7 @@ export default function App() {
           {isLive ? '실데이터 연동됨.' : '레버리지 지표는 공개통계 구조를 반영한 샘플이며 실제 수치와 다를 수 있습니다.'}
         </div>
         {asOfDate && meta && (
-          <div>{isLive ? '기준일' : '샘플 기준일'} {tickDateLong(asOfDate)} · 단위 {meta.unit}(100만원의 100배)</div>
+          <div>{isLive ? '기준일' : '샘플 기준일'} {tickDateLong(asOfDate)} · 단위 {meta.unit}</div>
         )}
         <div>본 대시보드는 정보 제공 목적이며 투자 자문이 아닙니다.</div>
       </footer>

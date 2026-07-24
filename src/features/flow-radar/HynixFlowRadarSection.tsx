@@ -13,6 +13,7 @@ import {
 } from 'recharts'
 import { KpiCard } from '../../components/KpiCard'
 import { InfoTip } from '../../components/InfoTip'
+import { Freshness } from '../../components/Freshness'
 import { PeriodSelector } from '../../components/PeriodSelector'
 import { Sparkline } from '../../components/Sparkline'
 import { formatEok, formatPercent, formatSignedEok } from '../../lib/format'
@@ -168,7 +169,9 @@ export function HynixFlowRadarSection() {
               </span>
             )}
           </h2>
-          <div className="panel-sub">000660 · 기준일 {data.meta.asOf} · 큰손 매도·수급 이벤트 포착</div>
+          <div className="panel-sub">
+            000660 · <Freshness kind="daily" asOf={data.meta.asOf} /> · 큰손 매도·수급 이벤트 포착
+          </div>
         </div>
         <div className="badges">
           {eventsLive ? (
