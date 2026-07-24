@@ -2,8 +2,8 @@
   "meta": {
     "source": "LIVE",
     "sourceLabel": "공시 LIVE (DART 전자공시 OpenAPI) · 쌍끌이 플로우는 샘플(KIS 키 대기)",
-    "asOf": "2026-07-23",
-    "fetchedAt": "2026-07-23T19:29:36+09:00",
+    "asOf": "2026-07-24",
+    "fetchedAt": "2026-07-24T09:10:05+09:00",
     "notes": "5%룰·내부자 공시는 사유 발생 후 최대 5영업일(경우에 따라 그 이상) 지연 보고되는 사후 확인 정보. 쌍끌이 플로우 블록은 KIS 키 확보 전까지 샘플."
   },
   "sources": {
@@ -19,7 +19,7 @@
   "flow": {
     "daily": [
       {
-        "date": "2026-03-20",
+        "date": "2026-03-23",
         "foreignNetEok": -581,
         "instNetEok": 200,
         "close": 1817500,
@@ -27,7 +27,7 @@
         "foreignHoldRatio": 53.56
       },
       {
-        "date": "2026-03-23",
+        "date": "2026-03-24",
         "foreignNetEok": 618,
         "instNetEok": -202,
         "close": 1819000,
@@ -35,7 +35,7 @@
         "foreignHoldRatio": 53.61
       },
       {
-        "date": "2026-03-24",
+        "date": "2026-03-25",
         "foreignNetEok": 436,
         "instNetEok": -443,
         "close": 1840000,
@@ -43,7 +43,7 @@
         "foreignHoldRatio": 53.64
       },
       {
-        "date": "2026-03-25",
+        "date": "2026-03-26",
         "foreignNetEok": 691,
         "instNetEok": -107,
         "close": 1852500,
@@ -51,7 +51,7 @@
         "foreignHoldRatio": 53.69
       },
       {
-        "date": "2026-03-26",
+        "date": "2026-03-27",
         "foreignNetEok": 374,
         "instNetEok": 66,
         "close": 1866500,
@@ -59,7 +59,7 @@
         "foreignHoldRatio": 53.73
       },
       {
-        "date": "2026-03-27",
+        "date": "2026-03-30",
         "foreignNetEok": -731,
         "instNetEok": -28,
         "close": 1862000,
@@ -67,7 +67,7 @@
         "foreignHoldRatio": 53.68
       },
       {
-        "date": "2026-03-30",
+        "date": "2026-03-31",
         "foreignNetEok": -5,
         "instNetEok": -91,
         "close": 1870000,
@@ -75,7 +75,7 @@
         "foreignHoldRatio": 53.69
       },
       {
-        "date": "2026-03-31",
+        "date": "2026-04-01",
         "foreignNetEok": 816,
         "instNetEok": -377,
         "close": 1874500,
@@ -83,7 +83,7 @@
         "foreignHoldRatio": 53.76
       },
       {
-        "date": "2026-04-01",
+        "date": "2026-04-02",
         "foreignNetEok": -970,
         "instNetEok": 377,
         "close": 1858500,
@@ -91,7 +91,7 @@
         "foreignHoldRatio": 53.68
       },
       {
-        "date": "2026-04-02",
+        "date": "2026-04-03",
         "foreignNetEok": 322,
         "instNetEok": -478,
         "close": 1846000,
@@ -99,7 +99,7 @@
         "foreignHoldRatio": 53.71
       },
       {
-        "date": "2026-04-03",
+        "date": "2026-04-06",
         "foreignNetEok": 73,
         "instNetEok": -219,
         "close": 1860500,
@@ -107,7 +107,7 @@
         "foreignHoldRatio": 53.71
       },
       {
-        "date": "2026-04-06",
+        "date": "2026-04-07",
         "foreignNetEok": 106,
         "instNetEok": 251,
         "close": 1873500,
@@ -115,7 +115,7 @@
         "foreignHoldRatio": 53.71
       },
       {
-        "date": "2026-04-07",
+        "date": "2026-04-08",
         "foreignNetEok": -640,
         "instNetEok": -22,
         "close": 1856500,
@@ -123,7 +123,7 @@
         "foreignHoldRatio": 53.66
       },
       {
-        "date": "2026-04-08",
+        "date": "2026-04-09",
         "foreignNetEok": -58,
         "instNetEok": -329,
         "close": 1852500,
@@ -131,7 +131,7 @@
         "foreignHoldRatio": 53.66
       },
       {
-        "date": "2026-04-09",
+        "date": "2026-04-10",
         "foreignNetEok": 1158,
         "instNetEok": -238,
         "close": 1873500,
@@ -139,7 +139,7 @@
         "foreignHoldRatio": 53.75
       },
       {
-        "date": "2026-04-10",
+        "date": "2026-04-13",
         "foreignNetEok": -845,
         "instNetEok": 705,
         "close": 1857500,
@@ -147,7 +147,7 @@
         "foreignHoldRatio": 53.68
       },
       {
-        "date": "2026-04-13",
+        "date": "2026-04-14",
         "foreignNetEok": -508,
         "instNetEok": 102,
         "close": 1863000,
@@ -155,7 +155,7 @@
         "foreignHoldRatio": 53.64
       },
       {
-        "date": "2026-04-14",
+        "date": "2026-04-15",
         "foreignNetEok": -572,
         "instNetEok": -184,
         "close": 1848500,
@@ -163,7 +163,7 @@
         "foreignHoldRatio": 53.6
       },
       {
-        "date": "2026-04-15",
+        "date": "2026-04-16",
         "foreignNetEok": -450,
         "instNetEok": 21,
         "close": 1851500,
@@ -171,7 +171,7 @@
         "foreignHoldRatio": 53.57
       },
       {
-        "date": "2026-04-16",
+        "date": "2026-04-17",
         "foreignNetEok": -959,
         "instNetEok": -111,
         "close": 1832000,
@@ -179,7 +179,7 @@
         "foreignHoldRatio": 53.49
       },
       {
-        "date": "2026-04-17",
+        "date": "2026-04-20",
         "foreignNetEok": 487,
         "instNetEok": 184,
         "close": 1848500,
@@ -187,7 +187,7 @@
         "foreignHoldRatio": 53.52
       },
       {
-        "date": "2026-04-20",
+        "date": "2026-04-21",
         "foreignNetEok": -838,
         "instNetEok": 219,
         "close": 1840000,
@@ -195,7 +195,7 @@
         "foreignHoldRatio": 53.46
       },
       {
-        "date": "2026-04-21",
+        "date": "2026-04-22",
         "foreignNetEok": -163,
         "instNetEok": -86,
         "close": 1854500,
@@ -203,7 +203,7 @@
         "foreignHoldRatio": 53.43
       },
       {
-        "date": "2026-04-22",
+        "date": "2026-04-23",
         "foreignNetEok": -561,
         "instNetEok": -53,
         "close": 1858000,
@@ -211,7 +211,7 @@
         "foreignHoldRatio": 53.38
       },
       {
-        "date": "2026-04-23",
+        "date": "2026-04-24",
         "foreignNetEok": -371,
         "instNetEok": 309,
         "close": 1861000,
@@ -219,7 +219,7 @@
         "foreignHoldRatio": 53.35
       },
       {
-        "date": "2026-04-24",
+        "date": "2026-04-27",
         "foreignNetEok": -330,
         "instNetEok": 525,
         "close": 1843500,
@@ -227,7 +227,7 @@
         "foreignHoldRatio": 53.32
       },
       {
-        "date": "2026-04-27",
+        "date": "2026-04-28",
         "foreignNetEok": 728,
         "instNetEok": 191,
         "close": 1856000,
@@ -235,7 +235,7 @@
         "foreignHoldRatio": 53.37
       },
       {
-        "date": "2026-04-28",
+        "date": "2026-04-29",
         "foreignNetEok": 738,
         "instNetEok": -260,
         "close": 1876000,
@@ -243,7 +243,7 @@
         "foreignHoldRatio": 53.44
       },
       {
-        "date": "2026-04-29",
+        "date": "2026-04-30",
         "foreignNetEok": 423,
         "instNetEok": -511,
         "close": 1886500,
@@ -251,7 +251,7 @@
         "foreignHoldRatio": 53.46
       },
       {
-        "date": "2026-04-30",
+        "date": "2026-05-01",
         "foreignNetEok": 945,
         "instNetEok": -527,
         "close": 1909500,
@@ -259,7 +259,7 @@
         "foreignHoldRatio": 53.53
       },
       {
-        "date": "2026-05-01",
+        "date": "2026-05-04",
         "foreignNetEok": 42,
         "instNetEok": -225,
         "close": 1923500,
@@ -267,7 +267,7 @@
         "foreignHoldRatio": 53.53
       },
       {
-        "date": "2026-05-04",
+        "date": "2026-05-05",
         "foreignNetEok": -495,
         "instNetEok": 244,
         "close": 1921500,
@@ -275,7 +275,7 @@
         "foreignHoldRatio": 53.5
       },
       {
-        "date": "2026-05-05",
+        "date": "2026-05-06",
         "foreignNetEok": 75,
         "instNetEok": -284,
         "close": 1917500,
@@ -283,7 +283,7 @@
         "foreignHoldRatio": 53.52
       },
       {
-        "date": "2026-05-06",
+        "date": "2026-05-07",
         "foreignNetEok": 260,
         "instNetEok": -475,
         "close": 1918000,
@@ -291,7 +291,7 @@
         "foreignHoldRatio": 53.54
       },
       {
-        "date": "2026-05-07",
+        "date": "2026-05-08",
         "foreignNetEok": 228,
         "instNetEok": -287,
         "close": 1908500,
@@ -299,7 +299,7 @@
         "foreignHoldRatio": 53.57
       },
       {
-        "date": "2026-05-08",
+        "date": "2026-05-11",
         "foreignNetEok": -867,
         "instNetEok": 715,
         "close": 1895000,
@@ -307,7 +307,7 @@
         "foreignHoldRatio": 53.5
       },
       {
-        "date": "2026-05-11",
+        "date": "2026-05-12",
         "foreignNetEok": 667,
         "instNetEok": -345,
         "close": 1909000,
@@ -315,7 +315,7 @@
         "foreignHoldRatio": 53.56
       },
       {
-        "date": "2026-05-12",
+        "date": "2026-05-13",
         "foreignNetEok": 464,
         "instNetEok": -248,
         "close": 1924000,
@@ -323,7 +323,7 @@
         "foreignHoldRatio": 53.6
       },
       {
-        "date": "2026-05-13",
+        "date": "2026-05-14",
         "foreignNetEok": -239,
         "instNetEok": -94,
         "close": 1906500,
@@ -331,7 +331,7 @@
         "foreignHoldRatio": 53.58
       },
       {
-        "date": "2026-05-14",
+        "date": "2026-05-15",
         "foreignNetEok": 589,
         "instNetEok": -337,
         "close": 1912000,
@@ -339,7 +339,7 @@
         "foreignHoldRatio": 53.62
       },
       {
-        "date": "2026-05-15",
+        "date": "2026-05-18",
         "foreignNetEok": 487,
         "instNetEok": -520,
         "close": 1929000,
@@ -347,7 +347,7 @@
         "foreignHoldRatio": 53.66
       },
       {
-        "date": "2026-05-18",
+        "date": "2026-05-19",
         "foreignNetEok": 221,
         "instNetEok": -504,
         "close": 1947500,
@@ -355,7 +355,7 @@
         "foreignHoldRatio": 53.66
       },
       {
-        "date": "2026-05-19",
+        "date": "2026-05-20",
         "foreignNetEok": 834,
         "instNetEok": -207,
         "close": 1964500,
@@ -363,7 +363,7 @@
         "foreignHoldRatio": 53.73
       },
       {
-        "date": "2026-05-20",
+        "date": "2026-05-21",
         "foreignNetEok": 293,
         "instNetEok": 283,
         "close": 1969000,
@@ -371,7 +371,7 @@
         "foreignHoldRatio": 53.75
       },
       {
-        "date": "2026-05-21",
+        "date": "2026-05-22",
         "foreignNetEok": 559,
         "instNetEok": -233,
         "close": 1992500,
@@ -379,7 +379,7 @@
         "foreignHoldRatio": 53.78
       },
       {
-        "date": "2026-05-22",
+        "date": "2026-05-25",
         "foreignNetEok": -261,
         "instNetEok": 409,
         "close": 1983500,
@@ -387,7 +387,7 @@
         "foreignHoldRatio": 53.77
       },
       {
-        "date": "2026-05-25",
+        "date": "2026-05-26",
         "foreignNetEok": 197,
         "instNetEok": 105,
         "close": 1977000,
@@ -395,7 +395,7 @@
         "foreignHoldRatio": 53.78
       },
       {
-        "date": "2026-05-26",
+        "date": "2026-05-27",
         "foreignNetEok": 6,
         "instNetEok": 430,
         "close": 1998000,
@@ -403,7 +403,7 @@
         "foreignHoldRatio": 53.78
       },
       {
-        "date": "2026-05-27",
+        "date": "2026-05-28",
         "foreignNetEok": 660,
         "instNetEok": -426,
         "close": 2009500,
@@ -411,7 +411,7 @@
         "foreignHoldRatio": 53.83
       },
       {
-        "date": "2026-05-28",
+        "date": "2026-05-29",
         "foreignNetEok": -334,
         "instNetEok": -201,
         "close": 1996500,
@@ -419,7 +419,7 @@
         "foreignHoldRatio": 53.82
       },
       {
-        "date": "2026-05-29",
+        "date": "2026-06-01",
         "foreignNetEok": 668,
         "instNetEok": -348,
         "close": 2000500,
@@ -427,7 +427,7 @@
         "foreignHoldRatio": 53.88
       },
       {
-        "date": "2026-06-01",
+        "date": "2026-06-02",
         "foreignNetEok": 525,
         "instNetEok": -524,
         "close": 2001500,
@@ -435,7 +435,7 @@
         "foreignHoldRatio": 53.92
       },
       {
-        "date": "2026-06-02",
+        "date": "2026-06-03",
         "foreignNetEok": 989,
         "instNetEok": -507,
         "close": 2019500,
@@ -443,7 +443,7 @@
         "foreignHoldRatio": 53.99
       },
       {
-        "date": "2026-06-03",
+        "date": "2026-06-04",
         "foreignNetEok": 55,
         "instNetEok": -446,
         "close": 2023000,
@@ -451,7 +451,7 @@
         "foreignHoldRatio": 54
       },
       {
-        "date": "2026-06-04",
+        "date": "2026-06-05",
         "foreignNetEok": 684,
         "instNetEok": -350,
         "close": 2032500,
@@ -459,7 +459,7 @@
         "foreignHoldRatio": 54.05
       },
       {
-        "date": "2026-06-05",
+        "date": "2026-06-08",
         "foreignNetEok": 710,
         "instNetEok": -449,
         "close": 2051500,
@@ -467,7 +467,7 @@
         "foreignHoldRatio": 54.1
       },
       {
-        "date": "2026-06-08",
+        "date": "2026-06-09",
         "foreignNetEok": -93,
         "instNetEok": -108,
         "close": 2075500,
@@ -475,7 +475,7 @@
         "foreignHoldRatio": 54.09
       },
       {
-        "date": "2026-06-09",
+        "date": "2026-06-10",
         "foreignNetEok": -850,
         "instNetEok": 180,
         "close": 2060000,
@@ -483,7 +483,7 @@
         "foreignHoldRatio": 54.03
       },
       {
-        "date": "2026-06-10",
+        "date": "2026-06-11",
         "foreignNetEok": 418,
         "instNetEok": -560,
         "close": 2076000,
@@ -491,7 +491,7 @@
         "foreignHoldRatio": 54.07
       },
       {
-        "date": "2026-06-11",
+        "date": "2026-06-12",
         "foreignNetEok": 975,
         "instNetEok": -170,
         "close": 2100000,
@@ -499,7 +499,7 @@
         "foreignHoldRatio": 54.14
       },
       {
-        "date": "2026-06-12",
+        "date": "2026-06-15",
         "foreignNetEok": 940,
         "instNetEok": -21,
         "close": 2110000,
@@ -507,7 +507,7 @@
         "foreignHoldRatio": 54.21
       },
       {
-        "date": "2026-06-15",
+        "date": "2026-06-16",
         "foreignNetEok": 119,
         "instNetEok": -11,
         "close": 2133000,
@@ -515,7 +515,7 @@
         "foreignHoldRatio": 54.23
       },
       {
-        "date": "2026-06-16",
+        "date": "2026-06-17",
         "foreignNetEok": 112,
         "instNetEok": -201,
         "close": 2143500,
@@ -523,7 +523,7 @@
         "foreignHoldRatio": 54.25
       },
       {
-        "date": "2026-06-17",
+        "date": "2026-06-18",
         "foreignNetEok": -349,
         "instNetEok": -9,
         "close": 2126000,
@@ -531,7 +531,7 @@
         "foreignHoldRatio": 54.21
       },
       {
-        "date": "2026-06-18",
+        "date": "2026-06-19",
         "foreignNetEok": 643,
         "instNetEok": 90,
         "close": 2128500,
@@ -539,7 +539,7 @@
         "foreignHoldRatio": 54.26
       },
       {
-        "date": "2026-06-19",
+        "date": "2026-06-22",
         "foreignNetEok": -761,
         "instNetEok": 670,
         "close": 2115500,
@@ -547,7 +547,7 @@
         "foreignHoldRatio": 54.2
       },
       {
-        "date": "2026-06-22",
+        "date": "2026-06-23",
         "foreignNetEok": -885,
         "instNetEok": 20,
         "close": 2100500,
@@ -555,7 +555,7 @@
         "foreignHoldRatio": 54.14
       },
       {
-        "date": "2026-06-23",
+        "date": "2026-06-24",
         "foreignNetEok": -218,
         "instNetEok": 95,
         "close": 2088000,
@@ -563,7 +563,7 @@
         "foreignHoldRatio": 54.13
       },
       {
-        "date": "2026-06-24",
+        "date": "2026-06-25",
         "foreignNetEok": 49,
         "instNetEok": -289,
         "close": 2082500,
@@ -571,7 +571,7 @@
         "foreignHoldRatio": 54.13
       },
       {
-        "date": "2026-06-25",
+        "date": "2026-06-26",
         "foreignNetEok": -137,
         "instNetEok": 220,
         "close": 2102500,
@@ -579,7 +579,7 @@
         "foreignHoldRatio": 54.13
       },
       {
-        "date": "2026-06-26",
+        "date": "2026-06-29",
         "foreignNetEok": 112,
         "instNetEok": -353,
         "close": 2121500,
@@ -587,7 +587,7 @@
         "foreignHoldRatio": 54.13
       },
       {
-        "date": "2026-06-29",
+        "date": "2026-06-30",
         "foreignNetEok": -910,
         "instNetEok": 158,
         "close": 2108500,
@@ -595,7 +595,7 @@
         "foreignHoldRatio": 54.05
       },
       {
-        "date": "2026-06-30",
+        "date": "2026-07-01",
         "foreignNetEok": 1235,
         "instNetEok": -439,
         "close": 2132500,
@@ -603,7 +603,7 @@
         "foreignHoldRatio": 54.15
       },
       {
-        "date": "2026-07-01",
+        "date": "2026-07-02",
         "foreignNetEok": -639,
         "instNetEok": 73,
         "close": 2129500,
@@ -611,7 +611,7 @@
         "foreignHoldRatio": 54.1
       },
       {
-        "date": "2026-07-02",
+        "date": "2026-07-03",
         "foreignNetEok": 559,
         "instNetEok": -594,
         "close": 2142000,
@@ -619,7 +619,7 @@
         "foreignHoldRatio": 54.14
       },
       {
-        "date": "2026-07-03",
+        "date": "2026-07-06",
         "foreignNetEok": 441,
         "instNetEok": -535,
         "close": 2160500,
@@ -627,7 +627,7 @@
         "foreignHoldRatio": 54.18
       },
       {
-        "date": "2026-07-06",
+        "date": "2026-07-07",
         "foreignNetEok": -483,
         "instNetEok": 206,
         "close": 2138500,
@@ -635,7 +635,7 @@
         "foreignHoldRatio": 54.15
       },
       {
-        "date": "2026-07-07",
+        "date": "2026-07-08",
         "foreignNetEok": -311,
         "instNetEok": -206,
         "close": 2144500,
@@ -643,7 +643,7 @@
         "foreignHoldRatio": 54.12
       },
       {
-        "date": "2026-07-08",
+        "date": "2026-07-09",
         "foreignNetEok": 88,
         "instNetEok": -404,
         "close": 2169000,
@@ -651,7 +651,7 @@
         "foreignHoldRatio": 54.12
       },
       {
-        "date": "2026-07-09",
+        "date": "2026-07-10",
         "foreignNetEok": -870,
         "instNetEok": 526,
         "close": 2144500,
@@ -659,7 +659,7 @@
         "foreignHoldRatio": 54.06
       },
       {
-        "date": "2026-07-10",
+        "date": "2026-07-13",
         "foreignNetEok": -419,
         "instNetEok": 305,
         "close": 2145500,
@@ -667,7 +667,7 @@
         "foreignHoldRatio": 54.02
       },
       {
-        "date": "2026-07-13",
+        "date": "2026-07-14",
         "foreignNetEok": -424,
         "instNetEok": -139,
         "close": 2156500,
@@ -675,7 +675,7 @@
         "foreignHoldRatio": 53.99
       },
       {
-        "date": "2026-07-14",
+        "date": "2026-07-15",
         "foreignNetEok": -298,
         "instNetEok": 341,
         "close": 2162000,
@@ -683,7 +683,7 @@
         "foreignHoldRatio": 53.96
       },
       {
-        "date": "2026-07-15",
+        "date": "2026-07-16",
         "foreignNetEok": 242,
         "instNetEok": -496,
         "close": 2173000,
@@ -691,7 +691,7 @@
         "foreignHoldRatio": 53.98
       },
       {
-        "date": "2026-07-16",
+        "date": "2026-07-17",
         "foreignNetEok": 612,
         "instNetEok": 5,
         "close": 2188500,
@@ -699,7 +699,7 @@
         "foreignHoldRatio": 54.02
       },
       {
-        "date": "2026-07-17",
+        "date": "2026-07-20",
         "foreignNetEok": -2063,
         "instNetEok": 917,
         "close": 2074500,
@@ -707,7 +707,7 @@
         "foreignHoldRatio": 53.86
       },
       {
-        "date": "2026-07-20",
+        "date": "2026-07-21",
         "foreignNetEok": -2652,
         "instNetEok": 1130,
         "close": 1960500,
@@ -715,7 +715,7 @@
         "foreignHoldRatio": 53.67
       },
       {
-        "date": "2026-07-21",
+        "date": "2026-07-22",
         "foreignNetEok": -3188,
         "instNetEok": 979,
         "close": 1866500,
@@ -723,7 +723,7 @@
         "foreignHoldRatio": 53.43
       },
       {
-        "date": "2026-07-22",
+        "date": "2026-07-23",
         "foreignNetEok": -1754,
         "instNetEok": 222,
         "close": 1801000,
@@ -731,7 +731,7 @@
         "foreignHoldRatio": 53.3
       },
       {
-        "date": "2026-07-23",
+        "date": "2026-07-24",
         "foreignNetEok": -1465,
         "instNetEok": 853,
         "close": 1763000,
