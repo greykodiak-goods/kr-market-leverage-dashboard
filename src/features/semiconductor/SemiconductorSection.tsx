@@ -68,8 +68,8 @@ export function SemiconductorSection() {
         </div>
 
         <div className="mini-grid" style={{ alignContent: 'start' }}>
-          <PlaceholderCard label="외국인·기관 수급" note="순매수/순매도 (억원) — 무료 실시간 소스 확보 후 연동" info={TOOLTIPS.supply} />
-          <PlaceholderCard label="DRAM 현물가" note="DDR 스팟 가격 추이 — 유료/제한 소스, 연동 예정" info={TOOLTIPS.dram} />
+          <PlaceholderCard label="외국인·기관 수급" note="순매수/순매도 (억원) — 실데이터 연동 예정 (필요: KIS Developers 앱키·증권계좌, 대표 발급)" info={TOOLTIPS.supply} />
+          <PlaceholderCard label="DRAM 현물가" note="DDR 스팟 가격 추이 — 무료 API 없음 (유료 DXI/TrendForce 계열 필요), 연동 보류" info={TOOLTIPS.dram} />
         </div>
       </div>
     </div>
