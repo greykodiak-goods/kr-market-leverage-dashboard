@@ -114,8 +114,8 @@ export function RealtimeQuoteCard({
           </div>
 
           <div style={{ display: 'flex', gap: 16, margin: '8px 0 6px', fontSize: 12, color: 'var(--text-dim)' }}>
-            <span>고 {m(quote.dayHigh)}</span>
-            <span>저 {m(quote.dayLow)}</span>
+            <span>고 {quote.dayHigh ? m(quote.dayHigh) : '—'}</span>
+            <span>저 {quote.dayLow ? m(quote.dayLow) : '—'}</span>
             <span>기준 {m(quote.previousClose)}</span>
           </div>
 
