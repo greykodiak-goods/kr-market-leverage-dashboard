@@ -2614,3 +2614,36 @@ body {
   color: var(--kosdaq);
   font-weight: 600;
 }
+
+/* backtest — 기법 전환 스위처 · 구간 매매없음 표기 */
+.bt-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.bt-switcher-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-faint);
+  margin-right: 2px;
+}
+.bt-switcher .bt-model-btn {
+  padding: 4px 11px;
+  font-size: 12px;
+}
+.bt-notrade {
+  font-size: 10px;
+  color: var(--text-faint);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.bt-doc > summary {
+  font-size: 13.5px;
+}

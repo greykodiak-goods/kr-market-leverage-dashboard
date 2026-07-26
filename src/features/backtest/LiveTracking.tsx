@@ -38,7 +38,7 @@ export function LiveTracking({ modelId, cfg, result, histories, enrollment, onEn
   // 그 이후를 알고 있으므로 진짜 전방검증보다 증거력이 약하다(화면에 명시).
   const [freezeDate, setFreezeDate] = useState('')
   const [folds, setFolds] = useState(6)
-  const wf = result ? buildWalkForward(result.equity, folds) : null
+  const wf = result ? buildWalkForward(result.equity, folds, result.trades) : null
   const equityStart = result?.equity[0]?.date ?? ''
   const equityEnd = result?.equity[result.equity.length - 1]?.date ?? ''
   const isPastFreeze = enrollment != null && enrollment.enrolledAt < todayISO()
@@ -230,13 +230,15 @@ export function LiveTracking({ modelId, cfg, result, histories, enrollment, onEn
           </div>
           <div className={`bt-verdict ${wf.verdictLevel}`}>
             <strong>
-              {wf.verdictLevel === 'good'
+              {wf.pattern === 'reproducible'
                 ? '✅ 재현성 있음'
-                : wf.verdictLevel === 'bad'
-                  ? '⛔ 특정 구간 의존'
-                  : wf.verdictLevel === 'watch'
-                    ? '⚠️ 불분명'
-                    : '⏳ 표본 부족'}
+                : wf.pattern === 'persistent'
+                  ? '⛔ 지속적 열위'
+                  : wf.pattern === 'concentrated'
+                    ? '⛔ 소수 구간 의존'
+                    : wf.pattern === 'mixed'
+                      ? '⚠️ 불분명'
+                      : '⏳ 표본 부족'}
             </strong>{' '}
             {wf.verdict}
           </div>
@@ -250,8 +252,9 @@ export function LiveTracking({ modelId, cfg, result, histories, enrollment, onEn
                     <th>거래일</th>
                     <th>수익률</th>
                     <th>벤치마크</th>
-                    <th>알파(연)</th>
+                    <th>초과(누적)</th>
                     <th>MDD</th>
+                    <th>매매</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -270,13 +273,14 @@ export function LiveTracking({ modelId, cfg, result, histories, enrollment, onEn
                         {f.benchPct >= 0 ? '+' : ''}
                         {f.benchPct.toFixed(1)}%
                       </td>
-                      <td className={f.alphaPct >= 0 ? 'bt-pos' : 'bt-neg'}>
+                      <td className={f.excessPct >= 0 ? 'bt-pos' : 'bt-neg'}>
                         <strong>
-                          {f.alphaPct >= 0 ? '+' : ''}
-                          {f.alphaPct.toFixed(1)}%p
+                          {f.excessPct >= 0 ? '+' : ''}
+                          {f.excessPct.toFixed(1)}%p
                         </strong>
                       </td>
                       <td>{f.mddPct.toFixed(1)}%</td>
+                      <td>{f.trades === 0 ? <span className="bt-notrade">매매없음</span> : f.trades}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -285,7 +289,8 @@ export function LiveTracking({ modelId, cfg, result, histories, enrollment, onEn
           )}
           <div className="bt-chart-caption">
             전체 기간을 겹치지 않는 {wf.folds.length || folds}개 구간으로 나눠 <strong>같은 규칙</strong>을 각각
-            평가했습니다. 중요한 것은 합계가 아니라 <strong>몇 개 구간에서 우위가 재현되는가</strong>입니다 —
+            평가했습니다. 초과수익은 <strong>누적 기준</strong>입니다(짧은 구간을 연환산하면 수치가 지수적으로
+            부풀려져 해석을 방해합니다). 중요한 것은 합계가 아니라 <strong>몇 개 구간에서 우위가 재현되는가</strong>입니다 —
             한두 구간의 대박으로 전체 성적이 만들어졌다면 여기서 드러납니다. 구간 성적은 그 구간 내부만으로
             계산하며 이후 데이터를 참조하지 않습니다.
           </div>

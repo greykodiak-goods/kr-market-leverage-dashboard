@@ -162,6 +162,7 @@ export function BacktestSection() {
           onPatch={(p) => patch(openId, p)}
           onReset={() => resetModel(openId)}
           onBack={() => setOpenId(null)}
+          onSwitch={(id) => setOpenId(id)}
           onResult={(res, hists) => acceptResult(openId, res, hists)}
           onEnroll={(e) => enroll(openId, e)}
           onUnenroll={() => unenroll(openId)}

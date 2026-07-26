@@ -4,7 +4,7 @@
 import { useState } from 'react'
 import { getDailyHistory, type HistoryResult } from '../../lib/history'
 import { runPortfolio, type PortfolioResult } from './portfolio'
-import { modelMeta, type ModelConfig } from './models'
+import { modelMeta, MODEL_META, type ModelConfig } from './models'
 import { DEFAULT_IB_PARAMS, DEFAULT_VR_PARAMS } from './algoEngine'
 import { findDoc } from './modelDocs'
 import { ConditionEditor } from './ConditionEditor'
@@ -38,6 +38,7 @@ interface Props {
   onPatch: (p: Partial<ModelConfig>) => void
   onReset: () => void
   onBack: () => void
+  onSwitch: (id: string) => void
   onResult: (res: PortfolioResult, histories: Record<string, HistoryResult>) => void
   onEnroll: (e: Enrollment) => void
   onUnenroll: () => void
@@ -52,6 +53,7 @@ export function ModelDetail({
   onPatch,
   onReset,
   onBack,
+  onSwitch,
   onResult,
   onEnroll,
   onUnenroll,
@@ -113,11 +115,27 @@ export function ModelDetail({
         </h3>
         <span className={`bt-card-type ${meta.type}`}>{meta.type === 'rule' ? '규칙형' : '자금관리'}</span>
       </div>
+
+      {/* 다른 기법으로 바로 전환 — 보드를 거치지 않는다 */}
+      <div className="bt-switcher">
+        <span className="bt-switcher-label">기법 전환</span>
+        {MODEL_META.map((m) => (
+          <button
+            key={m.id}
+            type="button"
+            className={`bt-model-btn${m.id === modelId ? ' active' : ''}${m.type === 'algo' ? ' algo' : ''}`}
+            onClick={() => onSwitch(m.id)}
+          >
+            {m.short}
+          </button>
+        ))}
+      </div>
+
       <div className="bt-strategy-desc bt-model-desc">{meta.desc}</div>
 
       {doc && (
-        <details className="bt-doc">
-          <summary>📖 이 기법의 매수·매도 규칙 자세히 보기</summary>
+        <details className="bt-doc" open>
+          <summary>📖 투자 철학 · 사용법 · 매수매도 규칙 (이 기법 완전 설명)</summary>
           <div className="bt-doc-body">
             {doc.sections.map((sec) => (
               <div key={sec.h} className="bt-doc-sec">

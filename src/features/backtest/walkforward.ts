@@ -17,17 +17,24 @@ export interface Fold {
   days: number
   returnPct: number
   benchPct: number
-  alphaPct: number // 연환산 초과수익
+  excessPct: number // 누적 초과수익 (전략 − 벤치마크). 구간 길이가 같으므로
+  // 연환산하지 않는다 — 짧은 구간을 연환산하면 수치가 지수적으로 부풀려져
+  // (예: 0.8년 구간의 벤치 +400% → 연환산 +620%) 해석을 방해한다.
   mddPct: number
+  trades: number // 이 구간에서 발생한 진입 횟수 (0 = 아예 매매 없음)
 }
 
 export interface WalkForwardReport {
   folds: Fold[]
-  positiveAlphaFolds: number
-  medianAlphaPct: number
-  worstAlphaPct: number
-  bestAlphaPct: number
+  positiveFolds: number
+  medianExcessPct: number
+  worstExcessPct: number
+  bestExcessPct: number
+  noTradeFolds: number
   consistency: string // '4/6'
+  // 열위 패턴 구분: 'persistent' = 대부분 구간에서 뒤짐,
+  // 'concentrated' = 전체 성적이 소수 구간에 의존
+  pattern: 'reproducible' | 'concentrated' | 'persistent' | 'mixed' | 'insufficient'
   verdict: string
   verdictLevel: 'good' | 'watch' | 'bad' | 'early'
 }
@@ -41,7 +48,11 @@ function median(xs: number[]): number {
 
 export const MIN_FOLD_DAYS = 60 // 구간이 이보다 짧으면 통계적 의미가 희박
 
-export function buildWalkForward(equity: EquityPoint[], foldCount = 6): WalkForwardReport {
+export function buildWalkForward(
+  equity: EquityPoint[],
+  foldCount = 6,
+  trades: { entryDate: string }[] = [],
+): WalkForwardReport {
   const n = equity.length
   const k = Math.max(2, Math.min(12, Math.floor(foldCount)))
   const size = Math.floor(n / k)
@@ -49,11 +60,13 @@ export function buildWalkForward(equity: EquityPoint[], foldCount = 6): WalkForw
   if (size < MIN_FOLD_DAYS) {
     return {
       folds: [],
-      positiveAlphaFolds: 0,
-      medianAlphaPct: 0,
-      worstAlphaPct: 0,
-      bestAlphaPct: 0,
+      positiveFolds: 0,
+      medianExcessPct: 0,
+      worstExcessPct: 0,
+      bestExcessPct: 0,
+      noTradeFolds: 0,
       consistency: `0/0`,
+      pattern: 'insufficient',
       verdict: `구간당 ${size}거래일뿐이라 분할 검증이 의미가 없습니다 — 시뮬레이션 기간을 늘리거나 구간 수를 줄이세요(구간당 최소 ${MIN_FOLD_DAYS}거래일).`,
       verdictLevel: 'early',
     }
@@ -66,11 +79,8 @@ export function buildWalkForward(equity: EquityPoint[], foldCount = 6): WalkForw
     const a = equity[from]
     const b = equity[to]
     const days = to - from + 1
-    const years = days / 252
-    const ret = b.equity / a.equity - 1
-    const bench = b.benchmark / a.benchmark - 1
-    const cagr = years > 0 ? Math.pow(1 + ret, 1 / years) - 1 : 0
-    const benchCagr = years > 0 ? Math.pow(1 + bench, 1 / years) - 1 : 0
+    const ret = (b.equity / a.equity - 1) * 100
+    const bench = (b.benchmark / a.benchmark - 1) * 100
 
     let peak = a.equity
     let mdd = 0
@@ -79,45 +89,64 @@ export function buildWalkForward(equity: EquityPoint[], foldCount = 6): WalkForw
       mdd = Math.min(mdd, ((equity[j].equity - peak) / peak) * 100)
     }
 
+    const tradeCount = trades.filter((t) => t.entryDate >= a.date && t.entryDate <= b.date).length
+
     folds.push({
       index: i + 1,
       from: a.date,
       to: b.date,
       days,
-      returnPct: ret * 100,
-      benchPct: bench * 100,
-      alphaPct: (cagr - benchCagr) * 100,
+      returnPct: ret,
+      benchPct: bench,
+      excessPct: ret - bench,
       mddPct: mdd,
+      trades: tradeCount,
     })
   }
 
-  const alphas = folds.map((f) => f.alphaPct)
-  const positive = alphas.filter((a) => a > 0).length
-  const med = median(alphas)
-  const worst = Math.min(...alphas)
-  const best = Math.max(...alphas)
+  const excesses = folds.map((f) => f.excessPct)
+  const positive = excesses.filter((x) => x > 0).length
+  const med = median(excesses)
+  const worst = Math.min(...excesses)
+  const best = Math.max(...excesses)
   const ratio = positive / folds.length
+  const noTrade = folds.filter((f) => f.trades === 0).length
+  const noTradeNote =
+    noTrade > 0 ? ` ${noTrade}개 구간은 아예 매매가 없었습니다(현금 보유) — 그 구간의 마이너스는 손실이 아니라 놓친 기회입니다.` : ''
 
   let verdict: string
   let verdictLevel: WalkForwardReport['verdictLevel']
+  let pattern: WalkForwardReport['pattern']
+
   if (ratio >= 0.7 && med > 0) {
+    pattern = 'reproducible'
     verdictLevel = 'good'
-    verdict = `${folds.length}개 구간 중 ${positive}개에서 벤치마크를 앞섰고 중앙값 알파가 ${med.toFixed(1)}%p입니다 — 특정 장세에만 통한 규칙은 아닌 것으로 보입니다. 최악 구간 ${worst.toFixed(1)}%p는 감내 가능한지 확인하세요.`
-  } else if (ratio <= 0.34 || med <= 0) {
+    verdict = `${folds.length}개 구간 중 ${positive}개에서 벤치마크를 앞섰고 중앙값 초과수익이 ${med.toFixed(1)}%p입니다 — 특정 장세에만 통한 규칙은 아닌 것으로 보입니다. 최악 구간 ${worst.toFixed(1)}%p는 감내 가능한지 확인하세요.${noTradeNote}`
+  } else if (med <= 0 && positive <= folds.length / 3) {
+    // 대부분의 구간에서 뒤짐 = 지속적 열위. "소수 구간 의존"과는 다른 상황이다.
+    pattern = 'persistent'
     verdictLevel = 'bad'
-    verdict = `${folds.length}개 구간 중 ${positive}개에서만 벤치마크를 앞섰고 중앙값 알파가 ${med.toFixed(1)}%p입니다 — 전체 성적이 소수 구간(최고 ${best.toFixed(1)}%p)에 의존했을 가능성이 큽니다.`
+    verdict = `${folds.length}개 구간 중 ${positive}개에서만 벤치마크를 앞섰고, 중앙값 초과수익이 ${med.toFixed(1)}%p로 대부분의 구간에서 단순보유에 뒤졌습니다 — 이 종목·기간에서 이 규칙이 단순보유보다 낫다는 근거가 없습니다.${noTradeNote}`
+  } else if (med <= 0 && best > 0) {
+    // 전체 합계는 나쁘지 않을 수 있으나 중앙값이 음수 = 소수 구간이 성적을 끌었다.
+    pattern = 'concentrated'
+    verdictLevel = 'bad'
+    verdict = `중앙값 초과수익이 ${med.toFixed(1)}%p인데 최고 구간은 ${best.toFixed(1)}%p입니다 — 전체 성적이 소수 구간에 의존했을 가능성이 큽니다. 그 구간이 반복된다는 보장은 없습니다.${noTradeNote}`
   } else {
+    pattern = 'mixed'
     verdictLevel = 'watch'
-    verdict = `${folds.length}개 구간 중 ${positive}개 우위, 중앙값 알파 ${med.toFixed(1)}%p — 재현성이 뚜렷하지 않습니다. 구간별 편차(최고 ${best.toFixed(1)}%p / 최악 ${worst.toFixed(1)}%p)를 함께 보세요.`
+    verdict = `${folds.length}개 구간 중 ${positive}개 우위, 중앙값 초과수익 ${med.toFixed(1)}%p — 재현성이 뚜렷하지 않습니다. 구간별 편차(최고 ${best.toFixed(1)}%p / 최악 ${worst.toFixed(1)}%p)를 함께 보세요.${noTradeNote}`
   }
 
   return {
     folds,
-    positiveAlphaFolds: positive,
-    medianAlphaPct: med,
-    worstAlphaPct: worst,
-    bestAlphaPct: best,
+    positiveFolds: positive,
+    medianExcessPct: med,
+    worstExcessPct: worst,
+    bestExcessPct: best,
+    noTradeFolds: noTrade,
     consistency: `${positive}/${folds.length}`,
+    pattern,
     verdict,
     verdictLevel,
   }

@@ -66,10 +66,20 @@ export function evalConditionAt(bars: DailyBar[], c: Condition, i: number): Cond
     else if (c.op === 'crossBelow') met = lp != null && rp != null && lp >= rp && l < r
   }
 
+  // 우변이 상수면 이름과 값이 같으므로("30 30.0") 반복하지 않고 "기준 30"으로 쓴다.
+  const rightIsConst = c.right.kind === 'CONST'
+  const rightNow = rightIsConst ? `기준 ${fmtVal(r)}` : `${operandName(c.right)} ${fmtVal(r)}`
   const isCross = c.op === 'crossAbove' || c.op === 'crossBelow'
-  const detail = isCross
-    ? `당일 ${operandName(c.left)} ${fmtVal(l)} / ${operandName(c.right)} ${fmtVal(r)} · 전일 ${fmtVal(lp)} / ${fmtVal(rp)}`
-    : `${operandName(c.left)} ${fmtVal(l)} / ${operandName(c.right)} ${fmtVal(r)}`
+
+  let detail: string
+  if (isCross) {
+    const prevPart = rightIsConst
+      ? `전일 ${operandName(c.left)} ${fmtVal(lp)}`
+      : `전일 ${operandName(c.left)} ${fmtVal(lp)} / ${operandName(c.right)} ${fmtVal(rp)}`
+    detail = `당일 ${operandName(c.left)} ${fmtVal(l)} / ${rightNow} · ${prevPart}`
+  } else {
+    detail = `당일 ${operandName(c.left)} ${fmtVal(l)} / ${rightNow}`
+  }
 
   return { text: conditionText(c), detail, met }
 }
