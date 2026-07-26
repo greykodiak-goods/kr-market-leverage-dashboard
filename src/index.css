@@ -2173,3 +2173,65 @@ body {
   max-height: 320px;
   overflow-y: auto;
 }
+
+/* backtest — 모델 선택 버튼 */
+.bt-model-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.bt-model-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.bt-model-group-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-faint);
+  margin-right: 4px;
+  min-width: 148px;
+}
+.bt-model-btn {
+  background: var(--bg);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+.bt-model-btn:hover {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+.bt-model-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.bt-model-btn.algo.active {
+  background: var(--kosdaq);
+  border-color: var(--kosdaq);
+  color: #fff;
+}
+.bt-model-desc {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+  max-width: none;
+  line-height: 1.55;
+}
+.bt-btn-run:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+@media (max-width: 640px) {
+  .bt-model-group-label {
+    min-width: 100%;
+  }
+}

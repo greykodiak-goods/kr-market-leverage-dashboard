@@ -2,6 +2,10 @@
 // 모른다"는 전제로 전략 모델을 워크포워드 실행한다. 신호는 당일 종가에서
 // 판단, 체결은 다음날 시가(규칙형) 또는 당일 종가 LOC(알고리즘형). 모의
 // 시뮬레이션 전용 — 실계좌·실주문과 어떤 연결도 없다.
+//
+// 모델은 상단 버튼으로 선택하며, 종목·기간·시작시점·자금/비용·전략 변수는
+// 모델별로 독립 저장된다(localStorage) — 모델을 오가도 각자의 세팅 유지.
+// "전체 모델 비교"는 각 모델을 자기 세팅(자기 종목·구간·변수)으로 실행한다.
 
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -39,19 +43,65 @@ const LEVERAGED = new Set(['122630.KS', 'SOXL', 'TQQQ'])
 const ALGO_MODELS = [
   {
     id: 'infinite-buying',
-    name: '라오어 무한매수법 (근사) — SOXL 권장',
-    desc: '원금을 T분할(기본 40)해 매일 정액 0.5회분 + 종가가 평단 아래면 0.5회분 추가로 LOC 매수, 평단 +10% 지정가 전량 매도 후 재시작하는 분할매수 모델(v1 근사). 원금 소진 시 신규매수를 멈추고 목표 대기. 사이클 종료 시 현금 전액이 다음 원금(복리).',
+    name: '라오어 무한매수법 (근사)',
+    short: '무한매수법',
+    desc: '원금을 T분할(기본 40)해 매일 정액 0.5회분 + 종가가 평단 아래면 0.5회분 추가로 LOC 매수, 평단 +10% 지정가 전량 매도 후 재시작하는 분할매수 모델(v1 근사). 원금 소진 시 신규매수를 멈추고 목표 대기. 사이클 종료 시 현금 전액이 다음 원금(복리). SOXL 기준이 원저 세팅.',
     defaultSymbol: 'SOXL',
   },
   {
     id: 'value-rebalancing',
-    name: '라오어 VR 밸류 리밸런싱 (근사) — TQQQ 권장',
-    desc: '자본의 일부(기본 75%)로 편입 후 V값을 주기(기본 10거래일)마다 g%(기본 1%) 성장시키고, 평가금이 밴드(±15%)를 벗어나면 V값까지 매도/매수해 현금 풀과 교환하는 장기 적립형 모델(근사). 추가 입금은 없다고 가정.',
+    name: '라오어 VR 밸류 리밸런싱 (근사)',
+    short: 'VR 리밸런싱',
+    desc: '자본의 일부(기본 75%)로 편입 후 V값을 주기(기본 10거래일)마다 g%(기본 1%) 성장시키고, 평가금이 밴드(±15%)를 벗어나면 V값까지 매도/매수해 현금 풀과 교환하는 장기 적립형 모델(근사). 추가 입금은 없다고 가정. TQQQ 기준이 원저 세팅.',
     defaultSymbol: 'TQQQ',
   },
 ] as const
 
+const RULE_SHORT: Record<string, string> = {
+  'golden-cross': '골든크로스',
+  'rsi-reversal': 'RSI 반등',
+  'bollinger-meanrev': '볼린저 회귀',
+  breakout: '신고가 돌파',
+  'macd-momentum': 'MACD 모멘텀',
+  'trend-filter-cross': '추세+크로스',
+}
+
 const MIN_WARMUP = 120 // bars kept before sim start so 지표(최대 SMA120급) warm-up이 가능
+
+// ---- 모델별 독립 설정 ------------------------------------------------------
+interface ModelConfig {
+  symbol: string
+  customSymbol: string
+  range: HistoryRange
+  startDate: string // '' = 데이터 중간 지점
+  settings: SimSettings
+  strategy?: StrategyConfig // 규칙형만
+  ib?: InfiniteBuyingParams
+  vr?: VRParams
+}
+
+function defaultConfig(modelId: string): ModelConfig {
+  if (modelId === 'infinite-buying')
+    return { symbol: 'SOXL', customSymbol: '', range: '10y', startDate: '', settings: { ...DEFAULT_SETTINGS, sellTaxPct: 0 }, ib: { ...DEFAULT_IB_PARAMS } }
+  if (modelId === 'value-rebalancing')
+    return { symbol: 'TQQQ', customSymbol: '', range: '10y', startDate: '', settings: { ...DEFAULT_SETTINGS, sellTaxPct: 0 }, vr: { ...DEFAULT_VR_PARAMS } }
+  return { symbol: '000660.KS', customSymbol: '', range: '10y', startDate: '', settings: { ...DEFAULT_SETTINGS }, strategy: clonePreset(modelId) }
+}
+
+const CFG_KEY = 'bt-model-configs-v1'
+const ALL_MODEL_IDS = [...PRESET_STRATEGIES.map((s) => s.id), ...ALGO_MODELS.map((m) => m.id)]
+
+function loadConfigs(): Record<string, ModelConfig> {
+  let saved: Partial<Record<string, ModelConfig>> = {}
+  try {
+    saved = JSON.parse(localStorage.getItem(CFG_KEY) ?? '{}')
+  } catch {
+    /* 손상된 저장값은 무시 */
+  }
+  const out: Record<string, ModelConfig> = {}
+  for (const id of ALL_MODEL_IDS) out[id] = { ...defaultConfig(id), ...(saved[id] ?? {}) }
+  return out
+}
 
 function fmtPct(v: number, digits = 1): string {
   return `${v >= 0 ? '+' : ''}${v.toFixed(digits)}%`
@@ -62,97 +112,108 @@ function num(v: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback
 }
 
+function computeStartIdx(barsLen: number, bars: { date: string }[], startDate: string): number {
+  if (!startDate) return Math.max(MIN_WARMUP, Math.floor(barsLen / 2))
+  const i = bars.findIndex((b) => b.date >= startDate)
+  if (i < 0) return Math.max(MIN_WARMUP, barsLen - 2)
+  return Math.max(MIN_WARMUP, i)
+}
+
+function runModelWith(id: string, cfg: ModelConfig, bars: NonNullable<Awaited<ReturnType<typeof getDailyHistory>>['bars']>, startIdx: number): SimResult {
+  if (id === 'infinite-buying') return runInfiniteBuying(bars, startIdx, cfg.ib ?? DEFAULT_IB_PARAMS, cfg.settings)
+  if (id === 'value-rebalancing') return runValueRebalancing(bars, startIdx, cfg.vr ?? DEFAULT_VR_PARAMS, cfg.settings)
+  return runBacktest(bars, startIdx, cfg.strategy ?? clonePreset(id), cfg.settings)
+}
+
+interface CompareRow {
+  res: SimResult
+  symbol: string
+  error?: string
+  name: string
+}
+
 export function BacktestSection() {
-  const [symbol, setSymbol] = useState('000660.KS')
-  const [customSymbol, setCustomSymbol] = useState('')
-  const [range, setRange] = useState<HistoryRange>('10y')
-  const activeSymbol = customSymbol.trim() || symbol
-
-  const { data: hist, isLoading, isError, error } = useQuery({
-    queryKey: ['history', activeSymbol, range],
-    queryFn: () => getDailyHistory(activeSymbol, range),
-    staleTime: 12 * 60 * 60 * 1000,
-    retry: 1,
-  })
-
-  const bars = hist?.bars
-
-  // 시뮬레이션 시작 시점 — 이 날짜 이전 데이터는 지표 warm-up용 "과거"로만
-  // 쓰이고, 이후 구간은 하루씩 전진하며 그 시점까지의 정보만으로 판단한다.
-  const [startDate, setStartDate] = useState('')
-  const startIdx = useMemo(() => {
-    if (!bars) return -1
-    if (!startDate) return Math.max(MIN_WARMUP, Math.floor(bars.length / 2))
-    const i = bars.findIndex((b) => b.date >= startDate)
-    if (i < 0) return Math.max(MIN_WARMUP, bars.length - 2)
-    return Math.max(MIN_WARMUP, i)
-  }, [bars, startDate])
-
+  const [configs, setConfigs] = useState<Record<string, ModelConfig>>(loadConfigs)
   const [modelId, setModelId] = useState<string>(PRESET_STRATEGIES[0].id)
-  const [strategy, setStrategy] = useState<StrategyConfig>(() => clonePreset(PRESET_STRATEGIES[0].id))
-  const [ibParams, setIbParams] = useState<InfiniteBuyingParams>(DEFAULT_IB_PARAMS)
-  const [vrParams, setVrParams] = useState<VRParams>(DEFAULT_VR_PARAMS)
-  const [settings, setSettings] = useState<SimSettings>(DEFAULT_SETTINGS)
 
+  const cfg = configs[modelId]
   const isAlgo = ALGO_MODELS.some((m) => m.id === modelId)
   const algoModel = ALGO_MODELS.find((m) => m.id === modelId)
   const preset = PRESET_STRATEGIES.find((s) => s.id === modelId)
+  const activeSymbol = cfg.customSymbol.trim() || cfg.symbol
+
+  function patch(p: Partial<ModelConfig>) {
+    setConfigs((prev) => {
+      const next = { ...prev, [modelId]: { ...prev[modelId], ...p } }
+      try {
+        localStorage.setItem(CFG_KEY, JSON.stringify(next))
+      } catch {
+        /* ignore */
+      }
+      return next
+    })
+  }
+  const patchSettings = (p: Partial<SimSettings>) => patch({ settings: { ...cfg.settings, ...p } })
+
+  const { data: hist, isLoading, isError, error } = useQuery({
+    queryKey: ['history', activeSymbol, cfg.range],
+    queryFn: () => getDailyHistory(activeSymbol, cfg.range),
+    staleTime: 12 * 60 * 60 * 1000,
+    retry: 1,
+  })
+  const bars = hist?.bars
+
+  const startIdx = useMemo(() => (bars ? computeStartIdx(bars.length, bars, cfg.startDate) : -1), [bars, cfg.startDate])
 
   const [result, setResult] = useState<SimResult | null>(null)
-  const [comparison, setComparison] = useState<SimResult[] | null>(null)
+  const [comparison, setComparison] = useState<CompareRow[] | null>(null)
+  const [compareBusy, setCompareBusy] = useState(false)
   const [runError, setRunError] = useState<string | null>(null)
 
   function selectModel(id: string) {
     setModelId(id)
-    const algo = ALGO_MODELS.find((m) => m.id === id)
-    if (algo) {
-      // 라오어 전략은 미국 상장 3배 ETF 기준이 원저 세팅 — 권장 심볼로 전환하고
-      // 한국 증권거래세를 0으로(미국 종목 비적용, 아래 입력에서 조정 가능).
-      setSymbol(algo.defaultSymbol)
-      setCustomSymbol('')
-      setSettings((s) => ({ ...s, sellTaxPct: 0 }))
-    } else {
-      setStrategy(clonePreset(id))
-    }
-  }
-
-  function runModel(id: string): SimResult {
-    if (!bars) throw new Error('데이터 없음')
-    if (id === 'infinite-buying') return runInfiniteBuying(bars, startIdx, ibParams, settings)
-    if (id === 'value-rebalancing') return runValueRebalancing(bars, startIdx, vrParams, settings)
-    const cfg = id === modelId && !isAlgo ? strategy : PRESET_STRATEGIES.find((s) => s.id === id)!
-    return runBacktest(bars, startIdx, cfg, settings)
+    setResult(null)
+    setRunError(null)
   }
 
   function run() {
     if (!bars) return
     try {
       setRunError(null)
-      setResult(runModel(modelId))
+      setResult(runModelWith(modelId, cfg, bars, startIdx))
       setComparison(null)
     } catch (e) {
       setRunError(String((e as Error).message ?? e))
     }
   }
 
-  function runComparison() {
-    if (!bars) return
+  // 각 모델을 "자기 세팅"(자기 종목·구간·변수)으로 실행해 나란히 비교한다.
+  async function runComparison() {
+    setCompareBusy(true)
+    setRunError(null)
     try {
-      setRunError(null)
-      const rows = [
-        ...PRESET_STRATEGIES.map((s) => runBacktest(bars, startIdx, s, settings)),
-        runInfiniteBuying(bars, startIdx, ibParams, settings),
-        runValueRebalancing(bars, startIdx, vrParams, settings),
-      ]
+      const rows: CompareRow[] = []
+      for (const id of ALL_MODEL_IDS) {
+        const c = configs[id]
+        const name = ALGO_MODELS.find((m) => m.id === id)?.name ?? PRESET_STRATEGIES.find((s) => s.id === id)?.name ?? id
+        const sym = c.customSymbol.trim() || c.symbol
+        try {
+          const h = await getDailyHistory(sym, c.range)
+          const sIdx = computeStartIdx(h.bars.length, h.bars, c.startDate)
+          rows.push({ res: runModelWith(id, c, h.bars, sIdx), symbol: sym, name })
+        } catch (e) {
+          rows.push({ res: null as unknown as SimResult, symbol: sym, name, error: String((e as Error).message ?? e) })
+        }
+      }
       setComparison(rows)
       setResult(null)
-    } catch (e) {
-      setRunError(String((e as Error).message ?? e))
+    } finally {
+      setCompareBusy(false)
     }
   }
 
   const setNum = (key: keyof SimSettings, fallback: number) => (e: React.ChangeEvent<HTMLInputElement>) =>
-    setSettings((s) => ({ ...s, [key]: num(e.target.value, fallback) }))
+    patchSettings({ [key]: num(e.target.value, fallback) })
 
   const m = result?.metrics
   const isForeign = hist != null && hist.currency !== 'KRW'
@@ -167,15 +228,49 @@ export function BacktestSection() {
         <span className="badge sample">모의 시뮬레이션 · 실주문 없음</span>
       </div>
       <div className="panel-sub">
-        특정 시점을 잡아 "미래를 모른다"는 전제로 전략을 하루씩 전진 실행합니다. 과거 성과는 미래 수익을 보장하지
-        않습니다.
+        모델 버튼을 눌러 선택하세요 — 종목·기간·시작시점·전략 변수는 <strong>모델별로 따로 저장</strong>됩니다. 특정
+        시점을 잡아 "미래를 모른다"는 전제로 하루씩 전진 실행하며, 과거 성과는 미래 수익을 보장하지 않습니다.
       </div>
 
-      {/* ---- 데이터 · 기간 ---- */}
+      {/* ---- 모델 선택 버튼 ---- */}
+      <div className="bt-model-picker">
+        <div className="bt-model-group">
+          <span className="bt-model-group-label">규칙 기반 (조건 편집형)</span>
+          {PRESET_STRATEGIES.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              className={`bt-model-btn${modelId === s.id ? ' active' : ''}`}
+              onClick={() => selectModel(s.id)}
+            >
+              {RULE_SHORT[s.id] ?? s.name}
+            </button>
+          ))}
+        </div>
+        <div className="bt-model-group">
+          <span className="bt-model-group-label">자금관리 알고리즘 (라오어)</span>
+          {ALGO_MODELS.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              className={`bt-model-btn algo${modelId === s.id ? ' active' : ''}`}
+              onClick={() => selectModel(s.id)}
+            >
+              {s.short}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="bt-strategy-desc bt-model-desc">
+        <strong>{isAlgo ? algoModel?.name : preset?.name}</strong> — {isAlgo ? algoModel?.desc : preset?.desc}
+      </div>
+
+      {/* ---- 데이터 · 기간 (모델별 저장) ---- */}
       <div className="bt-controls">
         <label>
           종목
-          <select value={symbol} onChange={(e) => { setSymbol(e.target.value); setCustomSymbol('') }}>
+          <select value={cfg.symbol} onChange={(e) => patch({ symbol: e.target.value, customSymbol: '' })}>
             {SYMBOLS.map((s) => (
               <option key={s.symbol} value={s.symbol}>
                 {s.label} ({s.symbol})
@@ -188,13 +283,13 @@ export function BacktestSection() {
           <input
             type="text"
             placeholder="예: 035420.KS"
-            value={customSymbol}
-            onChange={(e) => setCustomSymbol(e.target.value)}
+            value={cfg.customSymbol}
+            onChange={(e) => patch({ customSymbol: e.target.value })}
           />
         </label>
         <label>
           데이터 범위
-          <select value={range} onChange={(e) => setRange(e.target.value as HistoryRange)}>
+          <select value={cfg.range} onChange={(e) => patch({ range: e.target.value as HistoryRange })}>
             <option value="5y">5년</option>
             <option value="10y">10년</option>
             <option value="max">전체</option>
@@ -202,7 +297,7 @@ export function BacktestSection() {
         </label>
         <label>
           시뮬레이션 시작일
-          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+          <input type="date" value={cfg.startDate} onChange={(e) => patch({ startDate: e.target.value })} />
         </label>
       </div>
 
@@ -227,7 +322,7 @@ export function BacktestSection() {
                   key={p}
                   type="button"
                   className="bt-btn-mini"
-                  onClick={() => setStartDate(bars[Math.max(MIN_WARMUP, Math.floor((bars.length * p) / 100))].date)}
+                  onClick={() => patch({ startDate: bars[Math.max(MIN_WARMUP, Math.floor((bars.length * p) / 100))].date })}
                 >
                   {p}% 지점
                 </button>
@@ -241,51 +336,33 @@ export function BacktestSection() {
               전제로 보세요.
             </div>
           )}
-          {isForeign && settings.sellTaxPct > 0 && (
+          {isForeign && cfg.settings.sellTaxPct > 0 && (
             <div className="bt-chart-caption">
-              ℹ️ 해외 상장 종목에는 한국 증권거래세가 적용되지 않습니다 — 거래세 0% 권장 (현재 {settings.sellTaxPct}%).
+              ℹ️ 해외 상장 종목에는 한국 증권거래세가 적용되지 않습니다 — 거래세 0% 권장 (현재 {cfg.settings.sellTaxPct}%).
             </div>
           )}
 
-          {/* ---- 전략 모델 + 조건/파라미터 편집 ---- */}
+          {/* ---- 조건/파라미터 편집 (모델별 저장) ---- */}
           <div className="bt-strategy">
-            <div className="bt-controls">
-              <label>
-                전략 모델
-                <select value={modelId} onChange={(e) => selectModel(e.target.value)}>
-                  <optgroup label="규칙 기반 (매수·매도 조건 편집형)">
-                    {PRESET_STRATEGIES.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="자금관리 알고리즘 (라오어 시리즈)">
-                    {ALGO_MODELS.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                </select>
-              </label>
-              <div className="bt-strategy-desc">{isAlgo ? algoModel?.desc : preset?.desc}</div>
-            </div>
-
-            {!isAlgo && (
+            {!isAlgo && cfg.strategy && (
               <>
                 <ConditionEditor
                   label="🟢 매수 조건"
                   combinator="AND"
-                  conditions={strategy.buy}
-                  onChange={(buy) => setStrategy((s) => ({ ...s, buy }))}
+                  conditions={cfg.strategy.buy}
+                  onChange={(buy) => patch({ strategy: { ...cfg.strategy!, buy } })}
                 />
                 <ConditionEditor
                   label="🔵 매도 조건"
                   combinator="OR"
-                  conditions={strategy.sell}
-                  onChange={(sell) => setStrategy((s) => ({ ...s, sell }))}
+                  conditions={cfg.strategy.sell}
+                  onChange={(sell) => patch({ strategy: { ...cfg.strategy!, sell } })}
                 />
+                <div className="bt-actions" style={{ margin: '8px 0 0' }}>
+                  <button type="button" className="bt-btn-mini" onClick={() => patch({ strategy: clonePreset(modelId) })}>
+                    ↺ 조건 기본값 복원
+                  </button>
+                </div>
               </>
             )}
 
@@ -293,11 +370,11 @@ export function BacktestSection() {
               <div className="bt-controls bt-algo-params">
                 <label>
                   분할 수 (T)
-                  <input type="number" min={2} max={200} value={ibParams.splits} onChange={(e) => setIbParams((p) => ({ ...p, splits: num(e.target.value, 40) }))} />
+                  <input type="number" min={2} max={200} value={(cfg.ib ?? DEFAULT_IB_PARAMS).splits} onChange={(e) => patch({ ib: { ...(cfg.ib ?? DEFAULT_IB_PARAMS), splits: num(e.target.value, 40) } })} />
                 </label>
                 <label>
                   목표 수익률 % (평단 대비)
-                  <input type="number" min={1} max={100} step={0.5} value={ibParams.targetPct} onChange={(e) => setIbParams((p) => ({ ...p, targetPct: num(e.target.value, 10) }))} />
+                  <input type="number" min={1} max={100} step={0.5} value={(cfg.ib ?? DEFAULT_IB_PARAMS).targetPct} onChange={(e) => patch({ ib: { ...(cfg.ib ?? DEFAULT_IB_PARAMS), targetPct: num(e.target.value, 10) } })} />
                 </label>
                 <label>
                   사이클 손절 % (0=없음, v1 기본)
@@ -306,8 +383,8 @@ export function BacktestSection() {
                     type="number"
                     min={0}
                     max={90}
-                    value={ibParams.cycleStopPct ?? 0}
-                    onChange={(e) => setIbParams((p) => ({ ...p, cycleStopPct: num(e.target.value, 0) > 0 ? num(e.target.value, 0) : null }))}
+                    value={(cfg.ib ?? DEFAULT_IB_PARAMS).cycleStopPct ?? 0}
+                    onChange={(e) => patch({ ib: { ...(cfg.ib ?? DEFAULT_IB_PARAMS), cycleStopPct: num(e.target.value, 0) > 0 ? num(e.target.value, 0) : null } })}
                   />
                 </label>
               </div>
@@ -317,20 +394,20 @@ export function BacktestSection() {
               <div className="bt-controls bt-algo-params">
                 <label>
                   리밸런싱 주기 (거래일)
-                  <input type="number" min={1} max={60} value={vrParams.periodDays} onChange={(e) => setVrParams((p) => ({ ...p, periodDays: num(e.target.value, 10) }))} />
+                  <input type="number" min={1} max={60} value={(cfg.vr ?? DEFAULT_VR_PARAMS).periodDays} onChange={(e) => patch({ vr: { ...(cfg.vr ?? DEFAULT_VR_PARAMS), periodDays: num(e.target.value, 10) } })} />
                 </label>
                 <label>
                   V값 성장률 %/주기
                   <InfoTip text="주기마다 목표 평가금(V값)을 이만큼 키웁니다. 기초자산의 장기 기대성장을 낙관적으로 잡을수록 하락장에서 현금 풀이 빨리 소진됩니다." />
-                  <input type="number" min={0} max={10} step={0.1} value={vrParams.growthPct} onChange={(e) => setVrParams((p) => ({ ...p, growthPct: num(e.target.value, 1) }))} />
+                  <input type="number" min={0} max={10} step={0.1} value={(cfg.vr ?? DEFAULT_VR_PARAMS).growthPct} onChange={(e) => patch({ vr: { ...(cfg.vr ?? DEFAULT_VR_PARAMS), growthPct: num(e.target.value, 1) } })} />
                 </label>
                 <label>
                   밴드 폭 ±%
-                  <input type="number" min={1} max={50} value={vrParams.bandPct} onChange={(e) => setVrParams((p) => ({ ...p, bandPct: num(e.target.value, 15) }))} />
+                  <input type="number" min={1} max={50} value={(cfg.vr ?? DEFAULT_VR_PARAMS).bandPct} onChange={(e) => patch({ vr: { ...(cfg.vr ?? DEFAULT_VR_PARAMS), bandPct: num(e.target.value, 15) } })} />
                 </label>
                 <label>
                   초기 주식 비중 %
-                  <input type="number" min={10} max={100} value={vrParams.initialStockPct} onChange={(e) => setVrParams((p) => ({ ...p, initialStockPct: num(e.target.value, 75) }))} />
+                  <input type="number" min={10} max={100} value={(cfg.vr ?? DEFAULT_VR_PARAMS).initialStockPct} onChange={(e) => patch({ vr: { ...(cfg.vr ?? DEFAULT_VR_PARAMS), initialStockPct: num(e.target.value, 75) } })} />
                 </label>
               </div>
             )}
@@ -344,30 +421,30 @@ export function BacktestSection() {
             )}
           </div>
 
-          {/* ---- 자금 · 비용 · 리스크 ---- */}
+          {/* ---- 자금 · 비용 · 리스크 (모델별 저장) ---- */}
           <div className="bt-controls bt-settings">
             <label>
               초기자본 ({hist!.currency})
-              <input type="number" min={1000} step={1000000} value={settings.initialCapital} onChange={setNum('initialCapital', 10_000_000)} />
+              <input type="number" min={1000} step={1000000} value={cfg.settings.initialCapital} onChange={setNum('initialCapital', 10_000_000)} />
             </label>
             {!isAlgo && (
               <label>
                 진입 비중 %
                 <InfoTip text="매수 신호 시 현재 자산 중 몇 %를 투입할지 (포지션 사이징). 100% 몰빵은 손실 변동성을 크게 키웁니다." />
-                <input type="number" min={1} max={100} value={settings.positionPct} onChange={setNum('positionPct', 50)} />
+                <input type="number" min={1} max={100} value={cfg.settings.positionPct} onChange={setNum('positionPct', 50)} />
               </label>
             )}
             <label>
               수수료 %(편도)
-              <input type="number" min={0} step={0.005} value={settings.commissionPct} onChange={setNum('commissionPct', 0.015)} />
+              <input type="number" min={0} step={0.005} value={cfg.settings.commissionPct} onChange={setNum('commissionPct', 0.015)} />
             </label>
             <label>
               거래세 %(매도)
-              <input type="number" min={0} step={0.05} value={settings.sellTaxPct} onChange={setNum('sellTaxPct', 0.15)} />
+              <input type="number" min={0} step={0.05} value={cfg.settings.sellTaxPct} onChange={setNum('sellTaxPct', 0.15)} />
             </label>
             <label>
               슬리피지 %
-              <input type="number" min={0} step={0.05} value={settings.slippagePct} onChange={setNum('slippagePct', 0.1)} />
+              <input type="number" min={0} step={0.05} value={cfg.settings.slippagePct} onChange={setNum('slippagePct', 0.1)} />
             </label>
             {!isAlgo && (
               <>
@@ -378,8 +455,8 @@ export function BacktestSection() {
                     type="number"
                     min={0}
                     max={50}
-                    value={settings.stopLossPct ?? 0}
-                    onChange={(e) => setSettings((s) => ({ ...s, stopLossPct: num(e.target.value, 0) > 0 ? num(e.target.value, 0) : null }))}
+                    value={cfg.settings.stopLossPct ?? 0}
+                    onChange={(e) => patchSettings({ stopLossPct: num(e.target.value, 0) > 0 ? num(e.target.value, 0) : null })}
                   />
                 </label>
                 <label>
@@ -388,8 +465,8 @@ export function BacktestSection() {
                     type="number"
                     min={0}
                     max={200}
-                    value={settings.takeProfitPct ?? 0}
-                    onChange={(e) => setSettings((s) => ({ ...s, takeProfitPct: num(e.target.value, 0) > 0 ? num(e.target.value, 0) : null }))}
+                    value={cfg.settings.takeProfitPct ?? 0}
+                    onChange={(e) => patchSettings({ takeProfitPct: num(e.target.value, 0) > 0 ? num(e.target.value, 0) : null })}
                   />
                 </label>
               </>
@@ -398,15 +475,28 @@ export function BacktestSection() {
 
           <div className="bt-actions">
             <button type="button" className="bt-btn-run" onClick={run}>
-              ▶ 시뮬레이션 실행
+              ▶ {isAlgo ? algoModel?.short : RULE_SHORT[modelId]} 실행
             </button>
-            <button type="button" className="bt-btn-run alt" onClick={runComparison}>
-              ⚖ 전체 모델 비교 (동일 구간)
+            <button type="button" className="bt-btn-run alt" onClick={runComparison} disabled={compareBusy}>
+              {compareBusy ? '⏳ 비교 실행 중…' : '⚖ 전체 모델 비교 (각자 세팅)'}
             </button>
-            {!isAlgo && settings.stopLossPct == null && (
+            <button
+              type="button"
+              className="bt-btn-mini"
+              onClick={() => {
+                const next = { ...configs, [modelId]: defaultConfig(modelId) }
+                setConfigs(next)
+                try {
+                  localStorage.setItem(CFG_KEY, JSON.stringify(next))
+                } catch { /* ignore */ }
+              }}
+            >
+              ↺ 이 모델 설정 초기화
+            </button>
+            {!isAlgo && cfg.settings.stopLossPct == null && (
               <span className="bt-warn">⚠️ 손절 미설정 — 최대 낙폭이 크게 확대될 수 있습니다</span>
             )}
-            {modelId === 'infinite-buying' && ibParams.cycleStopPct == null && (
+            {modelId === 'infinite-buying' && (cfg.ib ?? DEFAULT_IB_PARAMS).cycleStopPct == null && (
               <span className="bt-warn">⚠️ 사이클 손절 없음(v1 기본) — 장기 하락장에서 원금 대부분이 묶일 수 있습니다</span>
             )}
           </div>
@@ -518,7 +608,7 @@ export function BacktestSection() {
             </div>
           )}
 
-          {/* ---- 전체 모델 비교 ---- */}
+          {/* ---- 전체 모델 비교 (각 모델 자기 세팅) ---- */}
           {comparison && (
             <div className="bt-results">
               <div className="bt-table-wrap">
@@ -526,54 +616,57 @@ export function BacktestSection() {
                   <thead>
                     <tr>
                       <th>모델</th>
+                      <th>종목</th>
+                      <th>구간</th>
                       <th>총수익률</th>
+                      <th>단순보유</th>
                       <th>CAGR</th>
                       <th>MDD</th>
                       <th>샤프</th>
                       <th>승률</th>
                       <th>매매</th>
-                      <th>손익비</th>
                     </tr>
                   </thead>
                   <tbody>
                     {[...comparison]
-                      .sort((a, b) => b.metrics.totalReturnPct - a.metrics.totalReturnPct)
-                      .map((r) => (
-                        <tr key={r.strategyId}>
-                          <td>{r.strategyName}</td>
-                          <td className={r.metrics.totalReturnPct >= 0 ? 'bt-pos' : 'bt-neg'}>
-                            {fmtPct(r.metrics.totalReturnPct)}
-                          </td>
-                          <td>{fmtPct(r.metrics.cagrPct)}</td>
-                          <td>{fmtPct(r.metrics.mddPct)}</td>
-                          <td>{r.metrics.sharpe.toFixed(2)}</td>
-                          <td>{r.metrics.tradeCount > 0 ? `${r.metrics.winRatePct.toFixed(0)}%` : '—'}</td>
-                          <td>{r.metrics.tradeCount > 0 ? r.metrics.tradeCount : '—'}</td>
-                          <td>
-                            {r.metrics.tradeCount === 0
-                              ? '—'
-                              : r.metrics.profitFactor == null
-                                ? '∞'
-                                : r.metrics.profitFactor.toFixed(2)}
-                          </td>
-                        </tr>
-                      ))}
-                    <tr className="bt-bench-row">
-                      <td>단순보유(벤치마크)</td>
-                      <td className={comparison[0].metrics.benchmarkReturnPct >= 0 ? 'bt-pos' : 'bt-neg'}>
-                        {fmtPct(comparison[0].metrics.benchmarkReturnPct)}
-                      </td>
-                      <td>—</td>
-                      <td>{fmtPct(comparison[0].metrics.benchmarkMddPct)}</td>
-                      <td colSpan={4}>—</td>
-                    </tr>
+                      .sort((a, b) => (b.res?.metrics.totalReturnPct ?? -Infinity) - (a.res?.metrics.totalReturnPct ?? -Infinity))
+                      .map((row) =>
+                        row.error || !row.res ? (
+                          <tr key={row.name}>
+                            <td>{row.name}</td>
+                            <td>{row.symbol}</td>
+                            <td colSpan={8} className="bt-neg">
+                              실행 실패: {row.error}
+                            </td>
+                          </tr>
+                        ) : (
+                          <tr key={row.res.strategyId + row.symbol}>
+                            <td>{row.name}</td>
+                            <td>{row.symbol}</td>
+                            <td>
+                              {row.res.startDate} ~ {row.res.endDate}
+                            </td>
+                            <td className={row.res.metrics.totalReturnPct >= 0 ? 'bt-pos' : 'bt-neg'}>
+                              {fmtPct(row.res.metrics.totalReturnPct)}
+                            </td>
+                            <td className={row.res.metrics.benchmarkReturnPct >= 0 ? 'bt-pos' : 'bt-neg'}>
+                              {fmtPct(row.res.metrics.benchmarkReturnPct)}
+                            </td>
+                            <td>{fmtPct(row.res.metrics.cagrPct)}</td>
+                            <td>{fmtPct(row.res.metrics.mddPct)}</td>
+                            <td>{row.res.metrics.sharpe.toFixed(2)}</td>
+                            <td>{row.res.metrics.tradeCount > 0 ? `${row.res.metrics.winRatePct.toFixed(0)}%` : '—'}</td>
+                            <td>{row.res.metrics.tradeCount > 0 ? row.res.metrics.tradeCount : '—'}</td>
+                          </tr>
+                        ),
+                      )}
                   </tbody>
                 </table>
               </div>
               <div className="bt-chart-caption">
-                동일 자본·비용으로 전 모델을 같은 구간에 실행한 결과입니다. 규칙형 모델은 설정의 진입비중·손절·익절을
-                따르고, 라오어 계열은 자체 파라미터(분할·목표·주기·밴드)를 따릅니다. 특정 구간의 우위가 다른
-                구간·종목에서 재현된다는 보장은 없습니다(과최적화 주의). VR은 라운드트립이 없어 승률·매매·손익비를
+                각 모델을 <strong>자기 세팅(자기 종목·구간·변수)</strong>으로 실행한 결과입니다. 종목·구간이 다르면
+                수익률을 직접 비교하기보다 각 모델의 벤치마크(단순보유) 대비 성과와 MDD를 보세요. 특정 구간의 우위가
+                다른 구간·종목에서 재현된다는 보장은 없습니다(과최적화 주의). VR은 라운드트립이 없어 승률·매매를
                 표기하지 않습니다.
               </div>
             </div>
