@@ -2588,3 +2588,29 @@ body {
   padding-top: 5px;
   margin-top: 4px;
 }
+
+/* backtest — 동결 시점 · 구간분할 */
+.bt-freeze {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+.bt-freeze input {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 7px;
+  font-size: 12px;
+  font-family: inherit;
+}
+.bt-freeze input[type='number'] {
+  width: 60px;
+}
+.bt-freeze-note {
+  color: var(--kosdaq);
+  font-weight: 600;
+}

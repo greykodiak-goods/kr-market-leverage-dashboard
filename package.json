@@ -10,7 +10,8 @@
     "fetch-data": "node scripts/fetch-data.mjs",
     "fetch-leverage": "node scripts/fetch-leverage.mjs",
     "fetch-supply-demand": "node scripts/fetch-supply-demand.mjs",
-    "seed-data": "node scripts/generate-seed.mjs"
+    "seed-data": "node scripts/generate-seed.mjs",
+    "test": "node scripts/run-tests.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

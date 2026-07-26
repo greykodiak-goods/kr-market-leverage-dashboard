@@ -1,7 +1,9 @@
 // 모의운용(페이퍼) 추적 패널 — 등록 → 스펙 동결 → 사후검증 성적 누적.
 // 실주문·실계좌와 연결되지 않는다.
 
+import { useState } from 'react'
 import { buildOosReport } from './oos'
+import { buildWalkForward } from './walkforward'
 import { buildSpec, fingerprint, todayISO, type Enrollment } from './spec'
 import { computeSignals } from './signals'
 import type { ModelConfig } from './models'
@@ -31,12 +33,22 @@ export function LiveTracking({ modelId, cfg, result, histories, enrollment, onEn
   const report = enrollment && result ? buildOosReport(result.equity, enrollment.enrolledAt) : null
   const signals = result ? computeSignals(modelId, cfg, result, histories) : []
 
+  // 동결 시점 — 기본은 오늘(진짜 전방검증)이지만 과거 날짜로도 잡을 수 있다.
+  // 과거로 잡으면 기다리지 않고 즉시 홀드아웃 검증이 되지만, 설계자가 이미
+  // 그 이후를 알고 있으므로 진짜 전방검증보다 증거력이 약하다(화면에 명시).
+  const [freezeDate, setFreezeDate] = useState('')
+  const [folds, setFolds] = useState(6)
+  const wf = result ? buildWalkForward(result.equity, folds) : null
+  const equityStart = result?.equity[0]?.date ?? ''
+  const equityEnd = result?.equity[result.equity.length - 1]?.date ?? ''
+  const isPastFreeze = enrollment != null && enrollment.enrolledAt < todayISO()
+
   function enroll() {
     onEnroll({
       modelId,
       fingerprint: fp,
       spec,
-      enrolledAt: todayISO(),
+      enrolledAt: freezeDate || todayISO(),
       note: '',
     })
   }
@@ -62,9 +74,21 @@ export function LiveTracking({ modelId, cfg, result, histories, enrollment, onEn
           ⬇ 스펙 JSON 내보내기
         </button>
         {enrollment == null ? (
-          <button type="button" className="bt-btn-mini primary" onClick={enroll}>
-            ▶ 이 스펙으로 모의운용 등록
-          </button>
+          <>
+            <label className="bt-freeze">
+              동결 시점
+              <input
+                type="date"
+                value={freezeDate}
+                min={equityStart || undefined}
+                max={equityEnd || undefined}
+                onChange={(e) => setFreezeDate(e.target.value)}
+              />
+            </label>
+            <button type="button" className="bt-btn-mini primary" onClick={enroll}>
+              ▶ 이 스펙으로 동결·등록
+            </button>
+          </>
         ) : (
           <button type="button" className="bt-btn-mini danger" onClick={onUnenroll}>
             등록 해제
@@ -74,15 +98,24 @@ export function LiveTracking({ modelId, cfg, result, histories, enrollment, onEn
 
       {enrollment == null ? (
         <div className="bt-live-empty">
-          등록하면 <strong>지금 이 설정이 그대로 동결</strong>되고, 등록일 이후 구간이 사후검증(out-of-sample)
-          성적으로 따로 집계됩니다. 등록 전 성적은 "모델을 보고 맞춘" 구간이라 좋게 나오는 게 당연하고, 등록 후
+          등록하면 <strong>지금 이 설정이 그대로 동결</strong>되고, 동결 시점 이후 구간이 사후검증(out-of-sample)
+          성적으로 따로 집계됩니다. 동결 전 성적은 "모델을 보고 맞춘" 구간이라 좋게 나오는 게 당연하고, 동결 후
           성적이 실제 기대치에 가깝습니다. 등록 후 설정을 바꾸면 지문이 달라져 성적을 이어붙일 수 없습니다(사후
           조정으로 성적을 예쁘게 만드는 것을 막기 위함).
+          <br />
+          <strong>동결 시점을 비우면 오늘</strong>로 잡혀 지금부터 진짜 전방검증이 시작됩니다(가장 강한 증거,
+          대신 시간이 필요). <strong>과거 날짜로 잡으면</strong> 기다리지 않고 즉시 홀드아웃 결과를 볼 수
+          있습니다 — 다만 그 이후 시장이 어땠는지 이미 알려진 구간이므로 증거력은 전방검증보다 약합니다.
         </div>
       ) : (
         <>
           <div className="bt-live-meta">
-            등록일 <strong>{enrollment.enrolledAt}</strong> · 등록 시 지문 <code>{enrollment.fingerprint}</code>
+            동결 시점 <strong>{enrollment.enrolledAt}</strong> · 등록 시 지문 <code>{enrollment.fingerprint}</code>
+            {isPastFreeze && (
+              <span className="bt-freeze-note">
+                {' '}· 과거 시점 동결(홀드아웃) — 이후 시장이 알려진 구간이라 진짜 전방검증보다 증거력이 약합니다
+              </span>
+            )}
             {drifted && (
               <span className="bt-warn"> ⚠️ 현재 설정이 등록 시점과 다릅니다 — 아래 성적은 <u>지금 설정</u> 기준
                 재계산이며 등록 모델의 실적이 아닙니다. 원 설정으로 되돌리거나 새로 등록하세요.</span>
@@ -183,6 +216,80 @@ export function LiveTracking({ modelId, cfg, result, histories, enrollment, onEn
             </>
           )}
         </>
+      )}
+
+      {/* 구간분할 검증 */}
+      {wf && (
+        <div className="bt-signals">
+          <div className="bt-live-head">
+            <strong>🧩 구간분할 검증 (같은 규칙 · 서로 다른 시기)</strong>
+            <label className="bt-freeze">
+              구간 수
+              <input type="number" min={2} max={12} value={folds} onChange={(e) => setFolds(Number(e.target.value) || 6)} />
+            </label>
+          </div>
+          <div className={`bt-verdict ${wf.verdictLevel}`}>
+            <strong>
+              {wf.verdictLevel === 'good'
+                ? '✅ 재현성 있음'
+                : wf.verdictLevel === 'bad'
+                  ? '⛔ 특정 구간 의존'
+                  : wf.verdictLevel === 'watch'
+                    ? '⚠️ 불분명'
+                    : '⏳ 표본 부족'}
+            </strong>{' '}
+            {wf.verdict}
+          </div>
+          {wf.folds.length > 0 && (
+            <div className="bt-table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>구간</th>
+                    <th>기간</th>
+                    <th>거래일</th>
+                    <th>수익률</th>
+                    <th>벤치마크</th>
+                    <th>알파(연)</th>
+                    <th>MDD</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {wf.folds.map((f) => (
+                    <tr key={f.index}>
+                      <td>#{f.index}</td>
+                      <td>
+                        {f.from} ~ {f.to}
+                      </td>
+                      <td>{f.days}</td>
+                      <td className={f.returnPct >= 0 ? 'bt-pos' : 'bt-neg'}>
+                        {f.returnPct >= 0 ? '+' : ''}
+                        {f.returnPct.toFixed(1)}%
+                      </td>
+                      <td>
+                        {f.benchPct >= 0 ? '+' : ''}
+                        {f.benchPct.toFixed(1)}%
+                      </td>
+                      <td className={f.alphaPct >= 0 ? 'bt-pos' : 'bt-neg'}>
+                        <strong>
+                          {f.alphaPct >= 0 ? '+' : ''}
+                          {f.alphaPct.toFixed(1)}%p
+                        </strong>
+                      </td>
+                      <td>{f.mddPct.toFixed(1)}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div className="bt-chart-caption">
+            전체 기간을 겹치지 않는 {wf.folds.length || folds}개 구간으로 나눠 <strong>같은 규칙</strong>을 각각
+            평가했습니다. 중요한 것은 합계가 아니라 <strong>몇 개 구간에서 우위가 재현되는가</strong>입니다 —
+            한두 구간의 대박으로 전체 성적이 만들어졌다면 여기서 드러납니다. 구간 성적은 그 구간 내부만으로
+            계산하며 이후 데이터를 참조하지 않습니다.
+          </div>
+        </div>
       )}
 
       {/* 오늘의 판정 */}
