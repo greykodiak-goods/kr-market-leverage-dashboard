@@ -1915,3 +1915,238 @@ body {
   display: block;
   font-size: 10px;
 }
+
+/* ---- 투자봇 시뮬레이터 (backtest) ---- */
+.bt-panel .panel-sub {
+  margin-bottom: 12px;
+}
+.bt-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: flex-end;
+  margin-bottom: 10px;
+}
+.bt-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+.bt-controls input,
+.bt-controls select,
+.bt-cond-row input,
+.bt-cond-row select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+  font-family: inherit;
+}
+.bt-controls input[type='number'] {
+  width: 110px;
+}
+.bt-controls input[type='text'] {
+  width: 130px;
+}
+.bt-settings {
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.bt-settings input[type='number'] {
+  width: 90px;
+}
+.bt-data-info {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+}
+.bt-quick {
+  display: inline-flex;
+  gap: 4px;
+}
+.bt-strategy {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+.bt-strategy-desc {
+  font-size: 12px;
+  color: var(--text-dim);
+  max-width: 480px;
+  align-self: center;
+}
+.bt-cond-group {
+  margin-top: 10px;
+}
+.bt-cond-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+.bt-cond-comb {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.bt-cond-empty {
+  font-size: 12px;
+  color: var(--text-faint);
+  padding: 4px 0;
+}
+.bt-cond-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 5px 0;
+}
+.bt-cond-row input[type='number'] {
+  width: 70px;
+}
+.bt-operand {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.bt-btn-mini {
+  background: var(--bg);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.bt-btn-mini:hover {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+.bt-btn-mini.danger:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.bt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0;
+}
+.bt-btn-run {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 9px 18px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+}
+.bt-btn-run:hover {
+  filter: brightness(1.08);
+}
+.bt-btn-run.alt {
+  background: var(--panel);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+.bt-warn {
+  font-size: 12px;
+  color: var(--danger);
+  font-weight: 600;
+}
+.bt-results {
+  margin-top: 8px;
+}
+.bt-legend {
+  display: flex;
+  gap: 16px;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin: 4px 0 8px;
+}
+.bt-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+.bt-swatch.dashed {
+  background: none;
+  border-top: 2px dashed;
+  height: 0;
+}
+.bt-chart-caption {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-top: 2px;
+}
+.bt-trades {
+  margin-top: 12px;
+}
+.bt-trades summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.bt-table-wrap {
+  overflow-x: auto;
+  margin-top: 8px;
+}
+.bt-table-wrap table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.bt-table-wrap th,
+.bt-table-wrap td {
+  text-align: right;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.bt-table-wrap th:first-child,
+.bt-table-wrap td:first-child {
+  text-align: left;
+}
+.bt-table-wrap th {
+  color: var(--text-faint);
+  font-weight: 600;
+  font-size: 11px;
+}
+.bt-pos {
+  color: var(--up);
+}
+.bt-neg {
+  color: var(--down);
+}
+.bt-bench-row td {
+  color: var(--text-faint);
+}
+.bt-disclaimer {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+  font-size: 11px;
+  color: var(--text-faint);
+  line-height: 1.6;
+}

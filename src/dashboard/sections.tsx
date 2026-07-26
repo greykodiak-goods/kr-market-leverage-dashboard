@@ -9,6 +9,7 @@ import { LeverageSection } from '../features/leverage/LeverageSection'
 import { NewsForecastSection } from '../features/news/NewsForecastSection'
 import { MegaInvestorsBoard } from '../features/mega-investors/MegaInvestorsBoard'
 import { MegaInvestorsNews } from '../features/mega-investors/MegaInvestorsNews'
+import { BacktestSection } from '../features/backtest/BacktestSection'
 
 // ---- Tabs (topic grouping) ----------------------------------------------
 // NOTE: 5 tabs = the IA cap (tab-ia-plan §6). Do NOT append a 6th tab —
@@ -56,6 +57,7 @@ export const SECTIONS: SectionDef[] = [
   { id: 'semiconductor', tab: 'semi', title: '반도체 업황 · 상대강도', Component: SemiconductorSection },
   { id: 'leverage', tab: 'market', title: '시장 온도 · 레버리지', Component: LeverageSection },
   { id: 'macro', tab: 'market', title: '매크로 위험 · 지수', Component: MacroSection },
+  { id: 'backtest', tab: 'market', title: '🤖 투자봇 시뮬레이터 (백테스트)', Component: BacktestSection },
   { id: 'news', tab: 'news', title: '뉴스 · 기술적 지표', Component: NewsForecastSection },
   { id: 'mega-investors-ref', tab: 'giants', title: '🏦 세계 초대형 투자사 레퍼런스', Component: MegaInvestorsBoard },
   { id: 'mega-investors-news', tab: 'giants', title: '🏦 큰손·기관 동향 뉴스', Component: MegaInvestorsNews },
