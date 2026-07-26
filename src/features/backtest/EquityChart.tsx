@@ -19,7 +19,7 @@ function fmtMoney(v: number): string {
   return v.toLocaleString()
 }
 
-export function EquityChart({ equity }: { equity: EquityPoint[] }) {
+export function EquityChart({ equity, benchmarkLabel = '벤치마크' }: { equity: EquityPoint[]; benchmarkLabel?: string }) {
   const dates = equity.map((e) => e.date)
   const rows = equity.map((e) => ({ ...e, ts: toTs(e.date) }))
   const ticks = timeAxisTicks(dates)
@@ -33,10 +33,10 @@ export function EquityChart({ equity }: { equity: EquityPoint[] }) {
         <div className="tooltip-label">{tsLong(label)}</div>
         <div style={{ fontSize: 13 }}>
           <div>
-            전략: <strong>{Math.round(p.equity).toLocaleString()}</strong>
+            모델: <strong>{Math.round(p.equity).toLocaleString()}</strong>
           </div>
           <div>
-            단순보유: <strong>{Math.round(p.benchmark).toLocaleString()}</strong>
+            {benchmarkLabel}: <strong>{Math.round(p.benchmark).toLocaleString()}</strong>
           </div>
           <div>
             낙폭: <strong>{p.drawdownPct.toFixed(1)}%</strong>
@@ -54,13 +54,13 @@ export function EquityChart({ equity }: { equity: EquityPoint[] }) {
           <XAxis dataKey="date" ticks={ticks} tickFormatter={fmt} tickLine={false} axisLine={{ stroke: 'var(--border)' }} />
           <YAxis tickFormatter={fmtMoney} tickLine={false} axisLine={false} width={56} domain={['auto', 'auto']} />
           <Tooltip content={<EqTooltip />} cursor={{ stroke: 'var(--text-faint)', strokeDasharray: '3 3' }} />
-          <Line type="monotone" dataKey="benchmark" name="단순보유" stroke="var(--text-faint)" strokeWidth={1.4} strokeDasharray="5 4" dot={false} />
+          <Line type="monotone" dataKey="benchmark" name={benchmarkLabel} stroke="var(--text-faint)" strokeWidth={1.4} strokeDasharray="5 4" dot={false} />
           <Line type="monotone" dataKey="equity" name="전략" stroke="var(--accent)" strokeWidth={1.8} dot={false} />
         </ComposedChart>
       </ResponsiveContainer>
       <div className="bt-legend">
-        <span><i className="bt-swatch" style={{ background: 'var(--accent)' }} /> 전략 자산곡선</span>
-        <span><i className="bt-swatch dashed" style={{ borderColor: 'var(--text-faint)' }} /> 단순보유(벤치마크)</span>
+        <span><i className="bt-swatch" style={{ background: 'var(--accent)' }} /> 모델 자산곡선</span>
+        <span><i className="bt-swatch dashed" style={{ borderColor: 'var(--text-faint)' }} /> 벤치마크 — {benchmarkLabel}</span>
       </div>
       <ResponsiveContainer width="100%" height={90}>
         <ComposedChart data={rows} margin={{ top: 4, right: 12, left: 4, bottom: 0 }} syncId="bt-sync">

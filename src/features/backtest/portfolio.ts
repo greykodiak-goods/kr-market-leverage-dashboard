@@ -55,6 +55,9 @@ export interface PortfolioResult {
   modelName: string
   isRotation?: boolean
   isScreening?: boolean
+  // 벤치마크가 정확히 무엇인지 — 화면에 그대로 표기한다.
+  benchmarkLabel: string
+  benchmarkDetail: string
   lastSelection?: Candidate[]
   lastSelectionDate?: string
   lastScreen?: ScreenRow[]
@@ -217,6 +220,8 @@ export function runPortfolio(modelId: string, cfg: ModelConfig, histories: Recor
       modelId,
       modelName: meta.name,
       isScreening: true,
+      benchmarkLabel: `후보 풀 ${r.universe.length}종목 균등보유`,
+      benchmarkDetail: `${r.universe.join(' · ')} — 시뮬레이션 시작일에 자본을 ${r.universe.length}등분해 전부 사서 끝까지 들고 있었을 경우입니다. 이 모델은 그중 일부만 골라 담으므로, 초과수익이 양수여야 "골라낸 것"이 값어치를 한 것입니다.`,
       lastScreen: r.lastScreen,
       lastScreenDate: r.lastScreenDate,
       equity: r.equity,
@@ -241,6 +246,8 @@ export function runPortfolio(modelId: string, cfg: ModelConfig, histories: Recor
       modelId,
       modelName: meta.name,
       isRotation: true,
+      benchmarkLabel: `후보 풀 ${r.universe.length}종목 균등보유`,
+      benchmarkDetail: `${r.universe.join(' · ')} — 시뮬레이션 시작일에 자본을 ${r.universe.length}등분해 전부 사서 끝까지 들고 있었을 경우입니다. 이 모델은 순위로 일부만 보유하므로, 초과수익이 양수여야 선택이 값어치를 한 것입니다.`,
       lastSelection: r.lastSelection,
       lastSelectionDate: r.lastSelectionDate,
       equity: r.equity,
@@ -281,6 +288,9 @@ export function runPortfolio(modelId: string, cfg: ModelConfig, histories: Recor
   return {
     modelId,
     modelName: meta.name,
+    benchmarkLabel:
+      universe.length === 1 ? `${universe[0]} 단순보유` : `${universe.length}종목 균등 단순보유`,
+    benchmarkDetail: `${universe.join(' · ')} — 시뮬레이션 시작일에 자본을 ${universe.length}등분해 사서 끝까지 들고 있었을 경우입니다(같은 수수료·슬리피지 적용). 이 모델은 같은 종목을 자기 규칙으로 사고팔므로, 규칙이 단순히 들고 있는 것보다 나았는지를 봅니다.`,
     equity,
     metrics,
     advanced,

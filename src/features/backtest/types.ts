@@ -116,6 +116,13 @@ export interface SimEvent {
   qty: number
   note: string
   symbol?: string // 포트폴리오 집계 시 슬리브 종목
+  // --- 자금 흐름 (얼마를 어떻게 사고팔았는지) ---
+  amount?: number // 체결금액 = 수량 × 체결가 (수수료·세금 제외)
+  weightPct?: number // 체결 직후 총자산 대비 이 종목 비중 %
+  cashAfter?: number // 체결 직후 현금 잔고
+  equityAfter?: number // 체결 직후 총자산(현금 + 보유 평가)
+  positionsAfter?: number // 체결 직후 보유 종목 수
+  full?: boolean // 매도가 전량인지(false = 일부 매도)
 }
 
 export interface SimResult {

@@ -199,4 +199,73 @@ section('9) 비용 반영 · 결정성 · 안전성')
   close('자산 = 초기자본 유지', rNever.equity[rNever.equity.length - 1].equity, NO_COST.initialCapital, 1)
 }
 
+section('10) 체결 이력의 자금 정보 — 얼마를 어떻게 샀나')
+{
+  const hist = {
+    A: mkHist('A', ramp(N, 0.0012)),
+    B: mkHist('B', ramp(N, 0.0009)),
+    C: mkHist('C', ramp(N, 0.0006)),
+  }
+  const CAP = 1_000_000
+  const r = runSignalRotation(hist, startDate, ALWAYS, { ...P, topN: 3, trendFilter: false }, { ...NO_COST, initialCapital: CAP })
+  const buys = r.events.filter((e) => e.action === '매수')
+  check('매수 이벤트 존재', buys.length > 0)
+
+  check('체결금액 = 수량 × 가격', buys.every((e) => Math.abs((e.amount ?? 0) - e.qty * e.price) < 1e-6))
+  check('잔여현금 기록됨(음수 아님)', buys.every((e) => e.cashAfter != null && e.cashAfter >= -1e-6))
+  check('총자산 기록됨(양수)', buys.every((e) => (e.equityAfter ?? 0) > 0))
+  check('보유 종목 수 기록', buys.every((e) => (e.positionsAfter ?? 0) >= 1))
+  check('비중이 0~100% 범위', buys.every((e) => (e.weightPct ?? -1) >= 0 && (e.weightPct ?? 101) <= 100))
+
+  // 전액 몰빵이 아니라 슬롯 분할인지: 첫 편입 3건의 비중 합이 100% 근처, 각각은 100% 미만
+  const firstDay = buys[0].date
+  const sameDay = buys.filter((e) => e.date === firstDay)
+  check(`첫날 3종목 동시 편입 (실제 ${sameDay.length})`, sameDay.length === 3)
+  check('각 종목 비중 < 60% (전액 매수 아님)', sameDay.every((e) => (e.weightPct ?? 100) < 60), sameDay.map((e) => (e.weightPct ?? 0).toFixed(0)).join('/'))
+  const lastOfDay = sameDay[sameDay.length - 1]
+  check('3종목 편입 후 총자산 ≈ 초기자본', Math.abs((lastOfDay.equityAfter ?? 0) - CAP) < CAP * 0.02, `${lastOfDay.equityAfter}`)
+  check('3종목 편입 후 현금 소진', (lastOfDay.cashAfter ?? CAP) < CAP * 0.05, `${lastOfDay.cashAfter}`)
+
+  // 매도는 전량 표기
+  const sells = r.events.filter((e) => e.action === '매도')
+  check('매도는 전량(full=true)', sells.length === 0 || sells.every((e) => e.full === true))
+  check('매도 후 비중 0', sells.length === 0 || sells.every((e) => e.weightPct === 0))
+}
+
+section('10b) 슬롯이 하나씩 비어도 한 종목에 몰리지 않는다 (전액매수 버그 회귀)')
+{
+  // 종목마다 매도 시점이 어긋나 슬롯이 하나씩 비는 상황을 만든다.
+  const hist = {
+    A: mkHist('A', [...ramp(400, 0.002), ...ramp(500, -0.001, 100 * Math.pow(1.002, 399))]),
+    B: mkHist('B', [...ramp(550, 0.0018), ...ramp(350, -0.001, 100 * Math.pow(1.0018, 549))]),
+    C: mkHist('C', ramp(N, 0.001)),
+    D: mkHist('D', ramp(N, 0.0008)),
+  }
+  const gc: StrategyConfig = {
+    id: 'g', name: 'g', desc: '',
+    buy: [{ left: { kind: 'SMA', period: 5 }, op: 'gt', right: { kind: 'SMA', period: 60 } }],
+    sell: [{ left: { kind: 'SMA', period: 5 }, op: 'lt', right: { kind: 'SMA', period: 60 } }],
+  }
+  const r = runSignalRotation(hist, startDate, gc, { ...P, topN: 3, trendFilter: false }, NO_COST)
+  const buys = r.events.filter((e) => e.action === '매수')
+  check('매수 다수 발생', buys.length >= 3)
+  // 슬롯 3개면 한 종목 비중은 대략 1/3 — 어떤 매수도 60%를 넘으면 안 된다
+  const over = buys.filter((e) => (e.weightPct ?? 0) > 60)
+  check('어떤 편입도 비중 60% 초과 없음', over.length === 0, over.map((e) => `${e.symbol} ${(e.weightPct ?? 0).toFixed(0)}%`).join(', '))
+  // 1주짜리 껍데기 편입(비중 ~0%)도 없어야 한다
+  const tiny = buys.filter((e) => (e.weightPct ?? 0) < 5)
+  check('비중 5% 미만 껍데기 편입 없음', tiny.length === 0, tiny.map((e) => `${e.symbol} ${(e.weightPct ?? 0).toFixed(1)}%`).join(', '))
+}
+
+section('11) 슬롯 1개면 사실상 전액 — 슬롯 수가 비중을 결정한다')
+{
+  const hist = { A: mkHist('A', ramp(N, 0.0012)), B: mkHist('B', ramp(N, 0.0009)) }
+  const r1 = runSignalRotation(hist, startDate, ALWAYS, { ...P, topN: 1, trendFilter: false }, NO_COST)
+  const b1 = r1.events.filter((e) => e.action === '매수')[0]
+  check('슬롯 1개 → 비중 95% 이상', (b1.weightPct ?? 0) > 95, `${(b1.weightPct ?? 0).toFixed(1)}%`)
+  const r2 = runSignalRotation(hist, startDate, ALWAYS, { ...P, topN: 2, trendFilter: false }, NO_COST)
+  const b2 = r2.events.filter((e) => e.action === '매수')[0]
+  check('슬롯 2개 → 비중 약 50%', (b2.weightPct ?? 0) > 40 && (b2.weightPct ?? 0) < 60, `${(b2.weightPct ?? 0).toFixed(1)}%`)
+}
+
 finish()

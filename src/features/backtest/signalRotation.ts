@@ -196,6 +196,13 @@ export function runSignalRotation(
     return i >= 0 ? aligned[s].bars[i].c : 0
   }
 
+  // 체결 직후 스냅샷 — 총자산·현금·보유수를 이벤트에 남겨 자금 흐름을 드러낸다.
+  function snapshot(k: number) {
+    let held = 0
+    for (const s of Object.keys(holdings)) held += holdings[s].qty * lastClose(s, k)
+    return { equity: cash + held, cash, positions: Object.keys(holdings).length }
+  }
+
   function closePosition(s: string, k: number, rawPrice: number, reason: Trade['reason'], applySlip: boolean, note: string) {
     const h = holdings[s]
     const fill = applySlip ? rawPrice * (1 - slip) : rawPrice
@@ -212,8 +219,15 @@ export function runSignalRotation(
       reason,
       symbol: s,
     })
-    events.push({ date: calendar[k], action: '매도', price: fill, qty: h.qty, note, symbol: s })
+    const soldQty = h.qty
+    const soldAmount = soldQty * fill
     delete holdings[s]
+    const snap = snapshot(k)
+    events.push({
+      date: calendar[k], action: '매도', price: fill, qty: soldQty, note, symbol: s,
+      amount: soldAmount, weightPct: 0, cashAfter: snap.cash, equityAfter: snap.equity,
+      positionsAfter: snap.positions, full: true,
+    })
   }
 
   for (let k = startK; k < calendar.length; k++) {
@@ -231,12 +245,17 @@ export function runSignalRotation(
       const open = topN - Object.keys(holdings).length
       const buyList = pendingBuys.filter((s) => !holdings[s] && aligned[s].hasBarAt[k]).slice(0, Math.max(0, open))
       if (buyList.length > 0) {
-        // 슬롯 단위 균등 — 현재 현금을 남은 슬롯 수로 나눈다
-        const slotCash = cash / buyList.length
+        // 슬롯 균등 배분 — 한 종목에 총자산의 1/topN 만큼만 넣는다.
+        // (남은 현금 전액을 쓰면 슬롯이 하나씩 비는 상황에서 한 종목이 100%가
+        //  되어 균등 분산이 무너진다.)
+        let heldVal = 0
+        for (const h of Object.keys(holdings)) heldVal += holdings[h].qty * lastClose(h, k)
+        const equityNow = cash + heldVal
+        const perSlot = equityNow / topN
         for (const s of buyList) {
           const bar = aligned[s].bars[aligned[s].idxAt[k]]
           const fill = bar.o * (1 + slip)
-          const q = Math.floor(slotCash / (fill * (1 + comm)))
+          const q = Math.floor(Math.min(cash, perSlot) / (fill * (1 + comm)))
           if (q < 1) continue
           const cost = q * fill * (1 + comm)
           cash -= cost
@@ -248,7 +267,13 @@ export function runSignalRotation(
             stop: settings.stopLossPct != null ? fill * (1 - settings.stopLossPct / 100) : null,
             take: settings.takeProfitPct != null ? fill * (1 + settings.takeProfitPct / 100) : null,
           }
-          events.push({ date, action: '매수', price: fill, qty: q, note: '신호 편입', symbol: s })
+          const snap = snapshot(k)
+          events.push({
+            date, action: '매수', price: fill, qty: q, note: '신호 편입', symbol: s,
+            amount: q * fill,
+            weightPct: snap.equity > 0 ? ((q * lastClose(s, k)) / snap.equity) * 100 : 0,
+            cashAfter: snap.cash, equityAfter: snap.equity, positionsAfter: snap.positions,
+          })
         }
       }
       pendingBuys = []

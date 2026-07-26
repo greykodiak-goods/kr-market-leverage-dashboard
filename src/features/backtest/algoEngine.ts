@@ -70,7 +70,13 @@ export function runInfiniteBuying(
     cycleCost += q * fill * (1 + comm)
     cash -= q * fill * (1 + comm)
     usedUnits += unitFrac
-    events.push({ date: bar.date, action: '매수', price: fill, qty: q, note })
+    const eqNow = cash + qty * bar.c
+    events.push({
+      date: bar.date, action: '매수', price: fill, qty: q, note,
+      amount: q * fill,
+      weightPct: eqNow > 0 ? ((qty * bar.c) / eqNow) * 100 : 0,
+      cashAfter: cash, equityAfter: eqNow, positionsAfter: qty > 0 ? 1 : 0,
+    })
   }
 
   function sellAll(bar: DailyBar, rawPrice: number, reason: Trade['reason'], note: string) {
@@ -88,7 +94,13 @@ export function runInfiniteBuying(
       pnlPct: cycleCost > 0 ? (pnl / cycleCost) * 100 : 0,
       reason,
     })
-    events.push({ date: bar.date, action: '매도', price: fill, qty, note })
+    const soldQty = qty
+    const eqNow = cash
+    events.push({
+      date: bar.date, action: '매도', price: fill, qty: soldQty, note,
+      amount: soldQty * fill, weightPct: 0, cashAfter: cash, equityAfter: eqNow,
+      positionsAfter: 0, full: true,
+    })
     qty = 0
     fillSum = 0
     cycleCost = 0
@@ -211,7 +223,13 @@ export function runValueRebalancing(
     if (q >= 1) {
       qty = q
       cash -= q * fill * (1 + comm)
-      events.push({ date: bar.date, action: '매수', price: fill, qty: q, note: '초기 편입' })
+      const eqNow = cash + qty * bar.c
+      events.push({
+        date: bar.date, action: '매수', price: fill, qty: q, note: '초기 편입',
+        amount: q * fill,
+        weightPct: eqNow > 0 ? ((qty * bar.c) / eqNow) * 100 : 0,
+        cashAfter: cash, equityAfter: eqNow, positionsAfter: 1,
+      })
     }
   }
   let V = qty * bars[startIdx].c // V값 = 초기 주식평가금
@@ -228,7 +246,13 @@ export function runValueRebalancing(
           const fill = bar.c * (1 - slip)
           cash += sellQty * fill * (1 - comm - tax)
           qty -= sellQty
-          events.push({ date: bar.date, action: '매도', price: fill, qty: sellQty, note: `밴드 상단 초과 → V값까지 매도` })
+          const eqNow = cash + qty * bar.c
+          events.push({
+            date: bar.date, action: '매도', price: fill, qty: sellQty, note: '밴드 상단 초과 → V값까지 부분 매도',
+            amount: sellQty * fill,
+            weightPct: eqNow > 0 ? ((qty * bar.c) / eqNow) * 100 : 0,
+            cashAfter: cash, equityAfter: eqNow, positionsAfter: qty > 0 ? 1 : 0, full: qty === 0,
+          })
         }
       } else if (stockVal < V * (1 - params.bandPct / 100)) {
         const fill = bar.c * (1 + slip)
@@ -237,7 +261,13 @@ export function runValueRebalancing(
         if (q >= 1) {
           cash -= q * fill * (1 + comm)
           qty += q
-          events.push({ date: bar.date, action: '매수', price: fill, qty: q, note: `밴드 하단 이탈 → V값까지 매수` })
+          const eqNow = cash + qty * bar.c
+          events.push({
+            date: bar.date, action: '매수', price: fill, qty: q, note: '밴드 하단 이탈 → V값까지 부분 매수',
+            amount: q * fill,
+            weightPct: eqNow > 0 ? ((qty * bar.c) / eqNow) * 100 : 0,
+            cashAfter: cash, equityAfter: eqNow, positionsAfter: qty > 0 ? 1 : 0, full: false,
+          })
         }
       }
     }

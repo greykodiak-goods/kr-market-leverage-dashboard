@@ -237,6 +237,12 @@ export function runRotation(
     return i >= 0 ? a.bars[i].c : 0
   }
 
+  function snapshot(k: number) {
+    let held = 0
+    for (const s of Object.keys(holdings)) held += holdings[s].qty * lastClose(s, k)
+    return { equity: cash + held, cash, positions: Object.keys(holdings).length }
+  }
+
   for (let k = startK; k < calendar.length; k++) {
     const date = calendar[k]
 
@@ -263,22 +269,39 @@ export function runRotation(
           reason: '조건 매도',
           symbol: s,
         })
-        events.push({ date, action: '매도', price: fill, qty: h.qty, note: '리밸런싱 제외', symbol: s })
+        const soldQty = h.qty
         delete holdings[s]
+        const snap = snapshot(k)
+        events.push({
+          date, action: '매도', price: fill, qty: soldQty, note: '리밸런싱 제외', symbol: s,
+          amount: soldQty * fill, weightPct: 0, cashAfter: snap.cash, equityAfter: snap.equity,
+          positionsAfter: snap.positions, full: true,
+        })
       }
       // 매수 — 목표 종목 수로 균등 배분
       const toBuy = pendingTargets.filter((s) => !holdings[s] && aligned[s].hasBarAt[k])
       if (toBuy.length > 0) {
-        const slotValue = cash / toBuy.length
+        // 슬롯 균등 — 목표 종목 수(topN) 기준으로 1/N씩. 남은 현금 전액을 쓰면
+        // 일부만 교체되는 리밸런싱에서 한 종목에 몰린다.
+        let heldVal = 0
+        for (const h of Object.keys(holdings)) heldVal += holdings[h].qty * lastClose(h, k)
+        const equityNow = cash + heldVal
+        const slotValue = equityNow / Math.max(1, params.topN)
         for (const s of toBuy) {
           const a = aligned[s]
           const fill = a.bars[a.idxAt[k]].o * (1 + slip)
-          const q = Math.floor(slotValue / (fill * (1 + comm)))
+          const q = Math.floor(Math.min(cash, slotValue) / (fill * (1 + comm)))
           if (q < 1) continue
           const cost = q * fill * (1 + comm)
           cash -= cost
           holdings[s] = { qty: q, entryFill: fill, entryCost: cost, entryDate: date }
-          events.push({ date, action: '매수', price: fill, qty: q, note: '리밸런싱 편입', symbol: s })
+          const snap = snapshot(k)
+          events.push({
+            date, action: '매수', price: fill, qty: q, note: '리밸런싱 편입', symbol: s,
+            amount: q * fill,
+            weightPct: snap.equity > 0 ? ((q * lastClose(s, k)) / snap.equity) * 100 : 0,
+            cashAfter: snap.cash, equityAfter: snap.equity, positionsAfter: snap.positions,
+          })
         }
       }
       pendingTargets = null

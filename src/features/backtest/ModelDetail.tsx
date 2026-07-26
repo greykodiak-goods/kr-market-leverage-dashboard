@@ -101,6 +101,17 @@ export function ModelDetail({
     }
   }
 
+
+  // 모델 유형별 자금 운용 방식 — 체결 이력을 읽을 때 필요한 해석 열쇠.
+  const sizingRule =
+    meta.type === 'rule'
+      ? `슬롯 ${cfg.sig?.topN ?? 3}개 균등 분할. 한 종목에 "그 시점 총자산 ÷ ${cfg.sig?.topN ?? 3}"만큼만 넣습니다(현금이 모자라면 그만큼). 즉 전액 매수가 아니라 약 ${Math.round(100 / (cfg.sig?.topN ?? 3))}%씩 나눠 담습니다. 매도는 해당 종목 전량이며(부분 매도 없음), 슬롯이 비어야 새로 삽니다.`
+      : modelId === 'infinite-buying'
+        ? `1회분 = 사이클 원금 ÷ ${cfg.ib?.splits ?? 40}. 매일 정액 0.5회분(항상) + 평단매수 0.5회분(종가가 평단 아래일 때만) 매수하고, 목표가 도달 시 전량 매도합니다. 전액 매수가 아니라 소액 분할입니다.`
+        : modelId === 'value-rebalancing'
+          ? `전량 매매가 아닙니다. 목표 평가금(V값)과 현재 평가금의 차액만큼만 부분 매수/매도합니다 — 그래서 수량이 매번 다릅니다.`
+          : `보유 ${cfg.rot?.topN ?? 1}종목 균등 분할 — 한 종목당 "총자산 ÷ ${cfg.rot?.topN ?? 1}"${(cfg.rot?.topN ?? 1) === 1 ? '(1종목이므로 사실상 전액)' : `(약 ${Math.round(100 / (cfg.rot?.topN ?? 1))}%)`}. 리밸런싱일에 목표에서 빠진 종목은 전량 매도하고, 새로 들어온 종목을 같은 비중으로 채웁니다.`
+
   const m = result?.metrics
   const adv = result?.advanced
   const hasLeveraged = cfg.symbols.some((s) => LEVERAGED.has(s))
@@ -449,6 +460,11 @@ export function ModelDetail({
             {result.universe.map((s) => symbolLabel(s)).join(' · ')} ({result.universe.length}종목 균등분할)
           </div>
 
+          <div className="bt-bench-note">
+            <strong>📏 벤치마크 = {result.benchmarkLabel}</strong>
+            <div>{result.benchmarkDetail}</div>
+          </div>
+
           <DataProvenance histories={histories} />
 
           <LiveTracking
@@ -465,7 +481,7 @@ export function ModelDetail({
             <KpiCard
               label="최근 1년 수익률"
               value={adv.return1yPct != null ? fmtPct(adv.return1yPct) : '—'}
-              changeText={adv.bench1yPct != null ? `단순보유 ${fmtPct(adv.bench1yPct)}` : '구간 1년 미만'}
+              changeText={adv.bench1yPct != null ? `벤치마크 ${fmtPct(adv.bench1yPct)}` : '구간 1년 미만'}
               changeLabel={adv.oneYearFrom ? `${adv.oneYearFrom}~` : ''}
               direction={adv.excess1yPct != null && adv.excess1yPct > 0 ? 'up' : 'down'}
               info={`최근 1년(달력 기준) 성과입니다. 전체 구간 누적 수익률에 가려지는 "최근에도 통하고 있는가"를 봅니다.${adv.oneYearPartial ? ' ⚠️ 시뮬레이션 구간이 1년보다 짧아 있는 구간 전체로 계산했습니다.' : ''}`}
@@ -473,7 +489,7 @@ export function ModelDetail({
             <KpiCard
               label="총 수익률"
               value={fmtPct(m.totalReturnPct)}
-              changeText={`단순보유 ${fmtPct(m.benchmarkReturnPct)}`}
+              changeText={`벤치마크 ${fmtPct(m.benchmarkReturnPct)}`}
               changeLabel="벤치마크"
               direction={m.totalReturnPct > m.benchmarkReturnPct ? 'up' : 'down'}
             />
@@ -510,7 +526,7 @@ export function ModelDetail({
             />
           </div>
 
-          <EquityChart equity={result.equity} />
+          <EquityChart equity={result.equity} benchmarkLabel={result.benchmarkLabel} />
 
           {/* 연도별 일관성 */}
           <div className="bt-table-wrap" style={{ marginTop: 12 }}>
@@ -581,7 +597,7 @@ export function ModelDetail({
           {result.trades.length > 0 && (
             <details className="bt-trades">
               <summary>매매/사이클 내역 {result.trades.length}건</summary>
-              <div className="bt-table-wrap bt-events">
+              <div className="bt-table-wrap bt-trades-table">
                 <table>
                   <thead>
                     <tr>
@@ -619,6 +635,9 @@ export function ModelDetail({
           {result.events.length > 0 && (
             <details className="bt-trades">
               <summary>체결 이벤트 {result.events.length.toLocaleString()}건 (최근 300건 표시)</summary>
+              <div className="bt-sizing-note">
+                <strong>💰 자금 운용 방식</strong> — {sizingRule}
+              </div>
               <div className="bt-table-wrap bt-events">
                 <table>
                   <thead>
@@ -628,6 +647,11 @@ export function ModelDetail({
                       <th>구분</th>
                       <th>가격</th>
                       <th>수량</th>
+                      <th>체결금액</th>
+                      <th>비중</th>
+                      <th>잔여현금</th>
+                      <th>총자산</th>
+                      <th>보유</th>
                       <th>메모</th>
                     </tr>
                   </thead>
@@ -635,15 +659,31 @@ export function ModelDetail({
                     {result.events.slice(-300).map((ev, i) => (
                       <tr key={i}>
                         <td>{ev.date}</td>
-                        <td>{ev.symbol ?? '—'}</td>
-                        <td className={ev.action === '매수' ? 'bt-pos' : 'bt-neg'}>{ev.action}</td>
+                        <td>{ev.symbol ? symbolLabel(ev.symbol) : '—'}</td>
+                        <td className={ev.action === '매수' ? 'bt-pos' : 'bt-neg'}>
+                          {ev.action}
+                          {ev.action === '매도' && ev.full === false && <span className="bt-partial"> 일부</span>}
+                          {ev.action === '매도' && ev.full === true && <span className="bt-partial"> 전량</span>}
+                        </td>
                         <td>{ev.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
                         <td>{ev.qty.toLocaleString()}</td>
+                        <td>{ev.amount != null ? Math.round(ev.amount).toLocaleString() : '—'}</td>
+                        <td>
+                          {ev.action === '매수' && ev.weightPct != null ? `${ev.weightPct.toFixed(0)}%` : '—'}
+                        </td>
+                        <td>{ev.cashAfter != null ? Math.round(ev.cashAfter).toLocaleString() : '—'}</td>
+                        <td>{ev.equityAfter != null ? Math.round(ev.equityAfter).toLocaleString() : '—'}</td>
+                        <td>{ev.positionsAfter != null ? `${ev.positionsAfter}종목` : '—'}</td>
                         <td style={{ textAlign: 'left' }}>{ev.note}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+              </div>
+              <div className="bt-chart-caption">
+                <strong>체결금액</strong> = 수량 × 체결가(수수료·세금 제외) · <strong>비중</strong> = 체결 직후 그
+                종목이 총자산에서 차지하는 비율 · <strong>잔여현금/총자산</strong> = 체결 직후 값. 비중이 100%보다
+                작으면 나머지는 현금이거나 다른 종목입니다.
               </div>
             </details>
           )}

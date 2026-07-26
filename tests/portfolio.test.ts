@@ -150,4 +150,19 @@ check('로드 실패 종목 제외 후 실행', resPartial.universe.length === 1
   check('관측치 1개면 null', a1.return1yPct === null && a1.bench1yPct === null && a1.oneYearFrom === null)
 }
 
+
+// ===== 벤치마크 정체 표기 =====
+{
+  const res = runPortfolio('golden-cross', cfg, hists)
+  check('벤치마크 라벨에 종목 수', res.benchmarkLabel.includes('3종목'), res.benchmarkLabel)
+  check('벤치마크 라벨에 균등보유', res.benchmarkLabel.includes('균등보유'))
+  check('벤치마크 설명에 구성 종목 나열', res.benchmarkDetail.includes('A') && res.benchmarkDetail.includes('B') && res.benchmarkDetail.includes('C'), res.benchmarkDetail.slice(0, 80))
+  check('벤치마크 설명에 계산 방식', res.benchmarkDetail.includes('등분') && res.benchmarkDetail.includes('끝까지'))
+}
+{
+  const resIB = runPortfolio('infinite-buying', { ...cfgIB, symbols: ['A'] }, { A: hists.A })
+  check('단일종목 자금관리형 = 단순보유 라벨', resIB.benchmarkLabel.includes('단순보유'), resIB.benchmarkLabel)
+  check('단일종목 라벨에 종목명', resIB.benchmarkLabel.includes('A'))
+}
+
 finish()

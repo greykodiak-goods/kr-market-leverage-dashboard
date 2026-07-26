@@ -2689,3 +2689,33 @@ body {
   font-variant-numeric: tabular-nums;
 }
 .bt-card-1y .bt-restale { color: var(--kosdaq); font-weight: 600; }
+
+/* backtest — 자금 운용 방식 안내 · 부분/전량 표기 */
+.bt-sizing-note {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 11px;
+  margin: 8px 0;
+}
+.bt-partial {
+  font-size: 10px;
+  color: var(--text-faint);
+  font-weight: 600;
+}
+.bt-bench-note {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  padding: 9px 12px;
+  margin: 10px 0;
+}
+.bt-bench-note strong { color: var(--text); }
+.bt-trades-table { max-height: 320px; overflow-y: auto; }
