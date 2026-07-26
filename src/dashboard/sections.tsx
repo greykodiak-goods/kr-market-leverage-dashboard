@@ -12,9 +12,10 @@ import { MegaInvestorsNews } from '../features/mega-investors/MegaInvestorsNews'
 import { BacktestSection } from '../features/backtest/BacktestSection'
 
 // ---- Tabs (topic grouping) ----------------------------------------------
-// NOTE: 5 tabs = the IA cap (tab-ia-plan §6). Do NOT append a 6th tab —
-// consider sub-groups/accordions inside an existing tab first.
-export type TabId = 'hynix' | 'semi' | 'market' | 'news' | 'giants'
+// NOTE: tab-ia-plan §6 capped tabs at 5; 'sim' was added as the 6th by 대표
+// 지시 (2026-07-26, 시뮬레이터 전용 탭 분리). Do NOT add a 7th — consider
+// sub-groups/accordions inside an existing tab first.
+export type TabId = 'hynix' | 'semi' | 'market' | 'sim' | 'news' | 'giants'
 
 export interface TabDef {
   id: TabId
@@ -26,6 +27,7 @@ export const TABS: TabDef[] = [
   { id: 'hynix', label: '🟢 하이닉스', short: '하이닉스' },
   { id: 'semi', label: '🔵 반도체·글로벌', short: '반도체' },
   { id: 'market', label: '🔴 시장·레버리지', short: '시장' },
+  { id: 'sim', label: '🤖 시뮬레이터', short: '시뮬' },
   { id: 'news', label: '📰 뉴스', short: '뉴스' },
   { id: 'giants', label: '🏦 큰손 동향', short: '큰손' },
 ]
@@ -57,7 +59,7 @@ export const SECTIONS: SectionDef[] = [
   { id: 'semiconductor', tab: 'semi', title: '반도체 업황 · 상대강도', Component: SemiconductorSection },
   { id: 'leverage', tab: 'market', title: '시장 온도 · 레버리지', Component: LeverageSection },
   { id: 'macro', tab: 'market', title: '매크로 위험 · 지수', Component: MacroSection },
-  { id: 'backtest', tab: 'market', title: '🤖 투자봇 시뮬레이터 (백테스트)', Component: BacktestSection },
+  { id: 'backtest', tab: 'sim', title: '🤖 투자봇 시뮬레이터 (백테스트)', Component: BacktestSection },
   { id: 'news', tab: 'news', title: '뉴스 · 기술적 지표', Component: NewsForecastSection },
   { id: 'mega-investors-ref', tab: 'giants', title: '🏦 세계 초대형 투자사 레퍼런스', Component: MegaInvestorsBoard },
   { id: 'mega-investors-news', tab: 'giants', title: '🏦 큰손·기관 동향 뉴스', Component: MegaInvestorsNews },

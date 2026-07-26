@@ -2235,3 +2235,36 @@ body {
     min-width: 100%;
   }
 }
+
+/* backtest — 기법 설명 가이드 */
+.bt-doc {
+  margin: 0 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.bt-doc > summary {
+  cursor: pointer;
+  padding: 9px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+}
+.bt-doc-body {
+  padding: 0 14px 12px;
+}
+.bt-doc-sec h4 {
+  margin: 12px 0 6px;
+  font-size: 13px;
+  color: var(--text);
+}
+.bt-doc-sec ul {
+  margin: 0;
+  padding-left: 18px;
+}
+.bt-doc-sec li {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  line-height: 1.65;
+  margin-bottom: 4px;
+}

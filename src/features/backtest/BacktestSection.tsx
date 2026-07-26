@@ -20,6 +20,7 @@ import {
   type VRParams,
 } from './algoEngine'
 import { PRESET_STRATEGIES, clonePreset } from './strategies'
+import { findDoc } from './modelDocs'
 import { ConditionEditor } from './ConditionEditor'
 import { EquityChart } from './EquityChart'
 import { KpiCard } from '../../components/KpiCard'
@@ -265,6 +266,28 @@ export function BacktestSection() {
       <div className="bt-strategy-desc bt-model-desc">
         <strong>{isAlgo ? algoModel?.name : preset?.name}</strong> — {isAlgo ? algoModel?.desc : preset?.desc}
       </div>
+
+      {findDoc(modelId) && (
+        <details className="bt-doc">
+          <summary>📖 이 기법의 매수·매도 규칙 자세히 보기</summary>
+          <div className="bt-doc-body">
+            {findDoc(modelId)!.sections.map((sec) => (
+              <div key={sec.h} className="bt-doc-sec">
+                <h4>{sec.h}</h4>
+                <ul>
+                  {sec.lines.map((line, i) => (
+                    <li key={i}>{line}</li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+            <div className="bt-chart-caption">
+              위 설명은 정보·교육 목적이며 투자자문·매매 권유가 아닙니다. 어떤 기법도 손실을 막아주지 못하며, 과거
+              성과는 미래를 보장하지 않습니다.
+            </div>
+          </div>
+        </details>
+      )}
 
       {/* ---- 데이터 · 기간 (모델별 저장) ---- */}
       <div className="bt-controls">
