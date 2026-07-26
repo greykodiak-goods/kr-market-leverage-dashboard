@@ -2150,3 +2150,26 @@ body {
   color: var(--text-faint);
   line-height: 1.6;
 }
+
+/* backtest — 알고리즘 전략(라오어) 확장 */
+.bt-algo-params {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.bt-algo-params input[type='number'] {
+  width: 90px;
+}
+.bt-lev-warn {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  background: var(--danger-bg);
+  border-radius: 8px;
+  line-height: 1.5;
+}
+.bt-events {
+  max-height: 320px;
+  overflow-y: auto;
+}

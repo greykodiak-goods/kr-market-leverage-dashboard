@@ -71,7 +71,7 @@ export const DEFAULT_SETTINGS: SimSettings = {
 }
 
 // ---- Results --------------------------------------------------------------
-export type ExitReason = '조건 매도' | '손절' | '익절' | '보유중(미청산)'
+export type ExitReason = '조건 매도' | '손절' | '익절' | '보유중(미청산)' | '사이클 목표매도' | '사이클 손절'
 
 export interface Trade {
   entryDate: string
@@ -106,6 +106,16 @@ export interface SimMetrics {
   days: number // simulated trading days
 }
 
+// Individual fills for algorithmic (자금관리형) strategies — 무한매수법의 분할
+// 매수, VR의 리밸런싱 매매 등 라운드트립으로 묶이지 않는 체결 기록.
+export interface SimEvent {
+  date: string
+  action: '매수' | '매도'
+  price: number
+  qty: number
+  note: string
+}
+
 export interface SimResult {
   strategyId: string
   strategyName: string
@@ -114,4 +124,5 @@ export interface SimResult {
   metrics: SimMetrics
   startDate: string
   endDate: string
+  events?: SimEvent[] // present for algorithmic strategies
 }

@@ -11,17 +11,9 @@
 //
 // This is a single-position, long-only simulator. 공매도·레버리지 미지원.
 
-import type {
-  Condition,
-  DailyBar,
-  EquityPoint,
-  SimMetrics,
-  SimResult,
-  SimSettings,
-  StrategyConfig,
-  Trade,
-} from './types'
+import type { Condition, DailyBar, EquityPoint, SimResult, SimSettings, StrategyConfig, Trade } from './types'
 import { operandSeries, type Series } from './series'
+import { computeMetrics, initBenchmark } from './metrics'
 
 interface CompiledCondition {
   left: Series
@@ -59,12 +51,6 @@ function holds(c: CompiledCondition, i: number): boolean {
   }
 }
 
-function stdev(xs: number[]): number {
-  if (xs.length < 2) return 0
-  const m = xs.reduce((s, v) => s + v, 0) / xs.length
-  return Math.sqrt(xs.reduce((s, v) => s + (v - m) ** 2, 0) / (xs.length - 1))
-}
-
 export function runBacktest(
   bars: DailyBar[],
   startIdx: number,
@@ -98,9 +84,7 @@ export function runBacktest(
   let daysHolding = 0
 
   // Benchmark: buy & hold from the first simulated open, same costs.
-  const bhFill = bars[startIdx].o * (1 + slip)
-  const bhQty = Math.floor(settings.initialCapital / (bhFill * (1 + comm)))
-  const bhCash = settings.initialCapital - bhQty * bhFill * (1 + comm)
+  const { bhQty, bhCash } = initBenchmark(bars[startIdx].o, settings.initialCapital, settings.commissionPct, settings.slippagePct)
 
   function closeTrade(exitDate: string, rawExit: number, reason: Trade['reason'], applySlip: boolean) {
     const fill = applySlip ? rawExit * (1 - slip) : rawExit
@@ -195,47 +179,7 @@ export function runBacktest(
     })
   }
 
-  // ---- Metrics ----
-  const days = equity.length
-  const finalEquity = equity[days - 1].equity
-  const totalReturnPct = (finalEquity / settings.initialCapital - 1) * 100
-  const years = days / 252
-  const cagrPct = years > 0 ? (Math.pow(finalEquity / settings.initialCapital, 1 / years) - 1) * 100 : 0
-  const mddPct = Math.min(0, ...equity.map((e) => e.drawdownPct))
-
-  const dailyRets: number[] = []
-  for (let i = 1; i < days; i++) dailyRets.push(equity[i].equity / equity[i - 1].equity - 1)
-  const meanRet = dailyRets.length ? dailyRets.reduce((s, v) => s + v, 0) / dailyRets.length : 0
-  const sd = stdev(dailyRets)
-  const sharpe = sd > 0 ? (meanRet / sd) * Math.sqrt(252) : 0
-
-  const closed = trades.filter((t) => t.exitDate != null)
-  const wins = closed.filter((t) => (t.pnl ?? 0) > 0)
-  const grossWin = wins.reduce((s, t) => s + (t.pnl ?? 0), 0)
-  const grossLoss = closed.filter((t) => (t.pnl ?? 0) <= 0).reduce((s, t) => s + Math.abs(t.pnl ?? 0), 0)
-
-  const bhFinal = equity[days - 1].benchmark
-  let bhPeak = 0
-  let bhMdd = 0
-  for (const e of equity) {
-    bhPeak = Math.max(bhPeak, e.benchmark)
-    if (bhPeak > 0) bhMdd = Math.min(bhMdd, ((e.benchmark - bhPeak) / bhPeak) * 100)
-  }
-
-  const metrics: SimMetrics = {
-    finalEquity,
-    totalReturnPct,
-    cagrPct,
-    mddPct,
-    sharpe,
-    winRatePct: closed.length ? (wins.length / closed.length) * 100 : 0,
-    tradeCount: closed.length,
-    profitFactor: grossLoss > 0 ? grossWin / grossLoss : null,
-    exposurePct: (daysHolding / days) * 100,
-    benchmarkReturnPct: (bhFinal / settings.initialCapital - 1) * 100,
-    benchmarkMddPct: bhMdd,
-    days,
-  }
+  const metrics = computeMetrics(equity, trades, settings.initialCapital, daysHolding)
 
   return {
     strategyId: strategy.id,
