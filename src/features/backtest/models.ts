@@ -182,6 +182,9 @@ export interface BoardSummary {
   period: string // '2021-01-04 ~ 2026-07-25'
   totalReturnPct: number
   benchmarkReturnPct: number
+  return1yPct: number | null
+  bench1yPct: number | null
+  oneYearPartial: boolean
   cagrPct: number
   mddPct: number
   sharpe: number

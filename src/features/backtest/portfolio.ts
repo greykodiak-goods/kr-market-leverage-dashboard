@@ -31,6 +31,13 @@ export interface SleeveOutcome {
 }
 
 export interface AdvancedMetrics {
+  // 최근 1년(달력 기준) 성과 — 전체 구간 누적치에 가려지는 '지금 잘하고 있나'를
+  // 보기 위한 지표. 구간이 1년보다 짧으면 있는 만큼만 쓰고 partial로 표시한다.
+  return1yPct: number | null
+  bench1yPct: number | null
+  excess1yPct: number | null
+  oneYearFrom: string | null
+  oneYearPartial: boolean
   volPct: number // 연환산 변동성 %
   sortino: number // 하방편차 기준 위험조정수익
   calmar: number | null // CAGR / |MDD| (MDD=0이면 null)
@@ -105,6 +112,29 @@ function downsideDev(rets: number[]): number {
   return Math.sqrt(m2)
 }
 
+// 마지막 날짜로부터 달력 1년 전 이후의 첫 관측치를 기준으로 최근 1년 수익률을 낸다.
+// 거래일 252개로 자르지 않는 이유: 국장·미장 혼합 캘린더에서는 종목마다 거래일
+// 수가 달라 252가 실제 1년과 어긋나기 때문이다.
+function trailingOneYear(equity: EquityPoint[]) {
+  if (equity.length < 2) {
+    return { return1yPct: null, bench1yPct: null, excess1yPct: null, oneYearFrom: null, oneYearPartial: true }
+  }
+  const last = equity[equity.length - 1]
+  const cutoff = new Date(Date.parse(last.date + 'T00:00:00Z'))
+  cutoff.setUTCFullYear(cutoff.getUTCFullYear() - 1)
+  const cutoffStr = cutoff.toISOString().slice(0, 10)
+  let idx = equity.findIndex((e) => e.date >= cutoffStr)
+  const partial = idx <= 0
+  if (idx < 0) idx = 0
+  const base = equity[idx]
+  if (base.equity <= 0 || base.benchmark <= 0 || idx === equity.length - 1) {
+    return { return1yPct: null, bench1yPct: null, excess1yPct: null, oneYearFrom: null, oneYearPartial: true }
+  }
+  const r = (last.equity / base.equity - 1) * 100
+  const b = (last.benchmark / base.benchmark - 1) * 100
+  return { return1yPct: r, bench1yPct: b, excess1yPct: r - b, oneYearFrom: base.date, oneYearPartial: partial }
+}
+
 export function computeAdvanced(equity: EquityPoint[], cagrPct: number, mddPct: number): AdvancedMetrics {
   const rets: number[] = []
   for (let i = 1; i < equity.length; i++) rets.push(equity[i].equity / equity[i - 1].equity - 1)
@@ -151,6 +181,7 @@ export function computeAdvanced(equity: EquityPoint[], cagrPct: number, mddPct: 
   const beat = yearly.filter((r) => r.retPct > r.benchRetPct).length
 
   return {
+    ...trailingOneYear(equity),
     volPct,
     sortino,
     calmar,

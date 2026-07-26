@@ -2659,3 +2659,32 @@ body {
   margin: 0;
 }
 .bt-card-type.rotation, .bt-model-btn.rotation.active { background: #12b76a; border-color: #12b76a; color: #fff; }
+
+/* backtest — 카드 최근 1년 강조 */
+.bt-card-1y {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  padding: 7px 9px;
+  margin: 8px 0 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.bt-card-1y .lbl {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-faint);
+  letter-spacing: 0.02em;
+}
+.bt-card-1y strong {
+  font-size: 19px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.bt-card-1y .vs {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}

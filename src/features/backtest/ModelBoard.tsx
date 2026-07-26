@@ -5,7 +5,7 @@ import { MODEL_META, type BoardSummary, type ModelConfig } from './models'
 import { symbolLabel } from './UniverseEditor'
 import type { Enrollment } from './spec'
 
-function fmtPct(v: number | undefined, digits = 1): string {
+function fmtPct(v: number | null | undefined, digits = 1): string {
   if (v == null || !Number.isFinite(v)) return '—'
   return `${v >= 0 ? '+' : ''}${v.toFixed(digits)}%`
 }
@@ -57,9 +57,29 @@ export function ModelBoard({ configs, board, enrollments, busy, progress, onOpen
               </div>
               {s ? (
                 <>
+                  <div className="bt-card-1y">
+                    <span className="lbl">최근 1년</span>
+                    {s.return1yPct != null ? (
+                      <>
+                        <strong className={s.return1yPct >= 0 ? 'bt-pos' : 'bt-neg'}>{fmtPct(s.return1yPct)}</strong>
+                        <span className="vs">
+                          벤치 {fmtPct(s.bench1yPct)}
+                          {s.bench1yPct != null && (
+                            <b className={s.return1yPct - s.bench1yPct >= 0 ? 'bt-pos' : 'bt-neg'}>
+                              {' '}({s.return1yPct - s.bench1yPct >= 0 ? '+' : ''}
+                              {(s.return1yPct - s.bench1yPct).toFixed(1)}%p)
+                            </b>
+                          )}
+                        </span>
+                        {s.oneYearPartial && <span className="vs">· 구간 1년 미만</span>}
+                      </>
+                    ) : (
+                      <span className="vs">데이터 부족</span>
+                    )}
+                  </div>
                   <div className="bt-card-metrics">
                     <div>
-                      <span className="lbl">총수익률</span>
+                      <span className="lbl">전체 수익률</span>
                       <span className={s.totalReturnPct >= 0 ? 'bt-pos' : 'bt-neg'}>{fmtPct(s.totalReturnPct)}</span>
                     </div>
                     <div>

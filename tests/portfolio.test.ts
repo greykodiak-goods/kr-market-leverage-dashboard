@@ -1,5 +1,5 @@
 // 포트폴리오 집계 + 고급지표 검증
-import { check, finish } from './harness'
+import { check, finish, close as closeTo } from './harness'
 import { runPortfolio, computeAdvanced, computeStartIdx } from '../src/features/backtest/portfolio'
 import { defaultConfig } from '../src/features/backtest/models'
 import type { DailyBar, HistoryResult } from '../src/lib/history'
@@ -101,5 +101,51 @@ check('NAV 날짜 오름차순', resMix.equity.every((e, i, a) => i === 0 || a[i
 // 9) 로드 실패 종목 제외 처리
 const resPartial = runPortfolio('golden-cross', { ...defaultConfig('golden-cross'), symbols: ['A', 'MISSING'] }, { A: hists.A })
 check('로드 실패 종목 제외 후 실행', resPartial.universe.length === 1 && resPartial.universe[0] === 'A')
+
+
+// ===== 최근 1년(달력 기준) 수익률 =====
+{
+  const mk = (i: number) => new Date(Date.UTC(2023, 0, 1) + i * 86400000).toISOString().slice(0, 10)
+  // 2년치: 1년차 전략 +100%, 2년차 +20%. 벤치는 1년차 +50%, 2년차 +10%.
+  const eq2: EquityPoint[] = []
+  for (let i = 0; i <= 730; i++) {
+    const y = i / 365
+    const stratV = y <= 1 ? 1000 * (1 + y) : 2000 * (1 + 0.2 * (y - 1))
+    const benchV = y <= 1 ? 1000 * (1 + 0.5 * y) : 1500 * (1 + 0.1 * (y - 1))
+    eq2.push({ date: mk(i), equity: stratV, benchmark: benchV, drawdownPct: 0 })
+  }
+  const a2 = computeAdvanced(eq2, 0, -10)
+  // 기준일은 "마지막 날짜의 정확히 1년 전 이후 첫 관측치"여야 한다
+  const lastDate = eq2[eq2.length - 1].date
+  const expectedCut = new Date(Date.parse(lastDate + 'T00:00:00Z'))
+  expectedCut.setUTCFullYear(expectedCut.getUTCFullYear() - 1)
+  const cutStr = expectedCut.toISOString().slice(0, 10)
+  check('최근 1년 기준일 = 1년 전 이후 첫 관측치', a2.oneYearFrom === cutStr, `${a2.oneYearFrom} vs ${cutStr}`)
+  check('기준일이 마지막보다 앞섬', (a2.oneYearFrom ?? '') < lastDate)
+  check('구간이 1년 이상이면 partial=false', a2.oneYearPartial === false)
+  closeTo('최근 1년 수익률 ≈ +20%', a2.return1yPct ?? 0, 20, 0.5)
+  closeTo('최근 1년 벤치마크 ≈ +10%', a2.bench1yPct ?? 0, 10, 0.5)
+  closeTo('최근 1년 초과 ≈ +10%p', a2.excess1yPct ?? 0, 10, 0.5)
+  // 전체 누적(+100%)과 최근 1년(+20%)이 다르게 나와야 의미가 있다
+  const totalRet = (eq2[eq2.length - 1].equity / eq2[0].equity - 1) * 100
+  check('최근 1년이 전체 누적과 구분됨', Math.abs(totalRet - (a2.return1yPct ?? 0)) > 50, `total ${totalRet.toFixed(0)} vs 1y ${(a2.return1yPct ?? 0).toFixed(0)}`)
+}
+
+{
+  const mk = (i: number) => new Date(Date.UTC(2025, 0, 1) + i * 86400000).toISOString().slice(0, 10)
+  // 180일치만 있는 짧은 구간 → partial 표시, 있는 구간 전체로 계산
+  const eqShort: EquityPoint[] = []
+  for (let i = 0; i <= 180; i++) eqShort.push({ date: mk(i), equity: 1000 * (1 + (0.3 * i) / 180), benchmark: 1000, drawdownPct: 0 })
+  const aS = computeAdvanced(eqShort, 0, -5)
+  check('1년 미만이면 partial=true', aS.oneYearPartial === true)
+  closeTo('있는 구간 전체로 계산(+30%)', aS.return1yPct ?? 0, 30, 0.1)
+}
+
+{
+  // 관측치가 1개면 계산 불가 → null
+  const one: EquityPoint[] = [{ date: '2026-01-02', equity: 1000, benchmark: 1000, drawdownPct: 0 }]
+  const a1 = computeAdvanced(one, 0, 0)
+  check('관측치 1개면 null', a1.return1yPct === null && a1.bench1yPct === null && a1.oneYearFrom === null)
+}
 
 finish()
