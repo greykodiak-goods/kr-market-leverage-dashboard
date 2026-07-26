@@ -13,6 +13,9 @@ import { EquityChart } from './EquityChart'
 import { KpiCard } from '../../components/KpiCard'
 import { InfoTip } from '../../components/InfoTip'
 import { clonePreset } from './strategies'
+import { LiveTracking } from './LiveTracking'
+import { DataProvenance } from './DataProvenance'
+import type { Enrollment } from './spec'
 import type { SimSettings } from './types'
 
 const LEVERAGED = new Set(['122630.KS', 'SOXL', 'TQQQ', 'SOXS', 'SQQQ', 'UPRO', 'TMF'])
@@ -30,13 +33,29 @@ interface Props {
   modelId: string
   cfg: ModelConfig
   result: PortfolioResult | null
+  histories: Record<string, HistoryResult>
+  enrollment: Enrollment | null
   onPatch: (p: Partial<ModelConfig>) => void
   onReset: () => void
   onBack: () => void
-  onResult: (res: PortfolioResult) => void
+  onResult: (res: PortfolioResult, histories: Record<string, HistoryResult>) => void
+  onEnroll: (e: Enrollment) => void
+  onUnenroll: () => void
 }
 
-export function ModelDetail({ modelId, cfg, result, onPatch, onReset, onBack, onResult }: Props) {
+export function ModelDetail({
+  modelId,
+  cfg,
+  result,
+  histories,
+  enrollment,
+  onPatch,
+  onReset,
+  onBack,
+  onResult,
+  onEnroll,
+  onUnenroll,
+}: Props) {
   const meta = modelMeta(modelId)
   const isAlgo = meta.type === 'algo'
   const doc = findDoc(modelId)
@@ -58,18 +77,18 @@ export function ModelDetail({ modelId, cfg, result, onPatch, onReset, onBack, on
     setRunError(null)
     const notes: string[] = []
     try {
-      const histories: Record<string, HistoryResult> = {}
+      const loaded: Record<string, HistoryResult> = {}
       for (const sym of cfg.symbols) {
         try {
-          histories[sym] = await getDailyHistory(sym, cfg.range)
-          if (histories[sym].stale) notes.push(`${sym}: 캐시 사용(갱신 실패)`)
+          loaded[sym] = await getDailyHistory(sym, cfg.range)
+          if (loaded[sym].stale) notes.push(`${sym}: 캐시 사용(갱신 실패)`)
         } catch (e) {
           notes.push(`${sym}: 로드 실패 — 제외됨 (${String((e as Error).message ?? e)})`)
         }
       }
       setLoadNotes(notes)
-      const res = runPortfolio(modelId, cfg, histories)
-      onResult(res)
+      const res = runPortfolio(modelId, cfg, loaded)
+      onResult(res, loaded)
     } catch (e) {
       setRunError(String((e as Error).message ?? e))
     } finally {
@@ -299,6 +318,18 @@ export function ModelDetail({ modelId, cfg, result, onPatch, onReset, onBack, on
             평가 구간 <strong>{result.startDate} ~ {result.endDate}</strong> · 유니버스{' '}
             {result.universe.map((s) => symbolLabel(s)).join(' · ')} ({result.universe.length}종목 균등분할)
           </div>
+
+          <DataProvenance histories={histories} />
+
+          <LiveTracking
+            modelId={modelId}
+            cfg={cfg}
+            result={result}
+            histories={histories}
+            enrollment={enrollment}
+            onEnroll={onEnroll}
+            onUnenroll={onUnenroll}
+          />
 
           <div className="kpi-row">
             <KpiCard

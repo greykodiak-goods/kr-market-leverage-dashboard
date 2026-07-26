@@ -17,6 +17,7 @@ import { runPortfolio, type PortfolioResult } from './portfolio'
 import { ALL_MODEL_IDS, defaultConfig, loadBoard, loadConfigs, modelMeta, saveBoard, saveConfigs, type BoardSummary, type ModelConfig } from './models'
 import { ModelBoard } from './ModelBoard'
 import { ModelDetail } from './ModelDetail'
+import { loadEnrollments, saveEnrollments, type Enrollment } from './spec'
 import { InfoTip } from '../../components/InfoTip'
 
 function summarize(res: PortfolioResult): BoardSummary {
@@ -41,6 +42,8 @@ export function BacktestSection() {
   const [board, setBoard] = useState<Record<string, BoardSummary>>(loadBoard)
   const [openId, setOpenId] = useState<string | null>(null)
   const [results, setResults] = useState<Record<string, PortfolioResult>>({})
+  const [histories, setHistories] = useState<Record<string, Record<string, HistoryResult>>>({})
+  const [enrollments, setEnrollments] = useState<Record<string, Enrollment>>(loadEnrollments)
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState<string | null>(null)
 
@@ -60,11 +63,29 @@ export function BacktestSection() {
     })
   }
 
-  function acceptResult(id: string, res: PortfolioResult) {
+  function acceptResult(id: string, res: PortfolioResult, hists: Record<string, HistoryResult>) {
     setResults((prev) => ({ ...prev, [id]: res }))
+    setHistories((prev) => ({ ...prev, [id]: hists }))
     setBoard((prev) => {
       const next = { ...prev, [id]: summarize(res) }
       saveBoard(next)
+      return next
+    })
+  }
+
+  function enroll(id: string, e: Enrollment) {
+    setEnrollments((prev) => {
+      const next = { ...prev, [id]: e }
+      saveEnrollments(next)
+      return next
+    })
+  }
+
+  function unenroll(id: string) {
+    setEnrollments((prev) => {
+      const next = { ...prev }
+      delete next[id]
+      saveEnrollments(next)
       return next
     })
   }
@@ -75,27 +96,30 @@ export function BacktestSection() {
       const histCache: Record<string, HistoryResult> = {}
       const nextBoard = { ...board }
       const nextResults = { ...results }
+      const nextHistories = { ...histories }
       for (const id of ALL_MODEL_IDS) {
         const cfg = configs[id]
         setProgress(`${modelMeta(id).short} 평가 중…`)
-        const histories: Record<string, HistoryResult> = {}
+        const loaded: Record<string, HistoryResult> = {}
         for (const sym of cfg.symbols) {
           const key = `${sym}:${cfg.range}`
           try {
-            histories[sym] = histCache[key] ?? (histCache[key] = await getDailyHistory(sym, cfg.range))
+            loaded[sym] = histCache[key] ?? (histCache[key] = await getDailyHistory(sym, cfg.range))
           } catch {
             /* 로드 실패 종목은 제외하고 나머지로 실행 */
           }
         }
         try {
-          const res = runPortfolio(id, cfg, histories)
+          const res = runPortfolio(id, cfg, loaded)
           nextResults[id] = res
+          nextHistories[id] = loaded
           nextBoard[id] = summarize(res)
         } catch {
           /* 유니버스 전체 실패 시 해당 모델은 이전 요약 유지 */
         }
       }
       setResults(nextResults)
+      setHistories(nextHistories)
       setBoard(nextBoard)
       saveBoard(nextBoard)
     } finally {
@@ -122,6 +146,7 @@ export function BacktestSection() {
         <ModelBoard
           configs={configs}
           board={board}
+          enrollments={enrollments}
           busy={busy}
           progress={progress}
           onOpen={setOpenId}
@@ -132,10 +157,14 @@ export function BacktestSection() {
           modelId={openId}
           cfg={configs[openId]}
           result={results[openId] ?? null}
+          histories={histories[openId] ?? {}}
+          enrollment={enrollments[openId] ?? null}
           onPatch={(p) => patch(openId, p)}
           onReset={() => resetModel(openId)}
           onBack={() => setOpenId(null)}
-          onResult={(res) => acceptResult(openId, res)}
+          onResult={(res, hists) => acceptResult(openId, res, hists)}
+          onEnroll={(e) => enroll(openId, e)}
+          onUnenroll={() => unenroll(openId)}
         />
       )}
 

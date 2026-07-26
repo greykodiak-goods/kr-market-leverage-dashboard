@@ -3,6 +3,7 @@
 
 import { MODEL_META, type BoardSummary, type ModelConfig } from './models'
 import { symbolLabel } from './UniverseEditor'
+import type { Enrollment } from './spec'
 
 function fmtPct(v: number | undefined, digits = 1): string {
   if (v == null || !Number.isFinite(v)) return '—'
@@ -12,13 +13,14 @@ function fmtPct(v: number | undefined, digits = 1): string {
 interface Props {
   configs: Record<string, ModelConfig>
   board: Record<string, BoardSummary>
+  enrollments: Record<string, Enrollment>
   busy: boolean
   progress: string | null
   onOpen: (id: string) => void
   onRunAll: () => void
 }
 
-export function ModelBoard({ configs, board, busy, progress, onOpen, onRunAll }: Props) {
+export function ModelBoard({ configs, board, enrollments, busy, progress, onOpen, onRunAll }: Props) {
   return (
     <div>
       <div className="bt-actions" style={{ marginTop: 0 }}>
@@ -34,13 +36,16 @@ export function ModelBoard({ configs, board, busy, progress, onOpen, onRunAll }:
         {MODEL_META.map((meta) => {
           const s = board[meta.id]
           const cfg = configs[meta.id]
+          const enr = enrollments[meta.id]
           const beat = s != null && s.totalReturnPct > s.benchmarkReturnPct
           return (
             <button key={meta.id} type="button" className="bt-card" onClick={() => onOpen(meta.id)}>
               <div className="bt-card-head">
                 <span className={`bt-card-type ${meta.type}`}>{meta.type === 'rule' ? '규칙형' : '자금관리'}</span>
                 <strong>{meta.short}</strong>
-                <span className="bt-card-stage">백테스트 단계</span>
+                <span className="bt-card-stage">
+                  {enr ? `🧪 모의운용 ${enr.enrolledAt}~` : '백테스트 단계'}
+                </span>
               </div>
               <div className="bt-card-universe">
                 {cfg.symbols.slice(0, 4).map((sym) => (
