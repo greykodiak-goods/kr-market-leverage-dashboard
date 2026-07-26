@@ -16,6 +16,7 @@ import { KpiCard } from '../../components/KpiCard'
 import { InfoTip } from '../../components/InfoTip'
 import { clonePreset } from './strategies'
 import { LiveTracking } from './LiveTracking'
+import { RobustnessPanel } from './RobustnessPanel'
 import { DataProvenance } from './DataProvenance'
 import type { Enrollment } from './spec'
 import type { SimSettings } from './types'
@@ -466,6 +467,8 @@ export function ModelDetail({
           </div>
 
           <DataProvenance histories={histories} />
+
+          <RobustnessPanel modelId={modelId} cfg={cfg} result={result} histories={histories} />
 
           <LiveTracking
             modelId={modelId}

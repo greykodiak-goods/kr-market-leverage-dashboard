@@ -2719,3 +2719,10 @@ body {
 }
 .bt-bench-note strong { color: var(--text); }
 .bt-trades-table { max-height: 320px; overflow-y: auto; }
+.bt-robust-summary {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+  line-height: 1.7;
+}
+.bt-base-row td { background: var(--panel); }

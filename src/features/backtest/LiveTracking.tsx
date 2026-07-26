@@ -64,7 +64,7 @@ export function LiveTracking({ modelId, cfg, result, histories, enrollment, onEn
   }
 
   return (
-    <div className="bt-live">
+    <div className="bt-live bt-tracking">
       <div className="bt-live-head">
         <strong>🧪 모의운용 추적 (페이퍼 · 실주문 없음)</strong>
         <span className="bt-fp" title="모델 스펙 지문 — 설정이 하나라도 바뀌면 값이 달라집니다">
