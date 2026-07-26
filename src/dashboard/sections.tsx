@@ -8,6 +8,8 @@ import { MacroSection } from '../features/macro/MacroSection'
 import { LeverageSection } from '../features/leverage/LeverageSection'
 import { NewsForecastSection } from '../features/news/NewsForecastSection'
 import { MegaInvestorsBoard } from '../features/mega-investors/MegaInvestorsBoard'
+import { SmartMoneyRadar } from '../features/mega-investors/SmartMoneyRadar'
+import { FlowRotation } from '../features/mega-investors/FlowRotation'
 import { MegaInvestorsNews } from '../features/mega-investors/MegaInvestorsNews'
 import { BacktestSection } from '../features/backtest/BacktestSection'
 
@@ -61,6 +63,9 @@ export const SECTIONS: SectionDef[] = [
   { id: 'macro', tab: 'market', title: '매크로 위험 · 지수', Component: MacroSection },
   { id: 'backtest', tab: 'sim', title: '🤖 투자봇 시뮬레이터 (백테스트)', Component: BacktestSection },
   { id: 'news', tab: 'news', title: '뉴스 · 기술적 지표', Component: NewsForecastSection },
+  // 계산형(매일 바뀜)을 위, 정적 레퍼런스(분기 갱신)를 아래로 — 볼 것이 있는 순서.
+  { id: 'smart-money-radar', tab: 'giants', title: '🎯 큰손 자금 레이더', Component: SmartMoneyRadar },
+  { id: 'flow-rotation', tab: 'giants', title: '🔄 자금 로테이션 · 위험선호', Component: FlowRotation },
   { id: 'mega-investors-ref', tab: 'giants', title: '🏦 세계 초대형 투자사 레퍼런스', Component: MegaInvestorsBoard },
   { id: 'mega-investors-news', tab: 'giants', title: '🏦 큰손·기관 동향 뉴스', Component: MegaInvestorsNews },
 ]
