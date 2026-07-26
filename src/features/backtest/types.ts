@@ -82,6 +82,7 @@ export interface Trade {
   pnl: number | null // net of all costs; for open trades = mark-to-market
   pnlPct: number | null
   reason: ExitReason
+  symbol?: string // 포트폴리오(멀티종목) 집계 시 슬리브 종목
 }
 
 export interface EquityPoint {
@@ -114,6 +115,7 @@ export interface SimEvent {
   price: number
   qty: number
   note: string
+  symbol?: string // 포트폴리오 집계 시 슬리브 종목
 }
 
 export interface SimResult {

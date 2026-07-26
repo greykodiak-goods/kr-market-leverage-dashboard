@@ -2268,3 +2268,190 @@ body {
   line-height: 1.65;
   margin-bottom: 4px;
 }
+
+/* backtest — 모델 보드(가상 투자자 카드) */
+.bt-board {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+.bt-card {
+  text-align: left;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.bt-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
+}
+.bt-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.bt-card-head strong {
+  font-size: 14px;
+}
+.bt-card-type {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+.bt-card-type.algo {
+  color: var(--kosdaq);
+  border-color: var(--kosdaq);
+}
+.bt-card-stage {
+  font-size: 10px;
+  color: var(--text-faint);
+  margin-left: auto;
+}
+.bt-card-universe {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.bt-card-universe code {
+  font-size: 10.5px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: var(--text-dim);
+}
+.bt-card-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px 8px;
+  font-variant-numeric: tabular-nums;
+}
+.bt-card-metrics > div {
+  display: flex;
+  flex-direction: column;
+}
+.bt-card-metrics .lbl {
+  font-size: 9.5px;
+  color: var(--text-faint);
+}
+.bt-card-metrics > div > span:last-child {
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.bt-card-foot,
+.bt-card-empty {
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+.bt-stage-info {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  line-height: 1.65;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+.bt-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.bt-detail-head h3 {
+  margin: 0;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.bt-universe {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+.bt-universe-head {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+.bt-universe-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.bt-uchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  border-radius: 999px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-dim);
+  font-family: inherit;
+  cursor: pointer;
+}
+.bt-uchip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  cursor: default;
+}
+.bt-uchip.on code {
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 10.5px;
+}
+.bt-uchip button {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 0 0 2px;
+}
+.bt-uchip.add:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.bt-ucustom {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+.bt-ucustom input {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-family: inherit;
+  width: 250px;
+  max-width: 100%;
+}
+@media (max-width: 640px) {
+  .bt-card-metrics {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
