@@ -2688,3 +2688,4 @@ body {
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
 }
+.bt-card-1y .bt-restale { color: var(--kosdaq); font-weight: 600; }

@@ -425,7 +425,7 @@ export function ModelDetail({
             <KpiCard
               label="최근 1년 수익률"
               value={adv.return1yPct != null ? fmtPct(adv.return1yPct) : '—'}
-              changeText={adv.bench1yPct != null ? `단순보유 ${fmtPct(adv.bench1yPct)}` : '데이터 부족'}
+              changeText={adv.bench1yPct != null ? `단순보유 ${fmtPct(adv.bench1yPct)}` : '구간 1년 미만'}
               changeLabel={adv.oneYearFrom ? `${adv.oneYearFrom}~` : ''}
               direction={adv.excess1yPct != null && adv.excess1yPct > 0 ? 'up' : 'down'}
               info={`최근 1년(달력 기준) 성과입니다. 전체 구간 누적 수익률에 가려지는 "최근에도 통하고 있는가"를 봅니다.${adv.oneYearPartial ? ' ⚠️ 시뮬레이션 구간이 1년보다 짧아 있는 구간 전체로 계산했습니다.' : ''}`}

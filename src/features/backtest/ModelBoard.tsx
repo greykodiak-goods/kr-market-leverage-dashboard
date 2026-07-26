@@ -59,7 +59,9 @@ export function ModelBoard({ configs, board, enrollments, busy, progress, onOpen
                 <>
                   <div className="bt-card-1y">
                     <span className="lbl">최근 1년</span>
-                    {s.return1yPct != null ? (
+                    {s.return1yPct === undefined ? (
+                      <span className="vs bt-restale">재평가 필요 — 위 "전체 모델 일괄 평가"를 다시 누르세요</span>
+                    ) : s.return1yPct != null ? (
                       <>
                         <strong className={s.return1yPct >= 0 ? 'bt-pos' : 'bt-neg'}>{fmtPct(s.return1yPct)}</strong>
                         <span className="vs">
@@ -74,7 +76,7 @@ export function ModelBoard({ configs, board, enrollments, busy, progress, onOpen
                         {s.oneYearPartial && <span className="vs">· 구간 1년 미만</span>}
                       </>
                     ) : (
-                      <span className="vs">데이터 부족</span>
+                      <span className="vs">시뮬레이션 구간이 1년 미만</span>
                     )}
                   </div>
                   <div className="bt-card-metrics">

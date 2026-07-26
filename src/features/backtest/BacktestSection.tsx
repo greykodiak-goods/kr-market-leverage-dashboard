@@ -11,7 +11,7 @@
 // 실계좌 주문·브로커 API 연동·자동매매 파이프라인은 이 코드베이스에서
 // 만들지 않는다(투자 거버넌스 T0 — 대표 본인만 수동으로 진행).
 
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { getDailyHistory, type HistoryResult } from '../../lib/history'
 import { runPortfolio, type PortfolioResult } from './portfolio'
 import { ALL_MODEL_IDS, defaultConfig, loadBoard, loadConfigs, modelMeta, saveBoard, saveConfigs, type BoardSummary, type ModelConfig } from './models'
@@ -40,10 +40,54 @@ function summarize(res: PortfolioResult): BoardSummary {
   }
 }
 
+// 열린 모델을 URL 해시의 하위 경로(#sim/<modelId>)로 표현한다.
+// 브라우저 뒤로가기가 보드로 돌아가고, 특정 모델 화면을 링크로 공유할 수 있다.
+function readOpenIdFromHash(): string | null {
+  const raw = (typeof location !== 'undefined' ? location.hash : '').replace(/^#/, '')
+  const [tab, sub] = raw.split('/')
+  if (tab !== 'sim' || !sub) return null
+  return ALL_MODEL_IDS.includes(sub) ? sub : null
+}
+
 export function BacktestSection() {
   const [configs, setConfigs] = useState<Record<string, ModelConfig>>(loadConfigs)
   const [board, setBoard] = useState<Record<string, BoardSummary>>(loadBoard)
-  const [openId, setOpenId] = useState<string | null>(null)
+  const [openId, setOpenId] = useState<string | null>(readOpenIdFromHash)
+  // 앱 안에서 열어 히스토리 항목을 쌓았는지 — 뒤로가기 버튼 동작을 가른다.
+  const pushedRef = useRef(false)
+
+  // 브라우저 뒤로/앞으로 → 해시 변경 → 화면 동기화
+  useEffect(() => {
+    const onHash = () => {
+      const next = readOpenIdFromHash()
+      setOpenId(next)
+      if (next == null) pushedRef.current = false
+    }
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+
+  // 모델 열기 — 히스토리 항목을 쌓아 뒤로가기가 보드로 돌아가게 한다.
+  const openModel = useCallback((id: string) => {
+    pushedRef.current = true
+    location.hash = `sim/${id}`
+  }, [])
+
+  // 다른 기법으로 전환 — 항목을 쌓지 않고 교체(뒤로가기 시 보드로).
+  const switchModel = useCallback((id: string) => {
+    history.replaceState(null, '', `#sim/${id}`)
+    setOpenId(id)
+  }, [])
+
+  // 보드로 — 앱에서 열었으면 실제 뒤로가기, 직접 URL로 들어왔으면 해시 교체.
+  const backToBoard = useCallback(() => {
+    if (pushedRef.current) {
+      history.back()
+    } else {
+      history.replaceState(null, '', '#sim')
+      setOpenId(null)
+    }
+  }, [])
   const [results, setResults] = useState<Record<string, PortfolioResult>>({})
   const [histories, setHistories] = useState<Record<string, Record<string, HistoryResult>>>({})
   const [enrollments, setEnrollments] = useState<Record<string, Enrollment>>(loadEnrollments)
@@ -152,7 +196,7 @@ export function BacktestSection() {
           enrollments={enrollments}
           busy={busy}
           progress={progress}
-          onOpen={setOpenId}
+          onOpen={openModel}
           onRunAll={runAll}
         />
       ) : (
@@ -164,8 +208,8 @@ export function BacktestSection() {
           enrollment={enrollments[openId] ?? null}
           onPatch={(p) => patch(openId, p)}
           onReset={() => resetModel(openId)}
-          onBack={() => setOpenId(null)}
-          onSwitch={(id) => setOpenId(id)}
+          onBack={backToBoard}
+          onSwitch={switchModel}
           onResult={(res, hists) => acceptResult(openId, res, hists)}
           onEnroll={(e) => enroll(openId, e)}
           onUnenroll={() => unenroll(openId)}

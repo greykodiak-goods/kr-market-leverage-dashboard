@@ -182,9 +182,11 @@ export interface BoardSummary {
   period: string // '2021-01-04 ~ 2026-07-25'
   totalReturnPct: number
   benchmarkReturnPct: number
-  return1yPct: number | null
-  bench1yPct: number | null
-  oneYearPartial: boolean
+  // 구버전 요약(필드 추가 이전 저장분)은 undefined — 화면에서 '재평가 필요'로
+  // 구분해 보여준다. null은 '구간이 1년 미만이라 계산 불가'라는 뜻이다.
+  return1yPct?: number | null
+  bench1yPct?: number | null
+  oneYearPartial?: boolean
   cagrPct: number
   mddPct: number
   sharpe: number
