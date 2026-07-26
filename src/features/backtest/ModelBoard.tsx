@@ -42,7 +42,13 @@ export function ModelBoard({ configs, board, enrollments, busy, progress, onOpen
             <button key={meta.id} type="button" className="bt-card" onClick={() => onOpen(meta.id)}>
               <div className="bt-card-head">
                 <span className={`bt-card-type ${meta.type}`}>
-                  {meta.type === 'rule' ? '규칙형' : meta.type === 'algo' ? '자금관리' : '종목선정'}
+                  {meta.type === 'rule'
+                    ? '규칙형'
+                    : meta.type === 'algo'
+                      ? '자금관리'
+                      : meta.type === 'quant'
+                        ? '퀀트'
+                        : '종목선정'}
                 </span>
                 <strong>{meta.short}</strong>
                 <span className="bt-card-stage">

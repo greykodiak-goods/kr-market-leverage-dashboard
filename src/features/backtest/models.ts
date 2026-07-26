@@ -10,6 +10,9 @@ import { PRESET_STRATEGIES, clonePreset } from './strategies'
 import { DEFAULT_IB_PARAMS, DEFAULT_VR_PARAMS, type InfiniteBuyingParams, type VRParams } from './algoEngine'
 import { DEFAULT_ROTATION, type RotationParams } from './rotation'
 import { DEFAULT_SIGNAL_ROTATION, type SignalRotationParams } from './signalRotation'
+import { DEFAULT_MULTIFACTOR } from './factors'
+import { DEFAULT_REGIME, type QuantParams } from './quantEngine'
+import { DEFAULT_RISK } from './risk'
 
 // 규칙형 모델의 기본 후보 풀 — 국장 대형주 + 미장 대표 종목·섹터.
 // 종목을 사람이 지정하는 게 아니라, 모델이 이 풀을 훑어 조건을 만족하는
@@ -22,7 +25,7 @@ const DEFAULT_SCREEN_POOL = [
 import { DEFAULT_SETTINGS, type SimSettings, type StrategyConfig } from './types'
 import type { HistoryRange } from '../../lib/history'
 
-export type ModelType = 'rule' | 'algo' | 'rotation'
+export type ModelType = 'rule' | 'algo' | 'rotation' | 'quant'
 
 export interface ModelMeta {
   id: string
@@ -33,6 +36,7 @@ export interface ModelMeta {
   defaultSymbols: string[]
   defaultTaxZero?: boolean // 기본 유니버스가 해외 상장이라 거래세 0 시작
   rotation?: RotationParams // type==='rotation'일 때 기본 파라미터
+  quant?: QuantParams // type==='quant'일 때 기본 파라미터
 }
 
 export const MODEL_META: ModelMeta[] = [
@@ -112,6 +116,34 @@ export const MODEL_META: ModelMeta[] = [
     defaultTaxZero: true,
     rotation: { ...DEFAULT_ROTATION, lookbackDays: 126, skipDays: 0, topN: 5, rebalanceDays: 21, absoluteFilter: 'aboveSMA', absSmaPeriod: 200 },
   },
+  {
+    id: 'quant-composite',
+    name: '퀀트 다중팩터 (레짐 + 리스크)',
+    short: '퀀트 합성',
+    type: 'quant',
+    desc: '팩터 하나에 걸지 않고 모멘텀·추세품질·저변동성·단기반전을 z-score로 표준화해 가중 합성합니다. 시장이 장기 이평선 아래면 노출을 줄이고(레짐 필터), 종목별 비중은 변동성에 반비례해 배분합니다(리스크 패리티). 수익 극대화가 아니라 성과의 기복을 줄이는 설계입니다.',
+    defaultSymbols: [...DEFAULT_SCREEN_POOL],
+    quant: {
+      factor: { ...DEFAULT_MULTIFACTOR },
+      regime: { ...DEFAULT_REGIME },
+      risk: { ...DEFAULT_RISK, sizing: 'inverseVol' },
+      rebalanceBandPct: 5,
+    },
+  },
+  {
+    id: 'quant-voltarget',
+    name: '퀀트 변동성 타게팅',
+    short: '변동성 타게팅',
+    type: 'quant',
+    desc: '같은 다중팩터 신호를 쓰되, 포트폴리오 예상 변동성을 목표치(연 15%)에 맞춰 투자 비중 자체를 조절합니다. 시장이 요동칠수록 자동으로 현금 비중이 늘어 낙폭을 억제합니다. 강세장에서는 노출이 줄어 지수에 뒤질 수 있습니다.',
+    defaultSymbols: [...DEFAULT_SCREEN_POOL],
+    quant: {
+      factor: { ...DEFAULT_MULTIFACTOR, topN: 5 },
+      regime: { ...DEFAULT_REGIME, riskOffExposurePct: 20 },
+      risk: { ...DEFAULT_RISK, sizing: 'inverseVol', volTarget: true, targetVolPct: 15 },
+      rebalanceBandPct: 4,
+    },
+  },
 ]
 
 export const ALL_MODEL_IDS = MODEL_META.map((m) => m.id)
@@ -133,6 +165,7 @@ export interface ModelConfig {
   vr?: VRParams
   rot?: RotationParams
   sig?: SignalRotationParams // 규칙형 — 스크리닝·순위·슬롯
+  quant?: QuantParams // 퀀트형 — 팩터·레짐·리스크
 }
 
 export function defaultConfig(modelId: string): ModelConfig {
@@ -142,6 +175,18 @@ export function defaultConfig(modelId: string): ModelConfig {
   if (modelId === 'infinite-buying') return { ...base, ib: { ...DEFAULT_IB_PARAMS } }
   if (modelId === 'value-rebalancing') return { ...base, vr: { ...DEFAULT_VR_PARAMS } }
   if (meta.type === 'rotation') return { ...base, rot: { ...(meta.rotation ?? DEFAULT_ROTATION) } }
+  if (meta.type === 'quant') {
+    const q = meta.quant!
+    return {
+      ...base,
+      quant: {
+        factor: { ...q.factor, factors: q.factor.factors.map((f) => ({ ...f })) },
+        regime: { ...q.regime },
+        risk: { ...q.risk },
+        rebalanceBandPct: q.rebalanceBandPct,
+      },
+    }
+  }
   return { ...base, strategy: clonePreset(modelId), sig: { ...DEFAULT_SIGNAL_ROTATION } }
 }
 

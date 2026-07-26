@@ -6,6 +6,9 @@ import { useState } from 'react'
 const SUGGESTED: { symbol: string; label: string }[] = [
   { symbol: '000660.KS', label: 'SK하이닉스' },
   { symbol: '005930.KS', label: '삼성전자' },
+  { symbol: '035420.KS', label: '네이버' },
+  { symbol: '051910.KS', label: 'LG화학' },
+  { symbol: '005380.KS', label: '현대차' },
   { symbol: '069500.KS', label: 'KODEX 200' },
   { symbol: '122630.KS', label: 'KODEX 레버리지 2배⚠' },
   { symbol: '^KS11', label: 'KOSPI' },

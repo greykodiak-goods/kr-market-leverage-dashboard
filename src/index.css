@@ -2726,3 +2726,65 @@ body {
   line-height: 1.7;
 }
 .bt-base-row td { background: var(--panel); }
+
+/* backtest — 퀀트 레이어 편집기 · 상태 패널 */
+.bt-quant-editor { margin-top: 4px; }
+.bt-layer {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: var(--bg);
+}
+.bt-layer-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+.bt-layer-no {
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--accent);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+.bt-factor-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--border);
+}
+.bt-factor-name { font-size: 12.5px; font-weight: 700; min-width: 92px; }
+.bt-factor-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.bt-factor-row input { width: 66px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; font-size: 12px; font-family: inherit; }
+.bt-factor-desc { flex: 1 1 100%; font-size: 11px; color: var(--text-faint); line-height: 1.5; }
+.bt-factor-add { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 8px; font-size: 11px; color: var(--text-faint); }
+.bt-quant-status { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+.bt-quant-chip {
+  flex: 1 1 180px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.bt-quant-chip.ok { border-left: 3px solid #12b76a; }
+.bt-quant-chip.off { border-left: 3px solid var(--danger); }
+.bt-quant-chip .lbl { font-size: 10px; font-weight: 700; color: var(--text-faint); }
+.bt-quant-chip strong { font-size: 15px; }
+.bt-quant-chip .det { font-size: 10.5px; color: var(--text-faint); line-height: 1.4; }
+.bt-fw { font-size: 9.5px; color: var(--text-faint); }
+.bt-card-type.quant, .bt-model-btn.quant.active { background: #7c4dff; border-color: #7c4dff; color: #fff; }

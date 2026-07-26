@@ -15,6 +15,7 @@ import { runInfiniteBuying, runValueRebalancing, DEFAULT_IB_PARAMS, DEFAULT_VR_P
 import { clonePreset } from './strategies'
 import { runRotation, DEFAULT_ROTATION, type Candidate } from './rotation'
 import { runSignalRotation, DEFAULT_SIGNAL_ROTATION, type ScreenRow } from './signalRotation'
+import { runQuant, type QuantSnapshot } from './quantEngine'
 import { modelMeta, type ModelConfig } from './models'
 
 export const MIN_WARMUP = 120 // 지표 warm-up용 최소 과거 봉 수
@@ -55,6 +56,8 @@ export interface PortfolioResult {
   modelName: string
   isRotation?: boolean
   isScreening?: boolean
+  isQuant?: boolean
+  quantSnapshot?: QuantSnapshot | null
   // 벤치마크가 정확히 무엇인지 — 화면에 그대로 표기한다.
   benchmarkLabel: string
   benchmarkDetail: string
@@ -203,6 +206,31 @@ export function computeAdvanced(equity: EquityPoint[], cagrPct: number, mddPct: 
 
 export function runPortfolio(modelId: string, cfg: ModelConfig, histories: Record<string, HistoryResult>): PortfolioResult {
   const meta = modelMeta(modelId)
+
+  // 퀀트형 — 다중팩터 + 레짐 + 리스크 레이어
+  if (meta.type === 'quant') {
+    const avail: Record<string, HistoryResult> = {}
+    for (const s of cfg.symbols) if (histories[s]) avail[s] = histories[s]
+    const r = runQuant(avail, cfg.startDate, cfg.quant ?? meta.quant!, cfg.settings)
+    const metrics = computeMetrics(r.equity, r.trades, cfg.settings.initialCapital, r.daysHolding)
+    return {
+      modelId,
+      modelName: meta.name,
+      isQuant: true,
+      quantSnapshot: r.lastSnapshot,
+      benchmarkLabel: `후보 풀 ${r.universe.length}종목 균등보유`,
+      benchmarkDetail: `${r.universe.join(' · ')} — 시뮬레이션 시작일에 자본을 ${r.universe.length}등분해 전부 사서 끝까지 들고 있었을 경우입니다. 이 모델은 팩터 점수로 일부만 골라 위험 기준으로 비중을 나누므로, 초과수익이 양수여야 팩터·리스크 레이어가 값어치를 한 것입니다.`,
+      equity: r.equity,
+      metrics,
+      advanced: computeAdvanced(r.equity, metrics.cagrPct, metrics.mddPct),
+      trades: r.trades,
+      events: r.events,
+      sleeves: [],
+      startDate: r.startDate,
+      endDate: r.endDate,
+      universe: r.universe,
+    }
+  }
 
   // 규칙형 — 후보 풀을 스크리닝해 상위 N개를 보유(종목 발굴).
   if (meta.type === 'rule') {

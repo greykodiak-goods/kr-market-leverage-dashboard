@@ -17,6 +17,8 @@ import { InfoTip } from '../../components/InfoTip'
 import { clonePreset } from './strategies'
 import { LiveTracking } from './LiveTracking'
 import { RobustnessPanel } from './RobustnessPanel'
+import { QuantPanel } from './QuantPanel'
+import { QuantEditor } from './QuantEditor'
 import { DataProvenance } from './DataProvenance'
 import type { Enrollment } from './spec'
 import type { SimSettings } from './types'
@@ -105,7 +107,9 @@ export function ModelDetail({
 
   // 모델 유형별 자금 운용 방식 — 체결 이력을 읽을 때 필요한 해석 열쇠.
   const sizingRule =
-    meta.type === 'rule'
+    meta.type === 'quant'
+      ? `팩터 점수 상위 ${cfg.quant?.factor.topN ?? 4}종목을 ${cfg.quant?.risk.sizing === 'inverseVol' ? '변동성에 반비례해(역변동성 가중)' : '균등하게'} 배분합니다${cfg.quant?.risk.volTarget ? `, 그 뒤 포트폴리오 예상 변동성이 연 ${cfg.quant?.risk.targetVolPct}%가 되도록 총 노출을 조절합니다` : ''}. 레짐이 위험이면 노출을 ${cfg.quant?.regime.riskOffExposurePct ?? 0}%로 낮춥니다. 목표 대비 ${cfg.quant?.rebalanceBandPct ?? 5}%p 이상 벗어날 때만 주문을 내므로(밴드 리밸런싱) 부분 매수·부분 매도가 발생합니다.`
+      : meta.type === 'rule'
       ? `슬롯 ${cfg.sig?.topN ?? 3}개 균등 분할. 한 종목에 "그 시점 총자산 ÷ ${cfg.sig?.topN ?? 3}"만큼만 넣습니다(현금이 모자라면 그만큼). 즉 전액 매수가 아니라 약 ${Math.round(100 / (cfg.sig?.topN ?? 3))}%씩 나눠 담습니다. 매도는 해당 종목 전량이며(부분 매도 없음), 슬롯이 비어야 새로 삽니다.`
       : modelId === 'infinite-buying'
         ? `1회분 = 사이클 원금 ÷ ${cfg.ib?.splits ?? 40}. 매일 정액 0.5회분(항상) + 평단매수 0.5회분(종가가 평단 아래일 때만) 매수하고, 목표가 도달 시 전량 매도합니다. 전액 매수가 아니라 소액 분할입니다.`
@@ -129,7 +133,7 @@ export function ModelDetail({
           {meta.name} <span className="bt-card-stage">백테스트 단계</span>
         </h3>
         <span className={`bt-card-type ${meta.type}`}>
-          {meta.type === 'rule' ? '규칙형' : meta.type === 'algo' ? '자금관리' : '종목선정'}
+          {meta.type === 'rule' ? '규칙형' : meta.type === 'algo' ? '자금관리' : meta.type === 'quant' ? '퀀트' : '종목선정'}
         </span>
       </div>
 
@@ -309,6 +313,10 @@ export function ModelDetail({
           </div>
         )}
 
+        {meta.type === 'quant' && cfg.quant && (
+          <QuantEditor quant={cfg.quant} onChange={(quant) => onPatch({ quant })} />
+        )}
+
         {isRot && (
           <div className="bt-controls bt-algo-params">
             <label>
@@ -467,6 +475,8 @@ export function ModelDetail({
           </div>
 
           <DataProvenance histories={histories} />
+
+          {result.isQuant && <QuantPanel cfg={cfg} result={result} />}
 
           <RobustnessPanel modelId={modelId} cfg={cfg} result={result} histories={histories} />
 
