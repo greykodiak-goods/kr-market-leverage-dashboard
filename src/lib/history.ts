@@ -56,29 +56,127 @@ const PROXIES: { name: string; wrap: (url: string) => string }[] = [
 
 export const DATA_SOURCE_LABEL = 'Yahoo Finance chart API v8 (비공식·무료·15~20분 지연)'
 
-const CACHE_PREFIX = 'history-cache:'
-const CACHE_VERSION = 'v2' // v1 = 배당 미조정. 버전을 올려 옛 캐시를 무효화한다.
+export const CACHE_PREFIX = 'history-cache:'
+// v1 = 배당 미조정, v2 = 객체 배열(용량 초과 유발), v3 = 컬럼형 압축.
+// 모델·종목이 늘면 봉당 객체 직렬화가 localStorage 5MB 한도를 넘겨
+// QuotaExceededError로 캐시가 통째로 깨졌다. 열 단위로 저장해 크기를 줄이고,
+// 그래도 넘치면 오래된 항목부터 자동으로 비운다.
+const CACHE_VERSION = 'v3'
 const CACHE_TTL_MS = 12 * 60 * 60 * 1000 // 12h — daily bars don't change intraday for sim purposes
 
 function cacheKeyOf(symbol: string, range: HistoryRange): string {
   return `${CACHE_PREFIX}${CACHE_VERSION}:${symbol}:${range}`
 }
 
-function readCache(key: string): HistoryResult | null {
+// 컬럼형 저장 포맷 — 봉마다 키 이름을 반복하지 않아 크기가 크게 준다.
+// 시뮬레이션에 쓰이지 않는 필드(t, rawClose)는 저장하지 않는다.
+export interface PackedHistory {
+  s: string
+  cur: string
+  ex: string
+  it: string
+  src: string
+  px: string
+  adj: AdjustmentMode
+  drop: number
+  at: number
+  d: string // 날짜를 쉼표로 이어붙임
+  o: number[]
+  h: number[]
+  l: number[]
+  c: number[]
+  v: number[]
+}
+
+const r4 = (x: number) => Math.round(x * 10000) / 10000
+
+export function packHistory(hist: HistoryResult): PackedHistory {
+  return {
+    s: hist.symbol,
+    cur: hist.currency,
+    ex: hist.exchange,
+    it: hist.instrumentType,
+    src: hist.source,
+    px: hist.proxyUsed,
+    adj: hist.adjustment,
+    drop: hist.droppedBars,
+    at: hist.fetchedAt,
+    d: hist.bars.map((b) => b.date).join(','),
+    o: hist.bars.map((b) => r4(b.o)),
+    h: hist.bars.map((b) => r4(b.h)),
+    l: hist.bars.map((b) => r4(b.l)),
+    c: hist.bars.map((b) => r4(b.c)),
+    v: hist.bars.map((b) => b.v),
+  }
+}
+
+export function unpackHistory(p: PackedHistory): HistoryResult {
+  const dates = p.d.length > 0 ? p.d.split(',') : []
+  const bars: DailyBar[] = dates.map((date, i) => ({
+    date,
+    t: Math.floor(Date.parse(date + 'T00:00:00Z') / 1000),
+    o: p.o[i],
+    h: p.h[i],
+    l: p.l[i],
+    c: p.c[i],
+    v: p.v[i],
+  }))
+  return {
+    symbol: p.s,
+    currency: p.cur,
+    exchange: p.ex,
+    instrumentType: p.it,
+    bars,
+    stale: false,
+    fetchedAt: p.at,
+    source: p.src,
+    proxyUsed: p.px,
+    adjustment: p.adj,
+    droppedBars: p.drop,
+  }
+}
+
+export function readHistoryCache(key: string): HistoryResult | null {
   try {
     const raw = localStorage.getItem(key)
     if (!raw) return null
-    return JSON.parse(raw) as HistoryResult
+    return unpackHistory(JSON.parse(raw) as PackedHistory)
   } catch {
     return null
   }
 }
 
-function writeCache(key: string, h: HistoryResult) {
-  try {
-    localStorage.setItem(key, JSON.stringify(h))
-  } catch {
-    /* quota / disabled storage */
+// 오래된 히스토리 캐시부터 비운다(LRU). 다른 앱 데이터(설정·등록·보드)는
+// 건드리지 않는다 — 재조회로 복구 가능한 시세만 버린다.
+function evictOldest(exceptKey: string): boolean {
+  const entries: { key: string; at: number }[] = []
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i)
+    if (!k || !k.startsWith(CACHE_PREFIX) || k === exceptKey) continue
+    let at = 0
+    try {
+      at = (JSON.parse(localStorage.getItem(k) ?? '{}') as PackedHistory).at ?? 0
+    } catch {
+      /* 깨진 항목은 우선 제거 대상 */
+    }
+    entries.push({ key: k, at })
+  }
+  if (entries.length === 0) return false
+  entries.sort((a, b) => a.at - b.at)
+  localStorage.removeItem(entries[0].key)
+  return true
+}
+
+export function writeHistoryCache(key: string, h: HistoryResult) {
+  const payload = JSON.stringify(packHistory(h))
+  for (let attempt = 0; attempt < 40; attempt++) {
+    try {
+      localStorage.setItem(key, payload)
+      return
+    } catch {
+      // 용량 초과 — 가장 오래된 시세 캐시를 비우고 재시도
+      if (!evictOldest(key)) return // 비울 게 없으면 캐시 없이 진행(동작에는 지장 없음)
+    }
   }
 }
 
@@ -152,7 +250,7 @@ export function parseYahooDaily(symbol: string, json: any, proxyUsed: string): H
 
 export async function getDailyHistory(symbol: string, range: HistoryRange = '10y'): Promise<HistoryResult> {
   const cacheKey = cacheKeyOf(symbol, range)
-  const cached = readCache(cacheKey)
+  const cached = readHistoryCache(cacheKey)
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return cached
 
   // events=div,split → adjclose 동반 제공(배당 조정 계수 산출용)
@@ -169,7 +267,7 @@ export async function getDailyHistory(symbol: string, range: HistoryRange = '10y
       if (!res.ok) throw new Error(`${proxy.name} HTTP ${res.status}`)
       const json = await res.json()
       const hist = parseYahooDaily(symbol, json, proxy.name)
-      writeCache(cacheKey, hist)
+      writeHistoryCache(cacheKey, hist)
       return hist
     } catch (err) {
       lastErr = err

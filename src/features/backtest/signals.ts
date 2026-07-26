@@ -24,6 +24,24 @@ export function computeSignals(
   result: PortfolioResult,
   histories: Record<string, HistoryResult>,
 ): SymbolSignal[] {
+  // 로테이션형: 최신 리밸런싱 시점의 후보 순위·탈락 사유를 그대로 보여준다.
+  if (result.isRotation) {
+    const held = new Set(result.trades.filter((t) => t.exitDate == null).map((t) => t.symbol))
+    return (result.lastSelection ?? []).map((c) => ({
+      symbol: c.symbol ?? '',
+      asOf: result.lastSelectionDate ?? '—',
+      holding: held.has(c.symbol),
+      position: held.has(c.symbol) ? '보유 중' : '미보유',
+      decision: c.passed ? (c.rank != null && c.rank <= (cfg.rot?.topN ?? 1) ? `편입 (순위 ${c.rank}위)` : `대기 (순위 ${c.rank ?? '—'}위)`) : '제외',
+      reasons: c.passed
+        ? [{ text: '모든 선정 조건 통과', detail: `점수 ${c.score != null ? (c.score * 100).toFixed(1) + '%' : '—'} · 순위 ${c.rank ?? '—'}위`, met: true }]
+        : c.reasons.map((r) => ({ text: r, detail: `점수 ${c.score != null ? (c.score * 100).toFixed(1) + '%' : '—'}`, met: false })),
+      summary: c.passed
+        ? `선정 조건을 통과했고 후보 중 ${c.rank ?? '—'}위입니다`
+        : `탈락: ${c.reasons.join(' / ')}`,
+    }))
+  }
+
   return result.sleeves.map((sleeve) => {
     const hist = histories[sleeve.symbol]
     const bars = hist?.bars ?? []

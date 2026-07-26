@@ -17,6 +17,7 @@ import type { ModelConfig } from './models'
 import { modelMeta } from './models'
 import { conditionText } from './explain'
 import { DEFAULT_IB_PARAMS, DEFAULT_VR_PARAMS } from './algoEngine'
+import { DEFAULT_ROTATION } from './rotation'
 
 export const SPEC_VERSION = 1
 
@@ -24,7 +25,7 @@ export interface ModelSpec {
   specVersion: number
   modelId: string
   modelName: string
-  engine: 'rule' | 'infinite-buying' | 'value-rebalancing'
+  engine: 'rule' | 'infinite-buying' | 'value-rebalancing' | 'rotation'
   universe: string[]
   dataRange: ModelConfig['range']
   simStartDate: string
@@ -74,7 +75,13 @@ export function fingerprint(spec: ModelSpec): string {
 export function buildSpec(modelId: string, cfg: ModelConfig): ModelSpec {
   const meta = modelMeta(modelId)
   const engine =
-    modelId === 'infinite-buying' ? 'infinite-buying' : modelId === 'value-rebalancing' ? 'value-rebalancing' : 'rule'
+    modelId === 'infinite-buying'
+      ? 'infinite-buying'
+      : modelId === 'value-rebalancing'
+        ? 'value-rebalancing'
+        : meta.type === 'rotation'
+          ? 'rotation'
+          : 'rule'
 
   const rules: ModelSpec['rules'] = {}
   if (engine === 'rule' && cfg.strategy) {
@@ -85,9 +92,26 @@ export function buildSpec(modelId: string, cfg: ModelConfig): ModelSpec {
     const p = cfg.ib ?? DEFAULT_IB_PARAMS
     rules.params = { 분할수: p.splits, 목표수익률Pct: p.targetPct, 사이클손절Pct: p.cycleStopPct }
     rules.raw = p
-  } else {
+  } else if (engine === 'value-rebalancing') {
     const p = cfg.vr ?? DEFAULT_VR_PARAMS
     rules.params = { 주기거래일: p.periodDays, V성장률Pct: p.growthPct, 밴드Pct: p.bandPct, 초기주식비중Pct: p.initialStockPct }
+    rules.raw = p
+  } else {
+    const p = cfg.rot ?? DEFAULT_ROTATION
+    rules.params = {
+      보유종목수: p.topN,
+      측정기간일: p.lookbackDays,
+      최근제외일: p.skipDays,
+      리밸런싱주기일: p.rebalanceDays,
+      이평필터기간: p.absSmaPeriod,
+    }
+    rules.buy = [
+      `후보를 ${p.lookbackDays}일 ${p.scoreMethod === 'momentum' ? '수익률' : '위험조정수익률'}(최근 ${p.skipDays}일 제외)로 순위 산정`,
+      `필터: ${p.absoluteFilter === 'positive' ? '수익률 양수인 종목만' : p.absoluteFilter === 'aboveSMA' ? `종가 > ${p.absSmaPeriod}일선인 종목만` : '절대 필터 없음'}`,
+      ...(p.trendTemplate ? ['미너비니 추세 템플릿 7조건 전부 통과한 종목만'] : []),
+      `통과 종목 중 상위 ${p.topN}개 균등 보유`,
+    ]
+    rules.sell = [`${p.rebalanceDays}거래일마다 재평가 — 상위 ${p.topN}에서 탈락하면 전량 매도`]
     rules.raw = p
   }
 
@@ -110,8 +134,12 @@ export function buildSpec(modelId: string, cfg: ModelConfig): ModelSpec {
     },
     rules,
     execution: {
-      signal: engine === 'rule' ? '당일 종가 기준 판정' : '당일 종가 LOC(원저 방식)',
-      fill: engine === 'rule' ? '익일 시가 + 슬리피지' : '당일 종가 + 슬리피지 (목표매도는 지정가)',
+      signal:
+        engine === 'rule' || engine === 'rotation' ? '당일 종가 기준 판정' : '당일 종가 LOC(원저 방식)',
+      fill:
+        engine === 'rule' || engine === 'rotation'
+          ? '익일 시가 + 슬리피지'
+          : '당일 종가 + 슬리피지 (목표매도는 지정가)',
       lookahead: '각 시점에서 이후 데이터 미참조 (워크포워드)',
     },
   }

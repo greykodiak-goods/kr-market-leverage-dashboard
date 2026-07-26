@@ -6,6 +6,7 @@ import { getDailyHistory, type HistoryResult } from '../../lib/history'
 import { runPortfolio, type PortfolioResult } from './portfolio'
 import { modelMeta, MODEL_META, type ModelConfig } from './models'
 import { DEFAULT_IB_PARAMS, DEFAULT_VR_PARAMS } from './algoEngine'
+import { DEFAULT_ROTATION } from './rotation'
 import { findDoc } from './modelDocs'
 import { ConditionEditor } from './ConditionEditor'
 import { UniverseEditor, symbolLabel } from './UniverseEditor'
@@ -60,6 +61,7 @@ export function ModelDetail({
 }: Props) {
   const meta = modelMeta(modelId)
   const isAlgo = meta.type === 'algo'
+  const isRot = meta.type === 'rotation'
   const doc = findDoc(modelId)
 
   const [busy, setBusy] = useState(false)
@@ -113,7 +115,9 @@ export function ModelDetail({
         <h3>
           {meta.name} <span className="bt-card-stage">백테스트 단계</span>
         </h3>
-        <span className={`bt-card-type ${meta.type}`}>{meta.type === 'rule' ? '규칙형' : '자금관리'}</span>
+        <span className={`bt-card-type ${meta.type}`}>
+          {meta.type === 'rule' ? '규칙형' : meta.type === 'algo' ? '자금관리' : '종목선정'}
+        </span>
       </div>
 
       {/* 다른 기법으로 바로 전환 — 보드를 거치지 않는다 */}
@@ -123,7 +127,7 @@ export function ModelDetail({
           <button
             key={m.id}
             type="button"
-            className={`bt-model-btn${m.id === modelId ? ' active' : ''}${m.type === 'algo' ? ' algo' : ''}`}
+            className={`bt-model-btn${m.id === modelId ? ' active' : ''}${m.type !== 'rule' ? ` ${m.type}` : ''}`}
             onClick={() => onSwitch(m.id)}
           >
             {m.short}
@@ -155,7 +159,7 @@ export function ModelDetail({
         </details>
       )}
 
-      <UniverseEditor symbols={cfg.symbols} onChange={(symbols) => onPatch({ symbols })} />
+      <UniverseEditor symbols={cfg.symbols} onChange={(symbols) => onPatch({ symbols })} isPool={isRot} />
       {hasLeveraged && (
         <div className="bt-warn bt-lev-warn">
           ⚠️ 유니버스에 레버리지 ETF 포함 — 변동성 잠식으로 장기 성과가 기초지수와 크게 괴리될 수 있고, 하락장에서
@@ -187,7 +191,7 @@ export function ModelDetail({
 
       {/* ---- 조건/파라미터 ---- */}
       <div className="bt-strategy">
-        {!isAlgo && cfg.strategy && (
+        {meta.type === 'rule' && cfg.strategy && (
           <>
             <ConditionEditor
               label="🟢 매수 조건"
@@ -250,6 +254,74 @@ export function ModelDetail({
               초기 주식 비중 %
               <input type="number" min={10} max={100} value={(cfg.vr ?? DEFAULT_VR_PARAMS).initialStockPct} onChange={(e) => onPatch({ vr: { ...(cfg.vr ?? DEFAULT_VR_PARAMS), initialStockPct: num(e.target.value, 75) } })} />
             </label>
+          </div>
+        )}
+
+        {isRot && (
+          <div className="bt-controls bt-algo-params">
+            <label>
+              보유 종목 수 (Top-N)
+              <InfoTip text="순위 상위 몇 종목을 들고 갈지. 1이면 가장 강한 하나에 집중(수익·변동성 모두 큼), 3~5면 분산됩니다." />
+              <input type="number" min={1} max={20} value={(cfg.rot ?? DEFAULT_ROTATION).topN}
+                onChange={(e) => onPatch({ rot: { ...(cfg.rot ?? DEFAULT_ROTATION), topN: num(e.target.value, 1) } })} />
+            </label>
+            <label>
+              점수 측정 기간 (거래일)
+              <InfoTip text="252 ≈ 12개월. 모멘텀 연구에서 가장 많은 사후검증 근거를 가진 기간입니다. 짧게 잡으면 반응이 빠르지만 매매가 늘고 소음에 흔들립니다." />
+              <input type="number" min={20} max={504} value={(cfg.rot ?? DEFAULT_ROTATION).lookbackDays}
+                onChange={(e) => onPatch({ rot: { ...(cfg.rot ?? DEFAULT_ROTATION), lookbackDays: num(e.target.value, 252) } })} />
+            </label>
+            <label>
+              최근 제외 (거래일)
+              <InfoTip text="21 ≈ 1개월. 직전 1개월을 점수에서 빼는 관행(12-1 모멘텀) — 단기 반전 효과에 당하지 않기 위함입니다. 0이면 최근까지 전부 반영." />
+              <input type="number" min={0} max={63} value={(cfg.rot ?? DEFAULT_ROTATION).skipDays}
+                onChange={(e) => onPatch({ rot: { ...(cfg.rot ?? DEFAULT_ROTATION), skipDays: num(e.target.value, 21) } })} />
+            </label>
+            <label>
+              리밸런싱 주기 (거래일)
+              <input type="number" min={5} max={252} value={(cfg.rot ?? DEFAULT_ROTATION).rebalanceDays}
+                onChange={(e) => onPatch({ rot: { ...(cfg.rot ?? DEFAULT_ROTATION), rebalanceDays: num(e.target.value, 21) } })} />
+            </label>
+            <label>
+              점수 방식
+              <select value={(cfg.rot ?? DEFAULT_ROTATION).scoreMethod}
+                onChange={(e) => onPatch({ rot: { ...(cfg.rot ?? DEFAULT_ROTATION), scoreMethod: e.target.value as 'momentum' | 'sharpe' } })}>
+                <option value="momentum">수익률 (모멘텀)</option>
+                <option value="sharpe">위험조정 수익률</option>
+              </select>
+            </label>
+            <label>
+              하락 방어 필터
+              <InfoTip text="후보가 이 조건을 못 넘으면 아예 사지 않고 그 몫을 현금으로 둡니다. 하락장에서 손실을 줄이는 핵심 장치입니다." />
+              <select value={(cfg.rot ?? DEFAULT_ROTATION).absoluteFilter}
+                onChange={(e) => onPatch({ rot: { ...(cfg.rot ?? DEFAULT_ROTATION), absoluteFilter: e.target.value as 'none' | 'positive' | 'aboveSMA' } })}>
+                <option value="none">없음</option>
+                <option value="positive">수익률 양수일 때만 (절대 모멘텀)</option>
+                <option value="aboveSMA">이동평균선 위일 때만</option>
+              </select>
+            </label>
+            {(cfg.rot ?? DEFAULT_ROTATION).absoluteFilter === 'aboveSMA' && (
+              <label>
+                이평 기간
+                <input type="number" min={20} max={300} value={(cfg.rot ?? DEFAULT_ROTATION).absSmaPeriod}
+                  onChange={(e) => onPatch({ rot: { ...(cfg.rot ?? DEFAULT_ROTATION), absSmaPeriod: num(e.target.value, 200) } })} />
+              </label>
+            )}
+            <label className="bt-check">
+              <input type="checkbox" checked={(cfg.rot ?? DEFAULT_ROTATION).trendTemplate}
+                onChange={(e) => onPatch({ rot: { ...(cfg.rot ?? DEFAULT_ROTATION), trendTemplate: e.target.checked } })} />
+              미너비니 추세 템플릿 적용
+              <InfoTip text="50·150·200일선 정렬, 200일선 상승, 52주 최저 대비 +30% 이상, 52주 최고 대비 -25% 이내 등 7개 조건을 모두 통과한 종목만 후보로 남깁니다." />
+            </label>
+          </div>
+        )}
+
+        {isRot && (
+          <div className="bt-chart-caption">
+            로테이션형은 <strong>후보 풀에서 모델이 스스로 종목을 고릅니다</strong> — 위 유니버스는 "살 수 있는
+            후보 목록"이지 보유 종목이 아닙니다. 벤치마크는 <strong>후보 풀 전체 균등보유</strong>이므로, 초과수익이
+            양수라면 "고른 것"이 "다 들고 있는 것"보다 나았다는 뜻입니다. 설정의 진입비중·손절·익절은 적용되지
+            않습니다(Top-N 균등배분).
           </div>
         )}
 

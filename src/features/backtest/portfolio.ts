@@ -13,6 +13,7 @@ import { computeMetrics } from './metrics'
 import { runBacktest } from './engine'
 import { runInfiniteBuying, runValueRebalancing, DEFAULT_IB_PARAMS, DEFAULT_VR_PARAMS } from './algoEngine'
 import { clonePreset } from './strategies'
+import { runRotation, DEFAULT_ROTATION, type Candidate } from './rotation'
 import { modelMeta, type ModelConfig } from './models'
 
 export const MIN_WARMUP = 120 // 지표 warm-up용 최소 과거 봉 수
@@ -44,6 +45,9 @@ export interface AdvancedMetrics {
 export interface PortfolioResult {
   modelId: string
   modelName: string
+  isRotation?: boolean
+  lastSelection?: Candidate[]
+  lastSelectionDate?: string
   equity: EquityPoint[]
   metrics: SimMetrics
   advanced: AdvancedMetrics
@@ -161,6 +165,31 @@ export function computeAdvanced(equity: EquityPoint[], cagrPct: number, mddPct: 
 
 export function runPortfolio(modelId: string, cfg: ModelConfig, histories: Record<string, HistoryResult>): PortfolioResult {
   const meta = modelMeta(modelId)
+
+  // 로테이션형은 후보 풀 전체가 하나의 포트폴리오다(슬리브 분할 아님).
+  if (meta.type === 'rotation') {
+    const avail: Record<string, HistoryResult> = {}
+    for (const s of cfg.symbols) if (histories[s]) avail[s] = histories[s]
+    const r = runRotation(avail, cfg.startDate, cfg.rot ?? DEFAULT_ROTATION, cfg.settings)
+    const metrics = computeMetrics(r.equity, r.trades, cfg.settings.initialCapital, r.daysHolding)
+    return {
+      modelId,
+      modelName: meta.name,
+      isRotation: true,
+      lastSelection: r.lastSelection,
+      lastSelectionDate: r.lastSelectionDate,
+      equity: r.equity,
+      metrics,
+      advanced: computeAdvanced(r.equity, metrics.cagrPct, metrics.mddPct),
+      trades: r.trades,
+      events: r.events,
+      sleeves: [],
+      startDate: r.startDate,
+      endDate: r.endDate,
+      universe: r.universe,
+    }
+  }
+
   const universe = cfg.symbols.filter((s) => histories[s])
   if (universe.length === 0) throw new Error('유니버스 종목의 시세 데이터를 하나도 불러오지 못했습니다')
   const sleeveCapital = cfg.settings.initialCapital / universe.length

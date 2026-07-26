@@ -2647,3 +2647,15 @@ body {
 .bt-doc > summary {
   font-size: 13.5px;
 }
+
+/* backtest — 로테이션 체크박스 */
+.bt-check {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 6px !important;
+}
+.bt-check input[type='checkbox'] {
+  width: auto;
+  margin: 0;
+}
+.bt-card-type.rotation, .bt-model-btn.rotation.active { background: #12b76a; border-color: #12b76a; color: #fff; }

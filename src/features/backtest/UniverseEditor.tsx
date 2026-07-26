@@ -14,6 +14,24 @@ const SUGGESTED: { symbol: string; label: string }[] = [
   { symbol: 'NVDA', label: '엔비디아' },
   { symbol: 'SOXL', label: 'SOXL 3배⚠' },
   { symbol: 'TQQQ', label: 'TQQQ 3배⚠' },
+  { symbol: 'XLK', label: '미 기술섹터' },
+  { symbol: 'SMH', label: '미 반도체' },
+  { symbol: 'XLV', label: '미 헬스케어' },
+  { symbol: 'XLF', label: '미 금융' },
+  { symbol: 'XLE', label: '미 에너지' },
+  { symbol: 'XLY', label: '미 경기소비' },
+  { symbol: 'XLI', label: '미 산업재' },
+  { symbol: 'EFA', label: '선진국(미국외)' },
+  { symbol: 'IEF', label: '미 중기국채' },
+  { symbol: 'TLT', label: '미 장기국채' },
+  { symbol: 'GLD', label: '금' },
+  { symbol: 'VNQ', label: '미 리츠' },
+  { symbol: 'NVDA', label: '엔비디아' },
+  { symbol: 'AVGO', label: '브로드컴' },
+  { symbol: 'MSFT', label: '마이크로소프트' },
+  { symbol: 'AAPL', label: '애플' },
+  { symbol: 'AMD', label: 'AMD' },
+  { symbol: 'META', label: '메타' },
 ]
 
 export function symbolLabel(symbol: string): string {
@@ -23,9 +41,10 @@ export function symbolLabel(symbol: string): string {
 interface Props {
   symbols: string[]
   onChange: (next: string[]) => void
+  isPool?: boolean // 로테이션형: 보유 목록이 아니라 "고를 수 있는 후보 목록"
 }
 
-export function UniverseEditor({ symbols, onChange }: Props) {
+export function UniverseEditor({ symbols, onChange, isPool }: Props) {
   const [custom, setCustom] = useState('')
 
   function toggle(sym: string) {
@@ -43,7 +62,9 @@ export function UniverseEditor({ symbols, onChange }: Props) {
   return (
     <div className="bt-universe">
       <div className="bt-universe-head">
-        운용 유니버스 ({symbols.length}종목 — 자본 균등분할·독립 운용)
+        {isPool
+          ? `🎯 후보 풀 (${symbols.length}종목 — 모델이 이 중에서 스스로 골라 보유)`
+          : `운용 유니버스 (${symbols.length}종목 — 자본 균등분할·독립 운용)`}
       </div>
       <div className="bt-universe-chips">
         {symbols.map((sym) => (
