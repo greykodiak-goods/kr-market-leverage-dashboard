@@ -42,6 +42,35 @@ export function computeSignals(
     }))
   }
 
+  // 규칙형(종목발굴): 후보 풀 스크리닝 결과 — 누가 통과했고 왜 떨어졌는가.
+  if (result.isScreening) {
+    const topN = cfg.sig?.topN ?? 3
+    return (result.lastScreen ?? []).map((r) => ({
+      symbol: r.symbol,
+      asOf: result.lastScreenDate ?? '—',
+      holding: r.held,
+      position: r.held ? '보유 중' : '미보유',
+      decision: r.held
+        ? '보유 유지'
+        : r.signal && r.trendOk
+          ? `매수 후보 (순위 ${r.rank ?? '—'}위${r.rank != null && r.rank <= topN ? ' · 편입 대상' : ''})`
+          : '해당 없음',
+      reasons: [
+        // 조건별 실측 지표값 (백테스트와 동일한 함수로 계산)
+        ...(r.conds ?? []).map((c) => ({ text: c.text, detail: c.detail, met: c.met })),
+        ...(r.trendDetail ? [{ text: `장기추세 필터`, detail: r.trendDetail, met: r.trendOk }] : []),
+        ...(r.score != null
+          ? [{ text: '순위 점수(상대강도)', detail: `${(r.score * 100).toFixed(1)}%${r.rank != null ? ` · ${r.rank}위` : ''}`, met: r.signal && r.trendOk }]
+          : []),
+      ],
+      summary: r.held
+        ? '보유 중 — 매도 조건 충족 시 청산'
+        : r.signal && r.trendOk
+          ? `조건을 통과했습니다 (후보 중 ${r.rank ?? '—'}위, 슬롯 ${topN}개)`
+          : `후보 아님: ${r.reasons.join(' / ')}`,
+    }))
+  }
+
   return result.sleeves.map((sleeve) => {
     const hist = histories[sleeve.symbol]
     const bars = hist?.bars ?? []

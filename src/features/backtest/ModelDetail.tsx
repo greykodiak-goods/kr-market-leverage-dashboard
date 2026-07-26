@@ -7,6 +7,7 @@ import { runPortfolio, type PortfolioResult } from './portfolio'
 import { modelMeta, MODEL_META, type ModelConfig } from './models'
 import { DEFAULT_IB_PARAMS, DEFAULT_VR_PARAMS } from './algoEngine'
 import { DEFAULT_ROTATION } from './rotation'
+import { DEFAULT_SIGNAL_ROTATION } from './signalRotation'
 import { findDoc } from './modelDocs'
 import { ConditionEditor } from './ConditionEditor'
 import { UniverseEditor, symbolLabel } from './UniverseEditor'
@@ -159,7 +160,7 @@ export function ModelDetail({
         </details>
       )}
 
-      <UniverseEditor symbols={cfg.symbols} onChange={(symbols) => onPatch({ symbols })} isPool={isRot} />
+      <UniverseEditor symbols={cfg.symbols} onChange={(symbols) => onPatch({ symbols })} isPool={isRot || meta.type === 'rule'} />
       {hasLeveraged && (
         <div className="bt-warn bt-lev-warn">
           ⚠️ 유니버스에 레버리지 ETF 포함 — 변동성 잠식으로 장기 성과가 기초지수와 크게 괴리될 수 있고, 하락장에서
@@ -209,6 +210,45 @@ export function ModelDetail({
               <button type="button" className="bt-btn-mini" onClick={() => onPatch({ strategy: clonePreset(modelId) })}>
                 ↺ 조건 기본값 복원
               </button>
+            </div>
+            <div className="bt-controls bt-algo-params">
+              <label>
+                동시 보유 종목 수
+                <InfoTip text="조건을 통과한 종목이 슬롯보다 많으면 순위 상위부터 채웁니다. 1이면 가장 강한 하나에 집중, 3~5면 분산됩니다." />
+                <input type="number" min={1} max={20} value={(cfg.sig ?? DEFAULT_SIGNAL_ROTATION).topN}
+                  onChange={(e) => onPatch({ sig: { ...(cfg.sig ?? DEFAULT_SIGNAL_ROTATION), topN: num(e.target.value, 3) } })} />
+              </label>
+              <label>
+                편입 우선순위
+                <InfoTip text="조건 통과 종목이 많을 때 무엇을 먼저 담을지. 모멘텀=최근 상승률이 높은 순, 저변동성=가격이 덜 출렁인 순." />
+                <select value={(cfg.sig ?? DEFAULT_SIGNAL_ROTATION).rankBy}
+                  onChange={(e) => onPatch({ sig: { ...(cfg.sig ?? DEFAULT_SIGNAL_ROTATION), rankBy: e.target.value as 'momentum' | 'lowVol' | 'none' } })}>
+                  <option value="momentum">상대강도(모멘텀) 높은 순</option>
+                  <option value="lowVol">저변동성 순</option>
+                  <option value="none">순위 없음(먼저 발견 순)</option>
+                </select>
+              </label>
+              <label>
+                순위 측정 기간
+                <input type="number" min={20} max={504} value={(cfg.sig ?? DEFAULT_SIGNAL_ROTATION).rankLookback}
+                  onChange={(e) => onPatch({ sig: { ...(cfg.sig ?? DEFAULT_SIGNAL_ROTATION), rankLookback: num(e.target.value, 126) } })} />
+              </label>
+              <label className="bt-check">
+                <input type="checkbox" checked={(cfg.sig ?? DEFAULT_SIGNAL_ROTATION).trendFilter}
+                  onChange={(e) => onPatch({ sig: { ...(cfg.sig ?? DEFAULT_SIGNAL_ROTATION), trendFilter: e.target.checked } })} />
+                장기추세 필터
+                <InfoTip text="종가가 장기 이평선 위인 종목만 후보로 남깁니다. 하락 추세 종목을 걸러 물림을 줄이는 장치입니다." />
+              </label>
+              <label>
+                추세 이평 기간
+                <input type="number" min={20} max={300} value={(cfg.sig ?? DEFAULT_SIGNAL_ROTATION).trendSma}
+                  onChange={(e) => onPatch({ sig: { ...(cfg.sig ?? DEFAULT_SIGNAL_ROTATION), trendSma: num(e.target.value, 200) } })} />
+              </label>
+            </div>
+            <div className="bt-chart-caption">
+              이 모델은 <strong>후보 풀을 스스로 훑어 매수 조건을 만족하는 종목을 발굴</strong>합니다 — 위 목록은
+              보유 종목이 아니라 "살 수 있는 후보"입니다. 조건 통과 종목이 슬롯보다 많으면 순위 상위부터 담고,
+              벤치마크는 <strong>후보 풀 전체 균등보유</strong>라 초과수익이 양수여야 발굴이 가치를 만든 것입니다.
             </div>
           </>
         )}

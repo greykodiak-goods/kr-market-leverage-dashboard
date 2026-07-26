@@ -9,6 +9,16 @@
 import { PRESET_STRATEGIES, clonePreset } from './strategies'
 import { DEFAULT_IB_PARAMS, DEFAULT_VR_PARAMS, type InfiniteBuyingParams, type VRParams } from './algoEngine'
 import { DEFAULT_ROTATION, type RotationParams } from './rotation'
+import { DEFAULT_SIGNAL_ROTATION, type SignalRotationParams } from './signalRotation'
+
+// 규칙형 모델의 기본 후보 풀 — 국장 대형주 + 미장 대표 종목·섹터.
+// 종목을 사람이 지정하는 게 아니라, 모델이 이 풀을 훑어 조건을 만족하는
+// 종목을 스스로 발굴한다. 대표가 후보를 늘리거나 줄일 수 있다.
+const DEFAULT_SCREEN_POOL = [
+  '000660.KS', '005930.KS', '035420.KS', '051910.KS', '005380.KS',
+  'NVDA', 'MSFT', 'AAPL', 'AVGO', 'AMD', 'META', 'GOOGL', 'AMZN',
+  'QQQ', 'SPY', 'SMH',
+]
 import { DEFAULT_SETTINGS, type SimSettings, type StrategyConfig } from './types'
 import type { HistoryRange } from '../../lib/history'
 
@@ -42,7 +52,7 @@ export const MODEL_META: ModelMeta[] = [
       )[s.id] ?? s.name,
     type: 'rule' as const,
     desc: s.desc,
-    defaultSymbols: ['000660.KS', '005930.KS', 'QQQ'],
+    defaultSymbols: [...DEFAULT_SCREEN_POOL],
   })),
   {
     id: 'infinite-buying',
@@ -122,6 +132,7 @@ export interface ModelConfig {
   ib?: InfiniteBuyingParams
   vr?: VRParams
   rot?: RotationParams
+  sig?: SignalRotationParams // 규칙형 — 스크리닝·순위·슬롯
 }
 
 export function defaultConfig(modelId: string): ModelConfig {
@@ -131,23 +142,29 @@ export function defaultConfig(modelId: string): ModelConfig {
   if (modelId === 'infinite-buying') return { ...base, ib: { ...DEFAULT_IB_PARAMS } }
   if (modelId === 'value-rebalancing') return { ...base, vr: { ...DEFAULT_VR_PARAMS } }
   if (meta.type === 'rotation') return { ...base, rot: { ...(meta.rotation ?? DEFAULT_ROTATION) } }
-  return { ...base, strategy: clonePreset(modelId) }
+  return { ...base, strategy: clonePreset(modelId), sig: { ...DEFAULT_SIGNAL_ROTATION } }
 }
 
+const CFG_KEY_V3 = 'bt-model-configs-v3'
 const CFG_KEY_V2 = 'bt-model-configs-v2'
 const CFG_KEY_V1 = 'bt-model-configs-v1'
 
 export function loadConfigs(): Record<string, ModelConfig> {
   let saved: Partial<Record<string, Partial<ModelConfig> & { symbol?: string; customSymbol?: string }>> = {}
+  let migratedUniverse = false
   try {
-    const v2 = localStorage.getItem(CFG_KEY_V2)
-    if (v2) saved = JSON.parse(v2)
-    else {
-      // v1(단일 종목) → v2(유니버스) 마이그레이션
-      const v1 = JSON.parse(localStorage.getItem(CFG_KEY_V1) ?? '{}')
-      for (const [id, c] of Object.entries(v1 as Record<string, { symbol?: string; customSymbol?: string } & Partial<ModelConfig>>)) {
-        const sym = (c.customSymbol ?? '').trim() || c.symbol
-        saved[id] = { ...c, symbols: sym ? [sym] : undefined }
+    const v3 = localStorage.getItem(CFG_KEY_V3)
+    if (v3) {
+      saved = JSON.parse(v3)
+    } else {
+      // v1/v2 → v3. 구버전에서는 규칙형이 단일 종목에 고정돼 있었고(단일 종목
+      // 마이그레이션의 잔재), 그 값이 새 기본 후보 풀을 계속 덮어썼다.
+      // 유니버스만 기본값으로 되돌리고 비용·파라미터·전략은 보존한다.
+      const raw = localStorage.getItem(CFG_KEY_V2) ?? localStorage.getItem(CFG_KEY_V1)
+      if (raw) {
+        const old = JSON.parse(raw) as Record<string, Partial<ModelConfig> & { symbol?: string }>
+        for (const [id, c] of Object.entries(old)) saved[id] = { ...c, symbols: undefined }
+        migratedUniverse = true
       }
     }
   } catch {
@@ -162,14 +179,16 @@ export function loadConfigs(): Record<string, ModelConfig> {
       ...s,
       symbols: Array.isArray(s.symbols) && s.symbols.length > 0 ? s.symbols.filter((x): x is string => typeof x === 'string') : d.symbols,
       settings: { ...d.settings, ...(s.settings ?? {}) },
+      sig: { ...(d.sig ?? DEFAULT_SIGNAL_ROTATION), ...(s.sig ?? {}) },
     }
   }
+  if (migratedUniverse) saveConfigs(out)
   return out
 }
 
 export function saveConfigs(configs: Record<string, ModelConfig>) {
   try {
-    localStorage.setItem(CFG_KEY_V2, JSON.stringify(configs))
+    localStorage.setItem(CFG_KEY_V3, JSON.stringify(configs))
   } catch {
     /* ignore */
   }

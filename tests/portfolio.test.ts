@@ -23,10 +23,12 @@ function mk(seed: number, n = 900, base = 100, drift = 0.0004): HistoryResult {
 const cfg = { ...defaultConfig('golden-cross'), symbols: ['A', 'B', 'C'], startDate: '' }
 const hists = { A: mk(1), B: mk(2), C: mk(3) }
 const res = runPortfolio('golden-cross', cfg, hists)
-check('3종목 슬리브 생성', res.sleeves.length === 3)
+check('규칙형 = 스크리닝 모드(슬리브 없음)', res.isScreening === true && res.sleeves.length === 0)
+check('스크리닝 결과 존재', (res.lastScreen ?? []).length === 3)
+check('후보 풀 3종목 유지', res.universe.length === 3)
 check('유니버스 기록', JSON.stringify(res.universe) === '["A","B","C"]')
-const sleeveSum = res.sleeves.reduce((s, x) => s + x.res.metrics.finalEquity, 0)
-check('NAV 최종값 = 슬리브 합', Math.abs(res.metrics.finalEquity - sleeveSum) < 1, `${res.metrics.finalEquity} vs ${sleeveSum}`)
+check('NAV가 유한하고 양수', Number.isFinite(res.metrics.finalEquity) && res.metrics.finalEquity > 0)
+check('벤치마크(후보 풀 균등보유) 산출', res.equity.every((e) => e.benchmark > 0))
 const firstNav = res.equity[0].equity
 check('시작 NAV ≈ 초기자본', Math.abs(firstNav - cfg.settings.initialCapital) / cfg.settings.initialCapital < 0.05, `${firstNav}`)
 check('매매에 종목 라벨', res.trades.every((t) => !!t.symbol))
@@ -35,7 +37,7 @@ check('총수익률 = NAV 기준', Math.abs(res.metrics.totalReturnPct - (res.me
 // 2) 단일종목 = 슬리브 그대로 (집계가 값을 왜곡하지 않음)
 const cfg1 = { ...defaultConfig('golden-cross'), symbols: ['A'] }
 const res1 = runPortfolio('golden-cross', cfg1, { A: hists.A })
-check('단일종목 집계 무왜곡', Math.abs(res1.metrics.finalEquity - res1.sleeves[0].res.metrics.finalEquity) < 1e-6)
+check('단일종목도 정상 실행', Number.isFinite(res1.metrics.finalEquity) && res1.universe.length === 1)
 
 // 3) 알고리즘 모델도 포트폴리오 실행 가능
 const cfgIB = { ...defaultConfig('infinite-buying'), symbols: ['A', 'B'] }
