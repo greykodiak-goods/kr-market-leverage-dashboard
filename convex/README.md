@@ -6,13 +6,12 @@
 ## 배포
 
 - 프로젝트: convex.dev `greykodiak1/stock-invest`
-- 배포 명령(Git Bash): `CONVEX_DEPLOY_KEY="$(tr -d '\r\n ' < /c/Users/user/stock-system-docs/secrets/CONVEX_DEPLOY_KEY.txt)" npx convex deploy --yes`
-  - **키 값은 절대 echo·로그·커밋 금지.** 키 파일은 secrets 폴더(T0) 전용.
-  - ⚠️ 2026-07-24 현재 secrets의 키는 **preview 스코프** — 프로덕션 배포에는 대시보드에서
-    **Production deploy key** 발급·교체 필요(T0, 대표). 그 전까지는 preview 배포로 검증:
-    `npx convex deploy --yes --preview-create backend-v1`
-- 검증용 preview 배포(2026-07-24): `combative-goshawk-682`
-  - API: `https://combative-goshawk-682.convex.cloud` / HTTP 서빙: `https://combative-goshawk-682.convex.site`
+- **프로덕션 배포(2026-07-27): `valiant-vole-735`**
+  - API: `https://valiant-vole-735.convex.cloud` / HTTP 서빙: `https://valiant-vole-735.convex.site`
+- 배포 명령(Git Bash): repo 루트에서 `npx convex deploy --yes`
+  - Deploy key는 repo의 `.env.local`(gitignore, `CONVEX_DEPLOY_KEY=...`)에 있음 — CLI가 자동으로 읽는다.
+    원본은 secrets 폴더 `CONVEX_DEPLOY_KEY.txt`(prod 스코프, 2026-07-27 대표 교체). **키 값은 절대 echo·로그·커밋 금지.**
+- 검증용 preview 배포(2026-07-24, 최초 검증에 사용): `combative-goshawk-682` — 수집·멱등·서빙·ingest 전 항목 통과
 
 ## 환경변수 (Convex env 전용 — repo·클라이언트 번들 절대 금지)
 
@@ -50,8 +49,10 @@ SEED(가상 표본)는 시계열 테이블 적재 금지 — 실측만.
 
 ## 현재 단계 (기획서 §6)
 
-- [x] 2. 스캐폴드 배포 (preview에서 검증 완료 2026-07-24)
-- [ ] 1'. **Production deploy key 교체(T0) → prod 배포 + prod env 등록** ← 다음 액션
+- [x] 2. 스캐폴드 배포 (preview 검증 2026-07-24 → **prod 배포 완료 2026-07-27**, valiant-vole-735)
+- [ ] 1'. **prod env 등록 대기**: `DART_API_KEY`·`INGEST_TOKEN` — 자동화 세션에서 권한 차단되어
+      대시보드 직접 입력(기획서 §5-A 권장) 또는 대화형 세션에서
+      `tr -d '\r\n ' < <secrets파일> | npx convex env set <NAME>` 실행 필요. 등록 즉시 다음 크론(12:30/19:30 KST)이 적재 시작 ← **다음 액션**
 - [ ] 3. 크론 가동 후 **로컬 잡과 1주 병행 diff** (프론트 무접촉)
 - [ ] 4~5. 스키마 계약 테스트 → `src/lib/dataBase.ts`로 URL 점진 전환(폴백: Convex→정적→SEED)
 - [ ] 6. 안정 2주 후 로컬 수집 잡 폐지
