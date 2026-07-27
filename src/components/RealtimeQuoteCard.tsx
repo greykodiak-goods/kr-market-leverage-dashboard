@@ -1,9 +1,10 @@
 import type { Quote, QuotePeriod } from '../lib/quotes'
-import { QUOTE_PERIODS } from '../lib/quotes'
+import { QUOTE_PERIODS, US_SESSION_LABEL } from '../lib/quotes'
 import { IntradayChart } from './IntradayChart'
 import { PeriodSelector } from './PeriodSelector'
 import { InfoTip } from './InfoTip'
 import { Freshness } from './Freshness'
+import { ExtendedSessionBadge } from './ExtendedSessionBadge'
 import { changeArrow, formatPercent } from '../lib/format'
 
 interface Props {
@@ -81,7 +82,14 @@ export function RealtimeQuoteCard({
           </h2>
           <div className="panel-sub">{symbolLabel}</div>
         </div>
-        {quote?.stale && <span className="badge sample" style={{ fontSize: 11 }}>캐시(갱신실패)</span>}
+        <div className="badges">
+          {quote?.session && (
+            <span className={`badge${quote.session === 'pre' || quote.session === 'post' ? ' live' : ''}`} style={{ fontSize: 11 }}>
+              {US_SESSION_LABEL[quote.session]}
+            </span>
+          )}
+          {quote?.stale && <span className="badge sample" style={{ fontSize: 11 }}>캐시(갱신실패)</span>}
+        </div>
       </div>
 
       {isLoading && !quote ? (
@@ -113,6 +121,12 @@ export function RealtimeQuoteCard({
             </div>
           </div>
 
+          {quote.extended && (
+            <div style={{ margin: '6px 0 2px' }}>
+              <ExtendedSessionBadge extended={quote.extended} currency={quote.currency} size="lg" />
+            </div>
+          )}
+
           <div style={{ display: 'flex', gap: 16, margin: '8px 0 6px', fontSize: 12, color: 'var(--text-dim)' }}>
             <span>고 {quote.dayHigh ? m(quote.dayHigh) : '—'}</span>
             <span>저 {quote.dayLow ? m(quote.dayLow) : '—'}</span>
@@ -123,7 +137,13 @@ export function RealtimeQuoteCard({
 
           <PeriodSelector periods={QUOTE_PERIODS} value={period} onChange={onPeriodChange} />
 
-          <IntradayChart data={quote.intraday} color={color} gradientId={gradientId} currency={quote.currency} />
+          <IntradayChart
+            data={quote.intraday}
+            color={color}
+            gradientId={gradientId}
+            currency={quote.currency}
+            sessionBounds={period === '1D' ? quote.sessionBounds : undefined}
+          />
 
           {showShortNote && (
             <div style={{ fontSize: 11, color: 'var(--kosdaq)', marginTop: 2 }}>ⓘ {shortHistoryNote}</div>

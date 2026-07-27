@@ -34,6 +34,11 @@ export function RealtimeSection() {
     const impliedPerShare = adrKrwPerAdr / ADR_ORDINARY_RATIO // ADR 환산 원주 1주 가격
     const premiumPct = (impliedPerShare / krx.data.price - 1) * 100
     const disc = premiumPct >= 0
+    // 확장 세션(프리/애프터) 체결이 있으면 그 가격 기준 프리미엄을 "참고값"으로 병기.
+    // 기본 지표(정규 종가 기준)는 그대로 유지 — 기준 혼동 금지.
+    const ext = adr.data.extended
+    const extPremiumPct = ext ? ((ext.price * fxRate) / ADR_ORDINARY_RATIO / krx.data.price - 1) * 100 : null
+    const extLabel = ext ? (ext.session === 'pre' ? '프리장' : '애프터') : null
     premiumNode = (
       <div
         style={{
@@ -56,8 +61,21 @@ export function RealtimeSection() {
           <strong style={{ color: disc ? 'var(--up)' : 'var(--down)' }}>
             {formatSignedPercent(premiumPct)} {disc ? '프리미엄' : '디스카운트'}
           </strong>
+          {extPremiumPct != null && <span style={{ color: 'var(--text-faint)', fontSize: 11 }}> (정규 종가 기준)</span>}
           <InfoTip text={TOOLTIPS.premium} />
         </div>
+        {extPremiumPct != null && (
+          <div>
+            {ext!.session === 'pre' ? '🌅' : '🌙'} {extLabel} 기준 프리미엄{' '}
+            <strong style={{ color: extPremiumPct >= 0 ? 'var(--up)' : 'var(--down)' }}>
+              {formatSignedPercent(extPremiumPct)}
+            </strong>
+            <span style={{ color: 'var(--text-faint)', fontSize: 11 }}>
+              {' '}
+              — 참고값 · {extLabel} 체결가 ${ext!.price.toLocaleString('ko-KR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} 기준(체결 얇음 주의)
+            </span>
+          </div>
+        )}
         <div style={{ color: 'var(--text-faint)', fontSize: 11 }}>
           ※ 공식 비율 1 ADR = 원주 1/10 (SEC 424B4) · 신규 상장 초기라 괴리(프리미엄)가 클 수 있음
         </div>

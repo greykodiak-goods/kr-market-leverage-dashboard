@@ -33,9 +33,17 @@ export function StatusStrip() {
   const { data: outlook } = useOutlook()
 
   let premiumPct: number | null = null
+  let extPremiumSub: string | null = null
+  let extPremiumPct: number | null = null
   if (adr.data && hynix.data && fx.data) {
     const implied = (adr.data.price * fx.data.price) / ADR_ORDINARY_RATIO
     premiumPct = (implied / hynix.data.price - 1) * 100
+    // 확장 세션(프리/애프터) 체결 반영 — 기준을 라벨로 명시한 참고값.
+    const ext = adr.data.extended
+    if (ext) {
+      extPremiumPct = ((ext.price * fx.data.price) / ADR_ORDINARY_RATIO / hynix.data.price - 1) * 100
+      extPremiumSub = `${ext.session === 'pre' ? '🌅프리' : '🌙애프터'} ${formatSignedPercent(extPremiumPct, 1)}`
+    }
   }
 
   const scen = outlook ? SCEN[outlook.activeScenario] : null
@@ -43,7 +51,12 @@ export function StatusStrip() {
   return (
     <div className="status-strip" aria-label="핵심 지표 요약">
       <Kpi label="하이닉스" value={hynix.data ? `₩${Math.round(hynix.data.price).toLocaleString('ko-KR')}` : '—'} sub={signPct(hynix.data?.changePct)} subColor={pctColor(hynix.data?.changePct)} />
-      <Kpi label="ADR 프리미엄" value={premiumPct != null ? formatSignedPercent(premiumPct, 1) : '—'} subColor={pctColor(premiumPct)} />
+      <Kpi
+        label={extPremiumSub ? 'ADR 프리미엄(정규종가)' : 'ADR 프리미엄'}
+        value={premiumPct != null ? formatSignedPercent(premiumPct, 1) : '—'}
+        sub={extPremiumSub ?? undefined}
+        subColor={extPremiumSub ? pctColor(extPremiumPct) : pctColor(premiumPct)}
+      />
       <Kpi label="SOX" value={sox.data ? sox.data.price.toLocaleString('ko-KR', { maximumFractionDigits: 0 }) : '—'} sub={signPct(sox.data?.changePct)} subColor={pctColor(sox.data?.changePct)} />
       <Kpi label="USD/KRW" value={fx.data ? `₩${Math.round(fx.data.price).toLocaleString('ko-KR')}` : '—'} sub={signPct(fx.data?.changePct)} subColor={pctColor(fx.data?.changePct)} />
       <Kpi label="VIX" value={vix.data ? vix.data.price.toFixed(1) : '—'} sub={signPct(vix.data?.changePct)} subColor={pctColor(vix.data?.changePct)} />

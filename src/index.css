@@ -615,6 +615,38 @@ body {
   font-weight: 400;
   margin-left: 5px;
 }
+/* 미국 프리장/애프터장 확장 세션 배지 (공용) */
+.ext-session-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 13px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.ext-session-badge.sm {
+  font-size: 11px;
+  gap: 4px;
+  padding: 1px 7px;
+  margin: 1px 0 2px;
+}
+.ext-session-badge .ext-session-label {
+  font-weight: 600;
+  color: var(--text);
+}
+.ext-session-badge strong {
+  color: var(--text);
+  font-weight: 700;
+}
+.ext-session-badge .ext-session-base {
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
 .mini-loading {
   font-size: 13px;
   color: var(--text-dim);

@@ -3,6 +3,7 @@ import type { QuotePeriod } from '../lib/quotes'
 import { Sparkline } from './Sparkline'
 import { InfoTip } from './InfoTip'
 import { Freshness } from './Freshness'
+import { ExtendedSessionBadge } from './ExtendedSessionBadge'
 import { changeArrow, formatPercent } from '../lib/format'
 
 export type MiniUnit = 'auto' | 'index' | 'percent'
@@ -67,6 +68,7 @@ export function QuoteMiniCard({ symbol, label, tag, unit = 'auto', color = 'var(
                 : fmt(Math.abs(data.change), data.currency, unit === 'auto' ? 'auto' : unit).replace(/^[₩$]/, '')}
             </span>
           </div>
+          {data.extended && <ExtendedSessionBadge extended={data.extended} currency={data.currency} size="sm" />}
           <Sparkline data={data.intraday} color={down ? 'var(--down)' : up ? 'var(--up)' : color} />
           <Freshness kind="realtime" at={data.fetchedAt} className="mini-freshness" />
         </>
