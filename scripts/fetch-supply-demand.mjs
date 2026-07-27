@@ -7,20 +7,23 @@
 //   - flow            : 외인·기관 일별 순매수 — **SEED 샘플** (KIS 키 확보 시 Phase 2에서 LIVE 전환)
 //
 // SECURITY (do not violate):
-//   - The DART key is a SECRET (T0). Loaded at runtime from env `DART_API_KEY`
-//     or the key file (env `DART_API_KEY_FILE`, default: the operator's local
-//     stock-system-docs\secrets\DART_API_KEY.txt). NEVER hardcode it, NEVER
-//     commit it, NEVER print it (URLs are logged key-masked only).
+//   - The DART key is a SECRET. 로딩은 `scripts/lib/loadSecret.mjs` 단일 구현만 쓴다
+//     (ops governance/SECRETS-POLICY.md §1.1 — 시크릿 단일 원본 = Doppler).
+//     하드코딩·커밋·출력 금지 (URL은 키 마스킹 후에만 로그).
+//   - ⚠️ 레거시: 이 키는 원래 stock-system-docs\secrets\ 평문 파일에 있었고
+//     SECRETS-POLICY §5에 **이관 대상**으로 명시돼 있다. 파일 경로는 폴백으로만
+//     남겨두었으니 **신규 스크립트가 이 방식을 복사하지 말 것** — 표준은 doppler run.
 //   - This script commits nothing itself; the operator/schedule commits ONLY
 //     public/data/*.json — never .ts/.tsx source (HANDOVER-DEV §5).
 //
-// Usage:  node scripts/fetch-supply-demand.mjs
-//   env DART_API_KEY       — key value (wins over file)
-//   env DART_API_KEY_FILE  — path to a one-line key file
+// Usage (표준):
+//   doppler run --project investing-ops --config prd -- node scripts/fetch-supply-demand.mjs
+// 폴백(권장하지 않음): env DART_API_KEY 또는 DART_API_KEY_FILE=<키파일경로>
 //
 // API 구조 근거: stock-system-docs\dart-api-fieldnotes.md (2026-07-23 실호출 검증).
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { loadSecret } from './lib/loadSecret.mjs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -31,18 +34,13 @@ const OUT_FILE = join(OUT_DIR, 'supply-demand.json')
 const CORP_CODE = '00164779' // SK하이닉스(000660) — corpCode.xml로 확정됨 (fieldnotes)
 const DART = 'https://opendart.fss.or.kr/api'
 
-// ---- key loading (never printed) ------------------------------------------
-const DEFAULT_KEY_FILE = 'C:/Users/user/stock-system-docs/secrets/DART_API_KEY.txt'
+// ---- key loading (값은 절대 출력되지 않는다) --------------------------------
+// 하드코딩 기본 경로를 제거했다. 그 상수가 남아 있으면 다음 세션이 그대로 복사한다
+// (실제로 KRX 키 안내에서 그렇게 사고가 났다). 경로가 필요하면 DART_API_KEY_FILE로 준다.
 function loadKey() {
-  if (process.env.DART_API_KEY) return process.env.DART_API_KEY.trim()
-  const file = process.env.DART_API_KEY_FILE || DEFAULT_KEY_FILE
-  try {
-    const k = readFileSync(file, 'utf8').trim()
-    if (k) return k
-  } catch {
-    /* fallthrough */
-  }
-  return null
+  const r = loadSecret('DART_API_KEY', { project: 'investing-ops' })
+  if (!r.value) console.error(r.help)
+  return r.value
 }
 
 // ---- helpers ---------------------------------------------------------------

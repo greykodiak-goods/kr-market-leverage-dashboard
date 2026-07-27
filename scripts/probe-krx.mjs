@@ -5,58 +5,33 @@
 //   KRX Open API가 이 데이터를 주는지가 확정되지 않은 상태라, 파서를 미리 쓰면
 //   추측으로 짠 코드가 된다. 실제 응답을 먼저 받아보고 그 위에서 수집기를 만든다.
 //
-// SECURITY (규칙 2 · T0):
-//   - 인증키는 SECRET이다. env `KRX_API_KEY` 또는 키 파일(env `KRX_API_KEY_FILE`)에서만 읽는다.
-//     하드코딩·커밋·출력 금지. 이 스크립트는 키를 어떤 경로로도 화면에 찍지 않는다.
+// SECURITY:
+//   - 시크릿 로딩은 `scripts/lib/loadSecret.mjs` 단일 구현만 쓴다
+//     (ops governance/SECRETS-POLICY.md — 시크릿 단일 원본 = Doppler).
+//     하드코딩 경로 금지. 값은 어떤 경로로도 출력하지 않는다.
 //   - KRX Open API는 **공공 데이터 인증키**이지 브로커 계좌 자격증명이 아니다.
-//     주문 기능이 없으므로 규칙 2(실계좌 경계)에 걸리지 않는다.
+//     주문 기능이 없으므로 리포 규칙 2(실계좌 경계)에 걸리지 않는다.
 //   - 이 스크립트는 읽기만 한다. 파일을 쓰지 않고 커밋도 하지 않는다.
 //
-// 사용법:
-//   KRX_API_KEY=... node scripts/probe-krx.mjs
-//   또는  KRX_API_KEY_FILE=/path/to/key.txt node scripts/probe-krx.mjs
+// 사용법 (표준):
+//   doppler run --project investing-ops --config prd -- node scripts/probe-krx.mjs
 //
 // 출력: 후보 엔드포인트별 HTTP 상태 + 응답 앞부분(키 마스킹). 그대로 복사해 전달하면
 //       그 구조에 맞춰 수집기를 작성한다.
 
-import { readFileSync } from 'node:fs'
+import { loadSecret, maskerFor } from './lib/loadSecret.mjs'
 
-// ---- key loading (never printed) -------------------------------------------
-function loadKey() {
-  if (process.env.KRX_API_KEY) return process.env.KRX_API_KEY.trim()
-  const file = process.env.KRX_API_KEY_FILE
-  if (file) {
-    try {
-      const k = readFileSync(file, 'utf8').trim()
-      if (k) return k
-    } catch (e) {
-      console.error(`키 파일을 읽지 못했습니다: ${file} (${e.code || e.message})`)
-    }
-  }
-  return null
-}
-
-const KEY = loadKey()
-if (!KEY) {
-  console.error(
-    [
-      '인증키가 없습니다.',
-      '',
-      '  KRX_API_KEY=<발급받은키> node scripts/probe-krx.mjs',
-      '  KRX_API_KEY_FILE=<키파일경로> node scripts/probe-krx.mjs',
-      '',
-      '키 발급: KRX 오픈API 포털(open.krx.co.kr 또는 openapi.krx.co.kr) 회원가입 → 인증키 신청.',
-      '키 값은 secrets 폴더에만 두고 리포에 커밋하지 마십시오.',
-    ].join('\n'),
-  )
+// ---- key loading (값은 절대 출력되지 않는다) --------------------------------
+const secret = loadSecret('KRX_API_KEY', { project: 'investing-ops' })
+if (!secret.value) {
+  console.error('')
+  console.error(secret.help)
+  console.error('')
+  console.error('키 발급: KRX 오픈API 포털 회원가입 → 인증키 신청.')
   process.exit(1)
 }
-
-// 응답·에러 문자열에 키가 섞여 나오는 경우를 대비해 항상 마스킹해서 출력한다.
-function mask(s) {
-  if (!s) return s
-  return String(s).split(KEY).join('****')
-}
+const KEY = secret.value
+const mask = maskerFor(KEY)
 
 // ---- 후보 엔드포인트 --------------------------------------------------------
 // KRX 오픈API의 정확한 베이스/경로가 확정되지 않아 후보를 순회하며 무엇이 응답하는지 본다.
