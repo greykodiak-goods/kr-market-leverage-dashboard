@@ -630,9 +630,12 @@ body {
 }
 .ext-session-badge.sm {
   font-size: 11px;
-  gap: 4px;
-  padding: 1px 7px;
+  gap: 3px;
+  padding: 1px 5px;
   margin: 1px 0 2px;
+  max-width: 100%;
+  flex-wrap: wrap; /* 좁은 미니카드(모바일 375px)에서 넘치지 않게 */
+  row-gap: 0;
 }
 .ext-session-badge .ext-session-label {
   font-weight: 600;

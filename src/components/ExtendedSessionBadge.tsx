@@ -22,7 +22,8 @@ export function ExtendedSessionBadge({ extended, currency = 'USD', size = 'lg' }
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   })}`
-  const label = US_SESSION_LABEL[extended.session]
+  // sm(미니카드)은 폭이 좁아 이모지-라벨 사이 공백을 줄인다.
+  const label = size === 'sm' ? US_SESSION_LABEL[extended.session].replace(' ', '') : US_SESSION_LABEL[extended.session]
 
   return (
     <span
