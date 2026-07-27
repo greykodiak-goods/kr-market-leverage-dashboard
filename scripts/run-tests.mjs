@@ -9,7 +9,9 @@ import { execFileSync } from 'node:child_process'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const testsDir = join(root, 'tests')
 const outDir = join(root, 'node_modules', '.test-build')
-const esbuild = join(root, 'node_modules', '.bin', 'esbuild')
+// esbuild는 JS bin 엔트리를 node로 직접 실행한다 — Windows에서
+// 확장자 없는 .bin 셸 스크립트는 execFileSync로 실행되지 않는다.
+const esbuildJs = join(root, 'node_modules', 'esbuild', 'bin', 'esbuild')
 
 rmSync(outDir, { recursive: true, force: true })
 mkdirSync(outDir, { recursive: true })
@@ -25,7 +27,7 @@ for (const f of files) {
   const out = join(outDir, f.replace(/\.ts$/, '.cjs'))
   console.log(`\n=== ${f} ===`)
   try {
-    execFileSync(esbuild, [join(testsDir, f), '--bundle', '--platform=node', `--outfile=${out}`], {
+    execFileSync(process.execPath, [esbuildJs, join(testsDir, f), '--bundle', '--platform=node', `--outfile=${out}`], {
       stdio: ['ignore', 'ignore', 'inherit'],
     })
   } catch {
