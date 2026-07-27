@@ -7,6 +7,7 @@ import { SemiconductorSection } from '../features/semiconductor/SemiconductorSec
 import { MacroSection } from '../features/macro/MacroSection'
 import { LeverageSection } from '../features/leverage/LeverageSection'
 import { NewsForecastSection } from '../features/news/NewsForecastSection'
+import { HynixNewsSection } from '../features/hynix/HynixNewsSection'
 import { MegaInvestorsBoard } from '../features/mega-investors/MegaInvestorsBoard'
 import { SmartMoneyRadar } from '../features/mega-investors/SmartMoneyRadar'
 import { FlowRotation } from '../features/mega-investors/FlowRotation'
@@ -58,11 +59,13 @@ export const SECTIONS: SectionDef[] = [
   { id: 'hynix-flow-radar', tab: 'hynix', title: '🎯 하이닉스 수급 레이더', Component: HynixFlowRadarSection },
   { id: 'short-covering', tab: 'hynix', title: '🩳 공매도·대차 상환 모니터', Component: ShortCoveringSection },
   { id: 'signals', tab: 'hynix', title: '⚡ 기회 · 관찰 신호 보드', Component: OpportunitySignals },
+  // 종목 뉴스·기술적 전망은 종목 탭에 — 뉴스 탭은 시장 전반만 다룬다.
+  { id: 'hynix-news', tab: 'hynix', title: '📰 하이닉스 뉴스 · 기술적 전망', Component: HynixNewsSection },
   { id: 'semiconductor', tab: 'semi', title: '반도체 업황 · 상대강도', Component: SemiconductorSection },
   { id: 'leverage', tab: 'market', title: '시장 온도 · 레버리지', Component: LeverageSection },
   { id: 'macro', tab: 'market', title: '매크로 위험 · 지수', Component: MacroSection },
   { id: 'backtest', tab: 'sim', title: '🤖 투자봇 시뮬레이터 (백테스트)', Component: BacktestSection },
-  { id: 'news', tab: 'news', title: '뉴스 · 기술적 지표', Component: NewsForecastSection },
+  { id: 'news', tab: 'news', title: '📰 시장 전반 뉴스', Component: NewsForecastSection },
   // 계산형(매일 바뀜)을 위, 정적 레퍼런스(분기 갱신)를 아래로 — 볼 것이 있는 순서.
   { id: 'smart-money-radar', tab: 'giants', title: '🎯 큰손 자금 레이더', Component: SmartMoneyRadar },
   { id: 'flow-rotation', tab: 'giants', title: '🔄 자금 로테이션 · 위험선호', Component: FlowRotation },
