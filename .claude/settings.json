@@ -1,0 +1,36 @@
+{
+  "_note": "최우선 규칙(ops/governance/TOP-PRIORITY.md)을 문서가 아니라 훅으로 강제한다. 훅 스크립트 정본은 ops repo 의 hooks/ 이고 .claude/hooks/ 는 그 사본 — 규칙을 고치면 ops 에서 고치고 여기로 복사한다(.claude/hooks/README.md 참고). 시크릿 없음.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/install-githooks.cjs\""
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/inject-core-rules.cjs\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|mcp__Supabase__apply_migration|mcp__Supabase__execute_sql",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/check-dev-baseline.cjs\""
+          }
+        ]
+      }
+    ]
+  }
+}

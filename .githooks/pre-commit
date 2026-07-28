@@ -1,0 +1,53 @@
+#!/bin/sh
+# 역할별 main 커밋 정책 (governance/TOP-PRIORITY.md 규칙 1)
+#
+# 대표 결정 2026-07-27:
+#   - 대표와 대화하는 "메인 세션"은 main 에 바로 커밋·push 한다. 막지 않는다.
+#   - 브랜치+PR 로 내야 하는 건 "서브에이전트·워커"다. 자기가 만든 걸 자기가 머지하지 않는다.
+#
+# 판별: 격리 워크트리에서 도는가?
+#   거버넌스상 워커는 항상 `git worktree add` 로 격리 워크트리에서 작업하고(DC사업_거버넌스
+#   "개발 작업 시", agents/awning-dev.md), 메인 세션은 기본 체크아웃에서 일한다.
+#   linked worktree 는 --git-dir 과 --git-common-dir 이 다르다 — 이걸로 기계적으로 갈린다.
+#
+# 설치: git config core.hooksPath githooks (hooks/install-githooks.js 가 세션마다 자동 실행)
+# 우회: git commit --no-verify
+
+branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+
+case "$branch" in
+  main|master)
+    git_dir=$(git rev-parse --git-dir 2>/dev/null)
+    common_dir=$(git rev-parse --git-common-dir 2>/dev/null)
+
+    if [ "$git_dir" != "$common_dir" ]; then
+      # 격리 워크트리 = 워커 경로 → 차단
+      echo "⛔ 워커(격리 워크트리)는 '$branch' 에 직접 커밋할 수 없습니다."
+      echo ""
+      echo "   작업 브랜치를 만들어 커밋하고, 브랜치 push + PR 까지만 진행하십시오:"
+      echo "     git checkout -b <feat|fix>/<슬러그>"
+      echo ""
+      echo "   main 머지는 메인 세션이 PR diff 를 검토한 뒤에 합니다."
+      echo "   (근거: governance/TOP-PRIORITY.md 규칙 1 / 우회가 꼭 필요하면 --no-verify)"
+      exit 1
+    fi
+
+    # 기본 체크아웃 = 메인 세션 → 허용. 다만 무의식 커밋을 막기 위해 알림은 남긴다.
+    echo "ℹ️  main 에 직접 커밋합니다(메인 세션 경로 — 허용됨)."
+    echo "   워커 산출물이라면 지금이 아니라 브랜치+PR 로 가야 합니다."
+    echo ""
+    ;;
+esac
+
+# 코드·SQL 이 스테이지되면 최우선 개발 기본기를 상기시킨다(차단 아님).
+# 정본: governance/TOP-PRIORITY.md 규칙 2 — 문서를 안 읽어도 커밋 시점엔 보이게 한다.
+staged=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null)
+if echo "$staged" | grep -Eq '\.(sql|ts|tsx|js|jsx|mjs|cjs)$'; then
+  echo "🔴 개발 기본기 확인 (governance/TOP-PRIORITY.md 규칙 2)"
+  echo "   - 목록 조회에 페이지네이션(상한·정렬키+id·커서)이 붙었나?"
+  echo "   - 새 WHERE/ORDER BY/JOIN/FK 조건에 인덱스를 같은 변경에 넣었나? (FK 는 자동 생성 안 됨)"
+  echo "   - N+1 / select('*') 는 없나?  해당 없으면 PR 에 'N/A + 사유' 1줄."
+  echo ""
+fi
+
+exit 0
