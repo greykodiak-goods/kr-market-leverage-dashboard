@@ -5,13 +5,17 @@ import { readdirSync, mkdirSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
+// esbuild를 **JS API로** 부른다. CLI 경로로 부르면 플랫폼마다 그 파일의 정체가
+// 달라 깨진다 — Windows에서는 node_modules/.bin/esbuild가 확장자 없는 셸
+// 스크립트라 execFileSync로 스폰이 안 되고, Linux에서는 esbuild/bin/esbuild가
+// JS 셔임이 아니라 ELF 네이티브 바이너리라 node로 실행하면 "Invalid or
+// unexpected token"이 난다. 두 번 다 같은 자리에서 났다.
+// JS API는 Node의 모듈 해석을 타므로 플랫폼과 무관하게 동작한다.
+import { buildSync } from 'esbuild'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const testsDir = join(root, 'tests')
 const outDir = join(root, 'node_modules', '.test-build')
-// esbuild는 JS bin 엔트리를 node로 직접 실행한다 — Windows에서
-// 확장자 없는 .bin 셸 스크립트는 execFileSync로 실행되지 않는다.
-const esbuildJs = join(root, 'node_modules', 'esbuild', 'bin', 'esbuild')
 
 rmSync(outDir, { recursive: true, force: true })
 mkdirSync(outDir, { recursive: true })
@@ -27,11 +31,15 @@ for (const f of files) {
   const out = join(outDir, f.replace(/\.ts$/, '.cjs'))
   console.log(`\n=== ${f} ===`)
   try {
-    execFileSync(process.execPath, [esbuildJs, join(testsDir, f), '--bundle', '--platform=node', `--outfile=${out}`], {
-      stdio: ['ignore', 'ignore', 'inherit'],
+    buildSync({
+      entryPoints: [join(testsDir, f)],
+      bundle: true,
+      platform: 'node',
+      outfile: out,
+      logLevel: 'error',
     })
-  } catch {
-    console.error(`번들 실패: ${f}`)
+  } catch (e) {
+    console.error(`번들 실패: ${f} — ${e?.message ?? e}`)
     failed++
     continue
   }
