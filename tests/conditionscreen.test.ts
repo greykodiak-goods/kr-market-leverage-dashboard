@@ -151,7 +151,9 @@ section('5) 매도 규칙이 결과를 바꾸는가')
 
   const base: ConditionParams = { ...DEFAULT_CONDITION, maxPositions: 1, exits: [] }
   const rows = compareExits({ AAA: bars }, d(0), base, NOCOST)
-  eq('프리셋 9종 비교', rows.length, 9)
+  eq('프리셋 11종 비교', rows.length, 11)
+  check('조건 이탈 프리셋 포함', rows.some((r) => r.label === '조건 이탈'))
+  check('손절+조건이탈 조합 포함', rows.some((r) => r.label === '손절 −3% + 조건 이탈'))
 
   const trailing = rows.find((r) => r.label === '트레일링 −5%')!
   const noExit = rows.find((r) => r.label === '청산 없음(대조군)')!
@@ -162,6 +164,51 @@ section('5) 매도 규칙이 결과를 바꾸는가')
   check('익절 조합은 매매 발생', tp.tradeCount >= 1)
   check('모든 행에 MDD ≤ 0', rows.every((r) => r.mddPct <= 0))
   check('승률 0~100 범위', rows.every((r) => r.winRatePct >= 0 && r.winRatePct <= 100))
+}
+
+// -------------------------------------------- 5-1) 조건 이탈 매도 규칙
+section('5-1) 조건 이탈(conditionExit) 규칙')
+{
+  eq('라벨', exitRuleLabel({ kind: 'conditionExit' }), '조건 이탈 시 청산')
+
+  // 진입 후 이평 아래로 무너지면 이탈로 청산돼야 한다
+  const bars = flatThenBreakout(40, 10)
+  bars[11] = bar(11, 11000, 11100, 10900, 11000, 1_000_000) // 진입일
+  bars[12] = bar(12, 11000, 11050, 10900, 11000, 1_000_000)
+  for (let i = 13; i <= 25; i++) bars[i] = bar(i, 9000, 9100, 8900, 9000, 1_000_000) // 이평 아래로 붕괴
+  const r = runConditionScreen(
+    { AAA: bars },
+    d(0),
+    { ...DEFAULT_CONDITION, maxPositions: 1, exits: [{ kind: 'conditionExit' }] },
+    NOCOST,
+  )
+  const sell = r.events.find((e) => e.action === '매도')
+  check('조건 이탈로 청산됨', !!sell, JSON.stringify(r.exitBreakdown))
+  eq('청산 사유가 조건 이탈', r.exitBreakdown[0]?.kind, 'conditionExit')
+  check('익일 시가 체결(종가 아님)', !!sell && sell.price === bars.find((b) => b.date === sell.date)!.o)
+
+  // 조건이 유지되면 청산되지 않는다 — 규칙이 아무때나 발동하면 안 된다
+  const hold = flatThenBreakout(40, 10)
+  for (let i = 11; i <= 39; i++) hold[i] = bar(i, 11500, 11600, 11400, 11500, 1_000_000) // 계속 이평 위
+  const rHold = runConditionScreen(
+    { AAA: hold },
+    d(0),
+    { ...DEFAULT_CONDITION, maxPositions: 1, exits: [{ kind: 'conditionExit' }] },
+    NOCOST,
+  )
+  check('조건 유지 중엔 청산 안 함', !rHold.events.some((e) => e.action === '매도'))
+
+  // 거래량이 말라도 이탈로 본다(K 조건 위반)
+  const dry = flatThenBreakout(40, 10)
+  dry[11] = bar(11, 11000, 11100, 10900, 11000, 1_000_000)
+  for (let i = 12; i <= 25; i++) dry[i] = bar(i, 11500, 11600, 11400, 11500, 100) // 이평 위지만 거래량 붕괴
+  const rDry = runConditionScreen(
+    { AAA: dry },
+    d(0),
+    { ...DEFAULT_CONDITION, maxPositions: 1, exits: [{ kind: 'conditionExit' }] },
+    NOCOST,
+  )
+  check('거래량 붕괴도 이탈로 판정', rDry.events.some((e) => e.action === '매도'))
 }
 
 // -------------------------------------------------------- 6) 비용의 영향

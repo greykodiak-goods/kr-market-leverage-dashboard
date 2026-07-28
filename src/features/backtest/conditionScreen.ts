@@ -32,6 +32,7 @@ export type ExitKind =
   | 'sameDayClose' // 당일 종가 청산(데이트레이딩)
   | 'timeExit' // N거래일 보유 후 청산
   | 'trailing' // 고점 대비 −X% 트레일링
+  | 'conditionExit' // 조건검색 이탈(= 매수 조건을 더는 만족하지 않음) → 익일 시가
 
 export interface ExitRule {
   kind: ExitKind
@@ -50,6 +51,7 @@ export const EXIT_LABELS: Record<ExitKind, string> = {
   sameDayClose: '당일 종가 청산',
   timeExit: '기간 만료',
   trailing: '트레일링 스탑',
+  conditionExit: '조건 이탈',
 }
 
 export function exitRuleLabel(r: ExitRule): string {
@@ -66,6 +68,8 @@ export function exitRuleLabel(r: ExitRule): string {
       return `${r.days}일 보유 후 청산`
     case 'trailing':
       return `트레일링 −${r.pct}%`
+    case 'conditionExit':
+      return '조건 이탈 시 청산'
   }
 }
 
@@ -333,6 +337,30 @@ export function runConditionScreen(
             if (d - pos.entryIdx >= (rule.days ?? 1)) fired = { kind: 'timeExit', price: bar.o }
             break
           }
+          case 'conditionExit': {
+            // HTS 조건검색은 편입(신호 발생)뿐 아니라 **이탈**도 실시간으로 준다.
+            // 이탈 = 전일 종가 기준으로 매수 조건을 더는 만족하지 않음 → 익일 시가 청산.
+            // 여기서는 이평 위 유지를 조건 존속의 대리 지표로 쓴다. 원래 J는
+            // "상향 돌파"라 진입 다음날부터는 정의상 거짓이 되므로, 돌파가 아니라
+            // "이평 위에 있는가"로 존속을 판정해야 의미가 있다.
+            const pi = idxOf[sym].get(calendar[d - 1])
+            if (pi != null) {
+              const prevBar = histories[sym][pi]
+              const ma = smaAt(histories[sym], pi, p.maPeriod)
+              // 이평과 '같은' 것은 이탈이 아니다 — 이탈은 아래로 내려간 경우다.
+              // 진입 조건 J는 돌파라서 strict >를 쓰지만, 존속 판정은 >= 가 맞다.
+              // (strict >를 쓰면 가격이 완전히 평탄한 구간에서 종가 == 이평이 되어
+              //  아무 일도 없는데 청산되는 오작동이 난다.)
+              const stillIn =
+                ma != null &&
+                prevBar.c >= ma &&
+                prevBar.c >= p.minClose &&
+                prevBar.c <= p.maxClose &&
+                prevBar.v >= p.minVolume
+              if (!stillIn) fired = { kind: 'conditionExit', price: bar.o }
+            }
+            break
+          }
           case 'sameDayClose':
             break // 진입 당일에만 평가
         }
@@ -478,6 +506,8 @@ export const EXIT_PRESETS: { label: string; exits: ExitRule[] }[] = [
   { label: '손절 −3% + 5일선 이탈', exits: [{ kind: 'stopLoss', pct: 3 }, { kind: 'maBreak', maPeriod: 5 }] },
   { label: '트레일링 −5%', exits: [{ kind: 'trailing', pct: 5 }] },
   { label: '3일 보유', exits: [{ kind: 'timeExit', days: 3 }] },
+  { label: '조건 이탈', exits: [{ kind: 'conditionExit' }] },
+  { label: '손절 −3% + 조건 이탈', exits: [{ kind: 'stopLoss', pct: 3 }, { kind: 'conditionExit' }] },
   { label: '청산 없음(대조군)', exits: [] },
 ]
 
