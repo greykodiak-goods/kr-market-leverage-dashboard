@@ -1,0 +1,22 @@
+#!/bin/sh
+# main/master 직접 커밋 차단.
+#
+# 왜 있나: 2026-07-27 세션이 ops 리포에서 main에 직접 커밋한 뒤 reset --hard로
+# 그 커밋을 날렸다. 원인은 "판단"이 아니라 "현재 브랜치를 확인하지 않음"이었다.
+# 사람이 매번 확인하는 것에 의존하지 않고 훅으로 막는다.
+#
+# 설치: git config core.hooksPath githooks   (리포마다 1회)
+
+branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+case "$branch" in
+  main|master)
+    echo "⛔ '$branch' 브랜치에 직접 커밋할 수 없습니다."
+    echo ""
+    echo "   지정된 작업 브랜치로 이동한 뒤 커밋하십시오:"
+    echo "     git checkout -b <branch>   또는   git checkout <branch>"
+    echo ""
+    echo "   main은 --ff-only 머지로만 갱신합니다."
+    echo "   (의도적으로 우회해야 하면 git commit --no-verify)"
+    exit 1
+    ;;
+esac
