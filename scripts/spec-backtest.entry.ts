@@ -17,7 +17,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { runStrategySpec, type ConditionResult, type CostSettings } from '../src/features/backtest/conditionScreen'
-import { SPEC_VERSION, type Condition, type ConditionNode, type StrategySpec } from '../src/features/backtest/strategySpec'
+import { SPEC_VERSION, avgVolume, priorHigh, rsi, sma, type Condition, type ConditionNode, type StrategySpec } from '../src/features/backtest/strategySpec'
 import type { DailyBar } from '../src/features/backtest/types'
 
 // CJS 번들에서 import.meta.url이 없으므로 런처가 REPO_ROOT를 넘긴다.
@@ -534,7 +534,164 @@ async function sweep() {
   log('⚠️ 상위 구성을 다시 고르는 행위 자체가 다중비교 편향을 만든다 — 후반·3y가 모두 양수인 구성만 후보로 삼고, 최종 판단은 페이퍼 트레이딩 실측으로.')
 }
 
-const entry = process.env.MODE === 'sweep' ? sweep : main
+/**
+ * 돌파 이벤트 채굴 (MODE=mine) — 대표 제안(2026-07-30):
+ * "5일선 돌파 구간을 모두 기록한 다음, 수익 나는 시점의 주변 조건들을 추려서
+ *  가장 많이 겹치는 조건을 찾는다."
+ *
+ * 방법: 유니버스 전 종목의 5일선 상향 돌파를 전수 기록하고, 각 이벤트를 원문
+ * 규칙(종가 LOC 매수 → 5일선 이탈 익일 시가 매도, 비용 포함)으로 라벨링한 뒤
+ * 이벤트 시점의 조건 13종을 기록 → 조건별·조건쌍별 승률/평균손익 리프트를 계산.
+ * 전반부(~2023)에서 발견 → 후반부(2024~)에서 재현되는지 검증(과최적화 방어).
+ * 모든 조건은 이벤트 당일까지의 데이터만 사용(미래참조 없음).
+ */
+async function mine() {
+  const { histories, tradable } = await loadAll()
+  const idx = histories[KOSPI_INDEX] ?? []
+  const idxByDate = new Map<string, number>()
+  idx.forEach((b, i) => idxByDate.set(b.date, i))
+  const CUT = '2023-12-31'
+  const slip = COST.slippagePct / 100
+  const fee = COST.feePct / 100
+  const tax = COST.taxPct / 100
+
+  interface Ev {
+    pnl: number
+    win: boolean
+    hold: number
+    feats: Record<string, boolean>
+    era: 'fit' | 'val'
+  }
+  const evs: Ev[] = []
+
+  for (const sym of tradable) {
+    const bars = histories[sym]
+    for (let i = 60; i < bars.length - 1; i++) {
+      const s5 = sma(bars, i, 5)
+      const p5 = sma(bars, i - 1, 5)
+      if (s5 == null || p5 == null) continue
+      if (!(bars[i].c > s5 && bars[i - 1].c <= p5)) continue // 5일선 상향 돌파 이벤트
+
+      // 라벨: 원문 규칙 그대로 — 종가 LOC 매수, 첫 5일선 이탈 종가 확인 후 익일 시가 매도
+      let exitPx: number | null = null
+      let hold = 0
+      for (let j = i + 1; j < bars.length; j++) {
+        const m = sma(bars, j, 5)
+        if (m != null && bars[j].c < m) {
+          if (j + 1 < bars.length) {
+            exitPx = bars[j + 1].o
+            hold = j + 1 - i
+          }
+          break
+        }
+      }
+      if (exitPx == null) continue // 데이터 끝까지 미청산 — 라벨 불가라 제외
+      const buy = bars[i].c * (1 + slip) * (1 + fee)
+      const sell = exitPx * (1 - slip) * (1 - fee - tax)
+      const pnl = (sell / buy - 1) * 100
+
+      const ii = idxByDate.get(bars[i].date)
+      const i5 = ii != null ? sma(idx, ii, 5) : null
+      const i10 = ii != null ? sma(idx, ii, 10) : null
+      const i20 = ii != null ? sma(idx, ii, 20) : null
+      const s10 = sma(bars, i, 10)
+      const s20 = sma(bars, i, 20)
+      const av20 = avgVolume(bars, i, 20)
+      const ph20 = priorHigh(bars, i, 20)
+      const ph55 = priorHigh(bars, i, 55)
+      const r14 = rsi(bars, i, 14)
+      const chg = bars[i - 1].c > 0 ? (bars[i].c / bars[i - 1].c - 1) * 100 : 0
+
+      evs.push({
+        pnl,
+        win: pnl > 0,
+        hold,
+        era: bars[i].date <= CUT ? 'fit' : 'val',
+        feats: {
+          '종목정배열(5>10)': s10 != null && s5 > s10,
+          '20일선 위': s20 != null && bars[i].c > s20,
+          '지수정배열(5>10)': i5 != null && i10 != null && i5 > i10,
+          '지수 20일선 위': ii != null && i20 != null && idx[ii].c > i20,
+          '거래량 1.5배 급증': av20 != null && av20 > 0 && bars[i].v >= av20 * 1.5,
+          '20일 신고가': ph20 != null && bars[i].c > ph20,
+          '55일 신고가': ph55 != null && bars[i].c > ph55,
+          '양봉': bars[i].c > bars[i].o,
+          '등락률 +2%↑': chg >= 2,
+          '갭상승 시가': bars[i].o > bars[i - 1].c,
+          'RSI50 이상': r14 != null && r14 >= 50,
+          '돌파폭 +1%↑': bars[i].c / s5 >= 1.01,
+          '거래대금 100억↑': bars[i].c * bars[i].v >= 1e10,
+        },
+      })
+    }
+  }
+
+  const agg = (list: Ev[]) => ({
+    n: list.length,
+    win: list.length ? (list.filter((e) => e.win).length / list.length) * 100 : 0,
+    pnl: list.length ? list.reduce((s, e) => s + e.pnl, 0) / list.length : 0,
+  })
+  const fitAll = evs.filter((e) => e.era === 'fit')
+  const valAll = evs.filter((e) => e.era === 'val')
+  const bf = agg(fitAll)
+  const bv = agg(valAll)
+  log('')
+  log(`돌파 이벤트 전수: ${evs.length}건 (전반 ${bf.n} · 후반 ${bv.n})`)
+  log(`베이스라인 — 전반: 승률 ${bf.win.toFixed(0)}% · 평균손익 ${f2(bf.pnl)}% / 후반: 승률 ${bv.win.toFixed(0)}% · ${f2(bv.pnl)}%`)
+  log('')
+
+  const featNames = Object.keys(evs[0]?.feats ?? {})
+  log('| 조건 (단독) | 전반 승률(리프트) | 전반 평균손익 | 후반 승률(리프트) | 후반 평균손익 | n(전반/후반) |')
+  log('|---|---|---|---|---|---|')
+  const singles: { name: string; fit: ReturnType<typeof agg>; val: ReturnType<typeof agg> }[] = []
+  for (const fn of featNames) {
+    const f = agg(fitAll.filter((e) => e.feats[fn]))
+    const v = agg(valAll.filter((e) => e.feats[fn]))
+    singles.push({ name: fn, fit: f, val: v })
+  }
+  singles.sort((a, b) => b.fit.pnl - a.fit.pnl)
+  for (const s of singles) {
+    log(
+      `| ${s.name} | ${s.fit.win.toFixed(0)}% (${f1(s.fit.win - bf.win)}) | ${f2(s.fit.pnl)}% | ${s.val.win.toFixed(0)}% (${f1(
+        s.val.win - bv.win,
+      )}) | ${f2(s.val.pnl)}% | ${s.fit.n}/${s.val.n} |`,
+    )
+  }
+
+  // 조건쌍 — 전반 평균손익 기준 상위 (표본 200건 이상만), 후반 재현 병기
+  interface Pair {
+    name: string
+    fit: ReturnType<typeof agg>
+    val: ReturnType<typeof agg>
+  }
+  const pairs: Pair[] = []
+  for (let a = 0; a < featNames.length; a++) {
+    for (let b = a + 1; b < featNames.length; b++) {
+      const fa = featNames[a]
+      const fb = featNames[b]
+      const f = agg(fitAll.filter((e) => e.feats[fa] && e.feats[fb]))
+      if (f.n < 200) continue
+      const v = agg(valAll.filter((e) => e.feats[fa] && e.feats[fb]))
+      pairs.push({ name: `${fa} × ${fb}`, fit: f, val: v })
+    }
+  }
+  pairs.sort((a, b) => b.fit.pnl - a.fit.pnl)
+  log('')
+  log('| 조건 조합 (전반 평균손익 상위 10 · n≥200) | 전반 승률 | 전반 평균손익 | **후반 승률** | **후반 평균손익** | n(전반/후반) |')
+  log('|---|---|---|---|---|---|')
+  for (const p of pairs.slice(0, 10)) {
+    log(
+      `| ${p.name} | ${p.fit.win.toFixed(0)}% | ${f2(p.fit.pnl)}% | **${p.val.win.toFixed(0)}%** | **${f2(p.val.pnl)}%** | ${
+        p.fit.n
+      }/${p.val.n} |`,
+    )
+  }
+  log('')
+  log('읽는 법: 리프트 = 그 조건이 있을 때 승률이 베이스라인보다 몇 %p 높은가. 평균손익이 양수여야 조건으로서 의미가 있고, 전반에서 찾은 조합이 후반에서도 유지돼야 진짜다.')
+  log('⚠️ 유니버스가 "오늘의 시총 상위"라 수치는 부풀려질 수 있다(선택편향). 조건 간 상대 비교 중심으로 볼 것.')
+}
+
+const entry = process.env.MODE === 'sweep' ? sweep : process.env.MODE === 'mine' ? mine : main
 entry().catch((e) => {
   console.error('실행 실패:', e)
   process.exit(1)
