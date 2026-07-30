@@ -1,0 +1,32 @@
+# 전략 스펙 헤드리스 백테스트 — 수동 실행 전용 (스케줄 없음).
+#
+# 컨테이너 세션은 금융망이 차단이라, 실데이터(Yahoo 일봉) 백테스트는 Actions
+# 러너에서 돌린다. 시뮬레이터 화면과 같은 엔진(runStrategySpec)을 쓰므로
+# 여기 수치와 화면 수치가 다를 수 없다. 결과는 로그로만 출력 — 커밋 없음.
+#
+# 실계좌 경계(규칙 2): 공개 시세 조회 + 시뮬레이션만. 주문·자격증명 없음.
+
+name: spec-backtest
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: 백테스트 실행
+        run: node scripts/spec-backtest.mjs

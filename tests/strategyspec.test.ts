@@ -129,6 +129,13 @@ section('2) 조건 kind별 판정')
   check('maPosition above (전일도 위)', evalOne({ kind: 'maPosition', period: 5, dir: 'above' }, stay, 5).passed)
   check('maPosition below 탈락', !evalOne({ kind: 'maPosition', period: 5, dir: 'below' }, stay, 5).passed)
 
+  // maAlign: 정배열 — 상승 시계열이면 단기 > 장기
+  const rising = seq([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20])
+  check('상승장 5·10 정배열', evalOne({ kind: 'maAlign', fast: 5, slow: 10 }, rising, 10).passed)
+  const falling = seq([20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10])
+  check('하락장 정배열 탈락(역배열)', !evalOne({ kind: 'maAlign', fast: 5, slow: 10 }, falling, 10).passed)
+  check('maAlign 데이터 부족 탈락', !evalOne({ kind: 'maAlign', fast: 5, slow: 10 }, rising, 5).passed)
+
   // volume / tradingValue
   const vol = seq([10000], { 0: { v: 500_000 } })
   check('volume 통과', evalOne({ kind: 'volume', min: 300_000 }, vol, 0).passed)
@@ -248,6 +255,7 @@ section('5) 절단 불변성 — i 시점 판정은 미래와 무관 (규칙 1)'
         { kind: 'candle', bull: true },
         { kind: 'maCross', period: 5, dir: 'above' },
         { kind: 'maPosition', period: 5, dir: 'above' },
+        { kind: 'maAlign', fast: 5, slow: 10 },
         { kind: 'volume', min: 100_000 },
         { kind: 'tradingValue', min: 1e6 },
         { kind: 'volumeSurge', days: 5, ratio: 1 },
@@ -364,6 +372,7 @@ section('8) 영웅문 프리셋 (I·A·B·J·K)')
     { kind: 'candle', bull: true },
     { kind: 'maCross', period: 5, dir: 'above' },
     { kind: 'maPosition', period: 5, dir: 'below' },
+    { kind: 'maAlign', fast: 5, slow: 10 },
     { kind: 'volume', min: 1 },
     { kind: 'tradingValue', min: 1e8 },
     { kind: 'volumeSurge', days: 5, ratio: 2 },
@@ -400,6 +409,8 @@ section('9) evaluatePersistence — 조건 이탈(conditionExit)의 판정자')
   // 상태 성격 조건은 그대로 재평가
   const cheap = seq([1500])
   check('가격대 이탈 = 이탈', !evaluatePersistence(node({ kind: 'priceRange', min: 2000, max: 50000 }), cheap, 0, 'X'))
+  const fallSeq = seq([20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10])
+  check('정배열 붕괴 = 이탈 (상태 조건 유지 판정)', !evaluatePersistence(node({ kind: 'maAlign', fast: 5, slow: 10 }), fallSeq, 10, 'X'))
   const thin = seq([10000], { 0: { v: 1000 } })
   check('거래량 미달 = 이탈', !evaluatePersistence(node({ kind: 'volume', min: 300_000 }), thin, 0, 'X'))
 

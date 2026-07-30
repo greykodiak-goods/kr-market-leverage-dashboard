@@ -99,6 +99,7 @@ const KIND_MENU: { kind: Condition['kind']; label: string; make: () => Condition
   { kind: 'candle', label: '양봉/음봉', make: () => ({ kind: 'candle', bull: true }) },
   { kind: 'maCross', label: '이평 돌파', make: () => ({ kind: 'maCross', period: 5, dir: 'above' }) },
   { kind: 'maPosition', label: '이평 위/아래 위치', make: () => ({ kind: 'maPosition', period: 20, dir: 'above' }) },
+  { kind: 'maAlign', label: '이평 정배열', make: () => ({ kind: 'maAlign', fast: 5, slow: 10 }) },
   { kind: 'volume', label: '거래량 하한(주)', make: () => ({ kind: 'volume', min: 300_000 }) },
   { kind: 'tradingValue', label: '거래대금 하한(원)', make: () => ({ kind: 'tradingValue', min: 1e10 }) },
   { kind: 'volumeSurge', label: '거래량 급증(배)', make: () => ({ kind: 'volumeSurge', days: 20, ratio: 3 }) },
@@ -196,6 +197,15 @@ function CondFields({ cond, onChange }: { cond: Condition; onChange: (c: Conditi
               </>
             )}
           </select>
+        </>
+      )
+    case 'maAlign':
+      return (
+        <>
+          <Num value={cond.fast} onChange={(fast) => onChange({ ...cond, fast: fast ?? 5 })} title="단기 이평(일)" />
+          <span>일선 &gt;</span>
+          <Num value={cond.slow} onChange={(slow) => onChange({ ...cond, slow: slow ?? 10 })} title="장기 이평(일)" />
+          <span>일선 (정배열)</span>
         </>
       )
     case 'volume':

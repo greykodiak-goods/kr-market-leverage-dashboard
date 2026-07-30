@@ -40,6 +40,8 @@ export type Condition =
   | { kind: 'maCross'; period: number; dir: 'above' | 'below' }
   /** N일 이평 위/아래에 **위치** (돌파 여부 무관) */
   | { kind: 'maPosition'; period: number; dir: 'above' | 'below' }
+  /** 이평 정배열 — 단기 이평이 장기 이평 위 (예: 5일선 > 10일선) */
+  | { kind: 'maAlign'; fast: number; slow: number }
   /** 거래량 하한 (주) */
   | { kind: 'volume'; min: number }
   /** 거래대금 하한 (원) */
@@ -238,6 +240,8 @@ export function conditionLabel(c: Condition): string {
       return `${c.period}일선 ${c.dir === 'above' ? '상향' : '하향'} 돌파`
     case 'maPosition':
       return `${c.period}일선 ${c.dir === 'above' ? '위' : '아래'}`
+    case 'maAlign':
+      return `${c.fast}·${c.slow}일선 정배열`
     case 'volume':
       return `거래량 ${c.min.toLocaleString('ko-KR')}주 이상`
     case 'tradingValue':
@@ -320,6 +324,15 @@ export function evaluateCondition(
       if (now == null) return { passed: false, value: '데이터 부족' }
       const ok = c.dir === 'above' ? b.c > now : b.c < now
       return { passed: ok, value: `종가 ${Math.round(b.c).toLocaleString('ko-KR')} vs MA ${Math.round(now).toLocaleString('ko-KR')}` }
+    }
+    case 'maAlign': {
+      const fast = sma(bars, i, c.fast)
+      const slow = sma(bars, i, c.slow)
+      if (fast == null || slow == null) return { passed: false, value: '데이터 부족' }
+      return {
+        passed: fast > slow,
+        value: `MA${c.fast} ${Math.round(fast).toLocaleString('ko-KR')} vs MA${c.slow} ${Math.round(slow).toLocaleString('ko-KR')}`,
+      }
     }
     case 'volume':
       return { passed: Number.isFinite(b.v) && b.v >= c.min, value: `${Math.round(b.v).toLocaleString('ko-KR')}주` }
@@ -413,7 +426,7 @@ export function evaluateEntry(
  *                      종가 == 이평이 되어 아무 일 없는데 청산되는 오작동이 난다)
  *     maCross below → 종가 ≤ 이평
  *   그대로 (상태 성격):
- *     priceRange, volume, tradingValue, maPosition, disparity, rsi
+ *     priceRange, volume, tradingValue, maPosition, maAlign, disparity, rsi
  *
  * 트리거만으로 이뤄진 스펙이면 존속 판정이 불가능하므로 항상 true(이탈 없음).
  * 반환이 false면 청산 신호다. bars[0..i]만 본다 — 보통 i는 전일 인덱스로 호출된다.
