@@ -48,6 +48,64 @@ const DEFAULT_SYMBOLS =
   '000660.KS, 005930.KS, 035420.KS, 051910.KS, 005380.KS, 000270.KS, 105560.KS, 055550.KS, 034020.KS, 010140.KS, 196170.KQ, 247540.KQ, 086520.KQ, 328130.KQ'
 
 const BENCH_SYMBOL = '069500.KS' // KODEX 200 — 알파 판정 기준(규칙 5)
+const ETF_SYMBOLS = new Set(['069500.KS', '360750.KS']) // 랭킹 저장소의 ETF — 표본 제외
+const KOSPI_INDEX = '^KS11'
+
+// 코스피 지수 5·10일선 정배열일 때만 신규 진입 (레짐 게이트)
+const KOSPI_REGIME: NonNullable<StrategySpec['regime']> = {
+  symbol: KOSPI_INDEX,
+  entry: { op: 'and', nodes: [{ op: 'cond', cond: { kind: 'maAlign', fast: 5, slow: 10 } }] },
+}
+
+// ---- 프리셋 ----------------------------------------------------------------
+
+const PRESET_GOBLIN: StrategySpec = {
+  version: SPEC_VERSION,
+  id: 'goblin-ma5',
+  name: '5일선 기법 (정배열+지수 레짐)',
+  source: '2026-07-30 대표 지정: 코스피 정배열일 때만, 종목 정배열+5일선 돌파',
+  universe: HEROMOON_MOMENTUM.universe,
+  entry: {
+    op: 'and',
+    nodes: [
+      { op: 'cond', id: '정배열', cond: { kind: 'maAlign', fast: 5, slow: 10 } },
+      { op: 'cond', id: '5일선돌파', cond: { kind: 'maCross', period: 5, dir: 'above' } },
+    ],
+  },
+  ranking: { by: 'tradingValue', dir: 'desc' },
+  exits: [{ kind: 'maBreak', maPeriod: 5 }],
+  sizing: { maxPositions: 10, mode: 'equalSlot' },
+  execution: { timing: 'sameClose', orderType: 'market' },
+  regime: KOSPI_REGIME,
+}
+
+const PRESET_BEST_U: StrategySpec = {
+  version: SPEC_VERSION,
+  id: 'combo-u',
+  name: '급증×신고가×대금+이탈버퍼 (검증 최적)',
+  source: '2026-07-30 백테스트 4라운드 최적 조합 U — 10y 알파 −0.8%p·MDD −27%',
+  universe: HEROMOON_MOMENTUM.universe,
+  entry: {
+    op: 'and',
+    nodes: [
+      { op: 'cond', cond: { kind: 'candle', bull: true } },
+      { op: 'cond', cond: { kind: 'maCross', period: 5, dir: 'above' } },
+      { op: 'cond', cond: { kind: 'volumeSurge', days: 20, ratio: 1.5 } },
+      { op: 'cond', cond: { kind: 'highBreak', days: 20 } },
+      { op: 'cond', cond: { kind: 'tradingValue', min: 1e10 } },
+    ],
+  },
+  ranking: { by: 'tradingValue', dir: 'desc' },
+  exits: [{ kind: 'maBreak', maPeriod: 5, pct: 2 }],
+  sizing: { maxPositions: 10, mode: 'equalSlot' },
+  execution: { timing: 'sameClose', orderType: 'market' },
+}
+
+const PRESETS: { id: string; label: string; spec: StrategySpec }[] = [
+  { id: 'heromoon', label: '급등주 5일선 돌파 (영웅문 조건식)', spec: HEROMOON_MOMENTUM },
+  { id: 'goblin', label: '5일선 기법 — 정배열+코스피 레짐', spec: PRESET_GOBLIN },
+  { id: 'best-u', label: '급증×신고가×버퍼 (백테스트 최적)', spec: PRESET_BEST_U },
+]
 
 function loadSaved(): Saved {
   try {
@@ -359,6 +417,23 @@ export function SpecSimulator() {
     setSpec((s) => ({ ...s, entry: toEntry(nextFlat) }))
   }
 
+  // 시총 상위 원클릭 — 5분봉 크론이 매일 실측으로 갱신하는 랭킹 목록(index.json)에서 가져온다
+  async function loadTopSymbols(kind: 'kospi20' | 'kospi40' | 'all') {
+    try {
+      const res = await fetch(`${import.meta.env.BASE_URL}data/intraday/index.json`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const idx = (await res.json()) as { symbols?: Record<string, unknown> }
+      const syms = Object.keys(idx.symbols ?? {}).filter((s) => !ETF_SYMBOLS.has(s))
+      const ks = syms.filter((s) => s.endsWith('.KS'))
+      const pick = kind === 'kospi20' ? ks.slice(0, 20) : kind === 'kospi40' ? ks.slice(0, 40) : syms
+      if (pick.length === 0) throw new Error('목록이 비어 있습니다')
+      setSymbolsText(pick.join(', '))
+      setLoadNote(`시총 상위 목록 적용: ${pick.length}종목 (크론이 매일 갱신하는 실측 랭킹)`)
+    } catch (e) {
+      setLoadNote(`⚠️ 시총 랭킹 목록 로드 실패: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
   async function run() {
     setBusy(true)
     setError(null)
@@ -382,8 +457,21 @@ export function SpecSimulator() {
       if (okCount === 0) throw new Error('시세를 하나도 받지 못했습니다 — 네트워크/프록시 상태를 확인하세요')
       if (failed.length) setLoadNote(`⚠️ 로드 실패로 제외: ${failed.join(', ')} (${okCount}종목으로 실행)`)
 
+      // 레짐 게이트가 있으면 지수 시세도 필요하다 (매매 대상 아님 — 판정 전용)
+      if (spec.regime) {
+        setProgress(`레짐 지수(${spec.regime.symbol}) 로딩…`)
+        try {
+          const rh = await getDailyHistory(spec.regime.symbol, range)
+          if (rh.bars.length > 0) histories[spec.regime.symbol] = rh.bars
+          else setLoadNote('⚠️ 레짐 지수 데이터가 비어 있습니다 — 진입이 발생하지 않습니다')
+        } catch {
+          setLoadNote('⚠️ 레짐 지수 로드 실패 — 진입이 발생하지 않습니다 (레짐을 "없음"으로 바꾸거나 재시도)')
+        }
+      }
+
       setProgress('백테스트 실행…')
-      const effective: StrategySpec = { ...spec, universe: { ...spec.universe, symbols: Object.keys(histories) } }
+      const tradable = Object.keys(histories).filter((s) => s !== spec.regime?.symbol)
+      const effective: StrategySpec = { ...spec, universe: { ...spec.universe, symbols: tradable } }
       const res = runStrategySpec(histories, startDate || '0000-00-00', effective, cost)
       setResult(res)
 
@@ -613,6 +701,17 @@ export function SpecSimulator() {
           </select>
         </label>
         <label>
+          장 레짐
+          <InfoTip text="코스피 지수의 5·10일선이 정배열인 날에만 신규 진입 후보를 뽑습니다. 보유 종목의 매도 규칙은 레짐과 무관하게 계속 동작합니다. 백테스트 실측: 승률엔 +1~2%p지만 최대낙폭을 크게 줄입니다(−44%→−30%)." />
+          <select
+            value={spec.regime ? 'kospi' : 'none'}
+            onChange={(e) => setSpec((s) => ({ ...s, regime: e.target.value === 'kospi' ? KOSPI_REGIME : null }))}
+          >
+            <option value="none">없음</option>
+            <option value="kospi">코스피 5·10일선 정배열일 때만 진입</option>
+          </select>
+        </label>
+        <label>
           데이터
           <select value={range} onChange={(e) => setRange(e.target.value as HistoryRange)}>
             <option value="5y">5년</option>
@@ -629,8 +728,19 @@ export function SpecSimulator() {
       <div className="bt-controls bt-settings">
         <label>
           표본 종목 (쉼표 구분)
-          <InfoTip text="조건식을 검증할 표본입니다. 전 종목이 아니라 표본이므로 '등락률 상위 N위'는 표본 내 순위로 계산됩니다 — 실제 전 종목 순위와 다릅니다. 상장폐지 종목이 빠진 표본은 성적을 부풀립니다(생존편향)." />
+          <InfoTip text="조건식을 검증할 표본입니다. 아래 버튼으로 시가총액 상위 목록(크론이 매일 실측 갱신)을 한 번에 넣을 수 있습니다. 전 종목이 아니라 표본이므로 '등락률 상위 N위'는 표본 내 순위로 계산되고, 상장폐지 종목이 빠진 표본은 성적을 부풀립니다(생존편향)." />
         </label>
+        <div className="bt-actions">
+          <button type="button" className="bt-btn-mini" onClick={() => loadTopSymbols('kospi20')}>
+            시총 상위: 코스피 20
+          </button>
+          <button type="button" className="bt-btn-mini" onClick={() => loadTopSymbols('kospi40')}>
+            코스피 40
+          </button>
+          <button type="button" className="bt-btn-mini" onClick={() => loadTopSymbols('all')}>
+            코스피+코스닥 78
+          </button>
+        </div>
         <textarea
           value={symbolsText}
           onChange={(e) => setSymbolsText(e.target.value)}
@@ -688,16 +798,26 @@ export function SpecSimulator() {
         <button type="button" className="bt-btn-mini" onClick={exportJson}>
           스펙 JSON
         </button>
-        <button
-          type="button"
-          className="bt-btn-mini"
-          onClick={() => {
-            setSpec(HEROMOON_MOMENTUM)
-            setJsonOpen(false)
+        <select
+          value=""
+          onChange={(e) => {
+            const p = PRESETS.find((x) => x.id === e.target.value)
+            if (p) {
+              setSpec(p.spec)
+              setJsonOpen(false)
+            }
           }}
+          title="프리셋 불러오기"
         >
-          프리셋: 급등주 5일선 돌파
-        </button>
+          <option value="" disabled>
+            프리셋 불러오기…
+          </option>
+          {PRESETS.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.label}
+            </option>
+          ))}
+        </select>
       </div>
       {error && <div className="bt-warn">⛔ {error}</div>}
       {loadNote && <div className="bt-warn">{loadNote}</div>}

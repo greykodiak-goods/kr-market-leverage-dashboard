@@ -208,7 +208,8 @@ function printRow(s: RunStats) {
 
 // ---- 실행 -------------------------------------------------------------------
 
-async function main() {
+/** 데이터 일괄 로드 — main()·sweep() 공용 */
+async function loadAll() {
   // 유니버스 = 5분봉 크론이 오늘 실측으로 뽑은 시총 상위 목록 (ETF 제외)
   // 로컬에 없으면(작업 브랜치 체크아웃) main의 실측 목록을 가져온다.
   let index: { symbols?: Record<string, unknown> }
@@ -250,9 +251,13 @@ async function main() {
   }
   // 코스피 시총 상위 20 — index.json의 순서는 수집 당시 랭킹 순서다
   const kospi20 = allSyms.filter((s) => s.endsWith('.KS') && !ETF_IN_STORE.has(s)).slice(0, 20)
-  log(`코스피 상위 20 표본: ${kospi20.join(', ')}`)
   log(`일봉 로드: ${Object.keys(histories).length}종목 성공, 실패/제외 ${failed.length}${failed.length ? ` — ${failed.join(', ')}` : ''}`)
   log(`벤치마크 ${BENCH}: ${bench.length}봉 (${bench[0]?.date} ~ ${bench[bench.length - 1]?.date})`)
+  return { histories, bench, kospi20 }
+}
+
+async function main() {
+  const { histories, bench, kospi20 } = await loadAll()
 
   // 구간: 전체(10y) · 최근 3년 · 최근 1년
   const today = new Date()
@@ -449,7 +454,82 @@ async function main() {
   log('⚠️ 본 결과는 시뮬레이션이며 투자자문이 아니다. 판정 기준은 알파(연환산, KODEX 200 대비).')
 }
 
-main().catch((e) => {
+/**
+ * 수익 조건 탐색 스윕 (MODE=sweep) — "수익이 나는 조건을 찾아봐" (2026-07-30 대표).
+ *
+ * 이평 기간 × 필터 × 청산 방식 그리드를 전반부(~2023-12-31)에서 전수 실행해
+ * 알파 순으로 줄 세우고, 상위 12개만 후반부(2024~)와 최근 3년으로 검증한다.
+ * 선발과 검증을 같은 데이터로 하지 않는 것이 핵심 — 후반에서도 살아남아야 진짜다.
+ */
+async function sweep() {
+  const { histories, bench } = await loadAll()
+  const CUT = '2023-12-31'
+  const histFit: Record<string, DailyBar[]> = {}
+  for (const [s, bars] of Object.entries(histories)) histFit[s] = bars.filter((b) => b.date <= CUT)
+  const benchFit = bench.filter((b) => b.date <= CUT)
+  const today = new Date()
+  const y3 = new Date(today.getTime() - 3 * 365.25 * 86400e3).toISOString().slice(0, 10)
+
+  const filterSets: { name: string; nodes: ConditionNode[] }[] = [
+    { name: '필터없음', nodes: [] },
+    { name: '급증1.5', nodes: [F.볼륨서지] },
+    { name: '신고20', nodes: [F.신고가] },
+    { name: '급증+신고20', nodes: [F.볼륨서지, F.신고가] },
+    { name: '급증+신고55', nodes: [F.볼륨서지, c('55일신고가', { kind: 'highBreak', days: 55 })] },
+    { name: '급증+신고20+대금', nodes: [F.볼륨서지, F.신고가, F.거래대금] },
+  ]
+  const exitKinds = ['타이트', '버퍼2', '느린청산'] as const
+  const exitsOf = (p: number, k: (typeof exitKinds)[number]) =>
+    k === '타이트'
+      ? [{ kind: 'maBreak' as const, maPeriod: p }]
+      : k === '버퍼2'
+        ? [{ kind: 'maBreak' as const, maPeriod: p, pct: 2 }]
+        : [{ kind: 'maBreak' as const, maPeriod: p * 2, pct: 2 }]
+
+  interface Row {
+    label: string
+    spec: StrategySpec
+    fit: RunStats
+  }
+  const rows: Row[] = []
+  for (const p of [5, 10, 20]) {
+    for (const fs of filterSets) {
+      for (const ek of exitKinds) {
+        const spec = baseSpec({
+          entry: { op: 'and', nodes: [c('돌파', { kind: 'maCross', period: p, dir: 'above' }), ...fs.nodes] },
+          exits: exitsOf(p, ek),
+        })
+        const label = `MA${p}·${fs.name}·${ek}`
+        const fit = stats(label, 'fit', runStrategySpec(histFit, '0000-00-00', spec, COST), benchFit, COST.initialCapital)
+        rows.push({ label, spec, fit })
+      }
+    }
+  }
+  rows.sort((a, b) => b.fit.alphaPct - a.fit.alphaPct)
+  const fitPositive = rows.filter((r) => r.fit.alphaPct > 0).length
+  log('')
+  log(`스윕 ${rows.length}개 구성 — 전반부(2016~2023) 알파 양수: ${fitPositive}개`)
+  log('')
+  log('| 구성 (전반부 상위 12) | 전반 알파 | 전반 승률 | **후반(2024~) 알파** | 후반 승률 | 후반 MDD | 3y 알파 | 3y 총수익 | 매매(전반) |')
+  log('|---|---|---|---|---|---|---|---|---|')
+  for (const r of rows.slice(0, 12)) {
+    const val = stats(r.label, 'val', runStrategySpec(histories, '2024-01-01', r.spec, COST), bench, COST.initialCapital)
+    const w3 = stats(r.label, '3y', runStrategySpec(histories, y3, r.spec, COST), bench, COST.initialCapital)
+    log(
+      `| ${r.label} | ${f1(r.fit.alphaPct)}%p | ${r.fit.winRatePct?.toFixed(0)}% | **${f1(val.alphaPct)}%p** | ${
+        val.winRatePct?.toFixed(0) ?? '—'
+      }% | ${f1(val.mddPct)}% | ${f1(w3.alphaPct)}%p | ${f1(w3.totalPct)}% | ${r.fit.trades} |`,
+    )
+  }
+  log('')
+  log('| (참고) 전반부 하위 3 | 전반 알파 |')
+  for (const r of rows.slice(-3)) log(`| ${r.label} | ${f1(r.fit.alphaPct)}%p |`)
+  log('')
+  log('⚠️ 상위 구성을 다시 고르는 행위 자체가 다중비교 편향을 만든다 — 후반·3y가 모두 양수인 구성만 후보로 삼고, 최종 판단은 페이퍼 트레이딩 실측으로.')
+}
+
+const entry = process.env.MODE === 'sweep' ? sweep : main
+entry().catch((e) => {
   console.error('실행 실패:', e)
   process.exit(1)
 })

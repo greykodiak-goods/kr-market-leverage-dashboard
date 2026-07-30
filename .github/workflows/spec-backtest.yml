@@ -9,7 +9,12 @@
 name: spec-backtest
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '실행 모드 (backtest = 변형 비교 | sweep = 수익 조건 그리드 탐색)'
+        required: false
+        default: 'backtest'
 
 permissions:
   contents: read
@@ -30,3 +35,5 @@ jobs:
 
       - name: 백테스트 실행
         run: node scripts/spec-backtest.mjs
+        env:
+          MODE: ${{ inputs.mode }}
