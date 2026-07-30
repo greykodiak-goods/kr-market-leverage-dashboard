@@ -535,6 +535,103 @@ async function sweep() {
 }
 
 /**
+ * 손익비 분해 (MODE=payoff) — "종합적으로 손익비 판단해서 좋은 기법 정리" (2026-07-30 대표).
+ *
+ * 지금까지의 최종 후보들만 골라, 승률·평균이익·평균손실을 분리해
+ * 손익비(평균이익 ÷ |평균손실|)와 프로핏 팩터(총이익 ÷ |총손실|)를 실측한다.
+ * 기대값/회 = 승률×평균이익 − 패률×|평균손실| (= 평균손익)과 반드시 함께 본다 —
+ * 손익비 하나만으로는 회전·비용이 빠져 판단이 뒤집힐 수 있다.
+ */
+async function payoff() {
+  const { histories, bench, kospi20, tradable } = await loadAll()
+  const today = new Date()
+  const y3 = new Date(today.getTime() - 3 * 365.25 * 86400e3).toISOString().slice(0, 10)
+  const uni = { ...baseSpec({}).universe, symbols: tradable }
+  const k20 = { ...baseSpec({}).universe, symbols: kospi20 }
+  const ma20Entry = (...extra: ConditionNode[]): ConditionNode => ({
+    op: 'and',
+    nodes: [c('20일선돌파', { kind: 'maCross', period: 20, dir: 'above' }), ...extra],
+  })
+  const SLOW_EXIT = [{ kind: 'maBreak' as const, maPeriod: 40, pct: 2 }]
+
+  const candidates: { label: string; spec: StrategySpec }[] = [
+    { label: 'A 원문 5일선(기준)', spec: baseSpec({ universe: uni }) },
+    {
+      label: 'U 5일선·급증+신고+대금+버퍼',
+      spec: baseSpec({ entry: withFilters(F.볼륨서지, F.신고가, F.거래대금), exits: BUFFER_EXIT, universe: uni }),
+    },
+    {
+      label: 'V4 코스피20·레짐·급증+버퍼',
+      spec: baseSpec({
+        entry: { op: 'and', nodes: [...GOBLIN_NODES, F.볼륨서지] } as ConditionNode,
+        universe: k20,
+        regime: KOSPI_REGIME,
+        exits: BUFFER_EXIT,
+      }),
+    },
+    {
+      label: 'X3 V4+익절+3%(고승률형)',
+      spec: baseSpec({
+        entry: { op: 'and', nodes: [...GOBLIN_NODES, F.볼륨서지] } as ConditionNode,
+        universe: k20,
+        regime: KOSPI_REGIME,
+        exits: [{ kind: 'takeProfit' as const, pct: 3 }, { kind: 'maBreak' as const, maPeriod: 5, pct: 2 }],
+      }),
+    },
+    { label: 'MA20·신고20·느린청산', spec: baseSpec({ entry: ma20Entry(F.신고가), exits: SLOW_EXIT, universe: uni }) },
+    {
+      label: 'MA20·급증+신고20·느린청산',
+      spec: baseSpec({ entry: ma20Entry(F.볼륨서지, F.신고가), exits: SLOW_EXIT, universe: uni }),
+    },
+    {
+      label: 'MA20·급증+신고20+대금·느린청산',
+      spec: baseSpec({ entry: ma20Entry(F.볼륨서지, F.신고가, F.거래대금), exits: SLOW_EXIT, universe: uni }),
+    },
+    {
+      label: 'MA20·급증·타이트(고회전)',
+      spec: baseSpec({ entry: ma20Entry(F.볼륨서지), exits: [{ kind: 'maBreak' as const, maPeriod: 20 }], universe: uni }),
+    },
+  ]
+
+  const windows: [string, string][] = [
+    ['전체', '0000-00-00'],
+    ['후반 2024~', '2024-01-01'],
+    ['최근 3년', y3],
+  ]
+  log('')
+  log('손익비 = 평균이익 ÷ |평균손실| · PF = 총이익 ÷ |총손실| · 기대값/회 = 승률 반영 평균손익 (비용 포함)')
+  log('')
+  log('| 전략 | 구간 | 승률 | 평균이익 | 평균손실 | **손익비** | PF | 기대값/회 | 매매 | 평균보유일 | 알파(연) | MDD |')
+  log('|---|---|---|---|---|---|---|---|---|---|---|---|')
+  for (const v of candidates) {
+    for (const [wLabel, start] of windows) {
+      const r = runStrategySpec(histories, start, v.spec, COST)
+      const s = stats(v.label, wLabel, r, bench, COST.initialCapital)
+      const closed = r.trades.filter((t) => t.exitDate != null)
+      const wins = closed.filter((t) => (t.pnlPct ?? 0) > 0)
+      const losses = closed.filter((t) => (t.pnlPct ?? 0) <= 0)
+      const avgOf = (a: typeof closed) => (a.length ? a.reduce((sum, t) => sum + (t.pnlPct ?? 0), 0) / a.length : null)
+      const avgWin = avgOf(wins)
+      const avgLoss = avgOf(losses)
+      const ratio = avgWin != null && avgLoss != null && avgLoss !== 0 ? avgWin / Math.abs(avgLoss) : null
+      const sumWin = wins.reduce((sum, t) => sum + (t.pnlPct ?? 0), 0)
+      const sumLoss = Math.abs(losses.reduce((sum, t) => sum + (t.pnlPct ?? 0), 0))
+      const pf = sumLoss > 0 ? sumWin / sumLoss : null
+      log(
+        `| ${v.label} | ${wLabel} | ${s.winRatePct?.toFixed(0) ?? '—'}% | ${f2(avgWin)}% | ${f2(avgLoss)}% | **${
+          ratio?.toFixed(2) ?? '—'
+        }** | ${pf?.toFixed(2) ?? '—'} | ${f2(s.avgPnlPct)}% | ${s.trades} | ${s.avgHoldDays?.toFixed(1) ?? '—'} | ${f1(
+          s.alphaPct,
+        )}%p | ${f1(s.mddPct)}% |`,
+      )
+    }
+  }
+  log('')
+  log('⚠️ 선택편향(오늘의 시총 상위) 존재 — 절대 수치는 상한선. 손익비·PF의 상대 비교 중심으로 볼 것.')
+  log('⚠️ 시뮬레이션이며 투자자문이 아니다. 판정은 알파+MDD(규칙 5), 손익비·승률은 구조 이해용.')
+}
+
+/**
  * 돌파 이벤트 채굴 (MODE=mine) — 대표 제안(2026-07-30):
  * "5일선 돌파 구간을 모두 기록한 다음, 수익 나는 시점의 주변 조건들을 추려서
  *  가장 많이 겹치는 조건을 찾는다."
@@ -691,7 +788,8 @@ async function mine() {
   log('⚠️ 유니버스가 "오늘의 시총 상위"라 수치는 부풀려질 수 있다(선택편향). 조건 간 상대 비교 중심으로 볼 것.')
 }
 
-const entry = process.env.MODE === 'sweep' ? sweep : process.env.MODE === 'mine' ? mine : main
+const entry =
+  process.env.MODE === 'sweep' ? sweep : process.env.MODE === 'mine' ? mine : process.env.MODE === 'payoff' ? payoff : main
 entry().catch((e) => {
   console.error('실행 실패:', e)
   process.exit(1)
