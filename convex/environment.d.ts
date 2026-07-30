@@ -4,6 +4,8 @@ declare const process: {
   env: {
     DART_API_KEY?: string
     INGEST_TOKEN?: string
+    // Phase A ingest — INGEST_TOKEN과 같은 용도. 둘 중 등록된 것을 쓴다(http.ts ingestSecret()).
+    INGEST_SECRET?: string
     [key: string]: string | undefined
   }
 }

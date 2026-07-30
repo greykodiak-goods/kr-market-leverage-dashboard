@@ -12,8 +12,11 @@ import type * as crons from "../crons.js";
 import type * as dart from "../dart.js";
 import type * as datasets from "../datasets.js";
 import type * as http from "../http.js";
+import type * as intraday from "../intraday.js";
 import type * as lib_dartRadar from "../lib/dartRadar.js";
+import type * as lib_intradayServe from "../lib/intradayServe.js";
 import type * as ops from "../ops.js";
+import type * as paper from "../paper.js";
 
 import type {
   ApiFromModules,
@@ -26,8 +29,11 @@ declare const fullApi: ApiFromModules<{
   dart: typeof dart;
   datasets: typeof datasets;
   http: typeof http;
+  intraday: typeof intraday;
   "lib/dartRadar": typeof lib_dartRadar;
+  "lib/intradayServe": typeof lib_intradayServe;
   ops: typeof ops;
+  paper: typeof paper;
 }>;
 
 /**

@@ -19,6 +19,7 @@
 |---|---|---|
 | `DART_API_KEY` | DART OpenAPI 수집 | `DART_API_KEY.txt` |
 | `INGEST_TOKEN` | POST /ingest/* 쓰기 보호 | `CONVEX_INGEST_TOKEN.txt` |
+| `INGEST_SECRET` | 위와 같은 용도의 별칭 — 둘 중 등록된 것을 쓴다(`http.ts` `ingestSecret()`) | Doppler `investing-ops` 이관 대상 |
 
 설정: `npx convex env set NAME "$(tr -d '\r\n ' < <secrets파일>)"` (deploy key env 하에서) 또는 대시보드
 Settings → Environment Variables. 확인은 `npx convex env list`로 **이름만**.
@@ -41,10 +42,28 @@ Settings → Environment Variables. 확인은 `npx convex env list`로 **이름�
 - `GET /data/hynix-outlook.json` — ingest된 전망 JSON 서빙
 - `POST /ingest/hynix-outlook` — 헤더 `x-ingest-token` 필수(INGEST_TOKEN). 로컬 LLM 잡 산출물 적재.
 
+### Phase A — 읽기 호환 서빙 (배포·적재 절차는 `docs/convex-deploy.md`)
+
+정적 `public/data/**` 와 **같은 키 구조**로 돌려준다. 프론트는 URL만 바꿔 끼우면 된다.
+
+| 엔드포인트 | 대응 정적 파일 | 비고 |
+|---|---|---|
+| `GET /data/intraday/index.json` | `public/data/intraday/index.json` | 심볼 요약 전체(현재 80). 상한 500 — 넘치면 응답에 `truncated` |
+| `GET /data/intraday/<심볼>.json` | `public/data/intraday/<심볼>.json` | **커서 페이지네이션**. 기본 최근 500봉, `?from=<epoch초>&limit=` (최대 2000). 응답에 `page` 키 추가 |
+| `GET /data/paper/<트랙>.json` | `public/data/paper/<트랙>.json` | 원문 문자열 그대로(왕복 무손실) |
+| `POST /ingest/intraday` | — | `{ symbol, bars?(≤500), meta? }` · `x-ingest-token` |
+| `POST /ingest/intraday-index` | — | `{ header }` — index.json의 헤더부 |
+| `POST /ingest/paper` | — | `{ track, payload }` |
+
+업로더: `scripts/convex-sync.mjs` (백필 → 이후 `--recent=500` 증분). 순수 로직은
+`convex/lib/intradayServe.ts` · `scripts/lib/convexSync.mjs` 에 분리했고 `tests/convex-sync.test.ts`가 검증한다.
+
 ## 테이블 (schema.ts)
 
 `dartFilings`(by_rceptNo 업서트, 영구) · `leverageSeries`(FreeSIS 예정) · `lendingSeries` ·
-`holdRatioSeries` · `datasets`(통짜 JSON 최신 1건) · `jobRuns`(90일).
+`holdRatioSeries` · `datasets`(통짜 JSON 최신 1건) · `jobRuns`(90일) ·
+**`intradayMeta`**(by_symbol) · **`intradayBars`**(by_symbol_t = 고유키 겸 서빙 인덱스) ·
+**`paperTracks`**(by_track).
 SEED(가상 표본)는 시계열 테이블 적재 금지 — 실측만.
 
 ## 현재 단계 (기획서 §6)

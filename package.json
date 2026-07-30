@@ -11,6 +11,7 @@
     "fetch-leverage": "node scripts/fetch-leverage.mjs",
     "fetch-supply-demand": "node scripts/fetch-supply-demand.mjs",
     "seed-data": "node scripts/generate-seed.mjs",
+    "convex-sync": "node scripts/convex-sync.mjs",
     "test": "node scripts/run-tests.mjs"
   },
   "dependencies": {

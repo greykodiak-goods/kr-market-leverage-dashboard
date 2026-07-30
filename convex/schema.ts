@@ -79,6 +79,50 @@ export default defineSchema({
     producer: v.string(), // "convex-dart-cron" | "local-llm-job" | …
   }).index('by_key', ['key']),
 
+  // ── Phase A(읽기 호환 백엔드): 정적 JSON으로 서빙 중인 것들의 DB 사본 ──────────
+  // 목적은 "프론트가 URL만 바꿔 끼울 수 있게" 하는 것이다. 스키마는 기존 파일 구조에서
+  // 역으로 도출했다(2026-07-30 public/data 실파일 기준). 파일 구조가 바뀌면 여기도 함께 바꾼다.
+
+  // 종목별 5분봉 요약 — index.json의 symbols[심볼] + 개별 파일의 coverage/tz를 한 문서에 모은다.
+  // (두 엔드포인트가 같은 문서를 쓰므로 요약이 서로 어긋날 수 없다.)
+  intradayMeta: defineTable({
+    symbol: v.string(), // "000660.KS"
+    bars: v.number(), // 누적 봉 수
+    days: v.number(), // 거래일 수
+    first: v.string(), // "YYYY-MM-DD"
+    last: v.string(),
+    thin: v.number(), // 봉이 모자란 날 수
+    coverage: v.optional(v.any()), // 개별 파일의 coverage 객체 원형
+    tz: v.optional(v.string()), // "Asia/Seoul"
+    // 아래 3개는 현재 정적 index.json에 없다 — 랭킹·종목명 이관 시 채운다.
+    // 값이 없으면 응답에도 넣지 않으므로 기존 스키마 호환은 깨지지 않는다.
+    name: v.optional(v.string()),
+    market: v.optional(v.string()), // "KS" | "KQ"
+    rank: v.optional(v.number()),
+    updatedAt: v.string(), // ISO
+  }).index('by_symbol', ['symbol']),
+
+  // 5분봉 본체. t = epoch **초**(정적 JSON의 ts와 같은 단위).
+  // [symbol, t] 복합 인덱스가 곧 고유키다 — 재수집·크론 중복 실행에도 업서트로 멱등.
+  // 이 인덱스는 서빙의 범위 조회(symbol 등치 → t 범위 → t 정렬)에도 그대로 쓰인다.
+  intradayBars: defineTable({
+    symbol: v.string(),
+    t: v.number(),
+    o: v.number(),
+    h: v.number(),
+    l: v.number(),
+    c: v.number(),
+    v: v.number(),
+  }).index('by_symbol_t', ['symbol', 't']),
+
+  // 페이퍼 트레이딩 트랙 JSON — 트랙마다 키 구조가 달라(all80/kosdaq40/ma15/config)
+  // 파싱하지 않고 **문자열 그대로** 보관한다. 왕복하면서 키 순서·수치 표현이 바뀌지 않는다.
+  paperTracks: defineTable({
+    track: v.string(), // "all80" | "kosdaq40" | "ma15" | "config"
+    payload: v.string(), // JSON 문자열 원본
+    updatedAt: v.string(), // ISO
+  }).index('by_track', ['track']),
+
   // 운영: 크론 실행 로그 — 90일 보존(cleanup 크론이 삭제)
   jobRuns: defineTable({
     jobName: v.string(),

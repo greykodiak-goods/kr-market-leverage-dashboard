@@ -1,0 +1,77 @@
+# public/data → Convex 동기화 (Phase A · 읽기 호환 백엔드)
+#
+# 왜 스케줄이 없나 (의도된 것 — 지우지 말 것):
+#   Phase A에서는 **정적 파일이 여전히 정본**이고 Convex는 사본이다. 배포·시크릿 등록이
+#   대표 T0 항목이라 아직 끝나지 않았고, 등록 전에 스케줄을 켜면 매일 실패 알림만 쌓인다.
+#   병행 검증(§6 단계 3)이 끝나 프론트 URL을 전환하는 시점에 아래 schedule 블록을 켠다.
+#
+#     # schedule:
+#     #   - cron: '45 7 * * 1-5'  # 평일 07:45 UTC = 16:45 KST (intraday-cron 16:15 이후)
+#
+# 시크릿(리포 Settings → Secrets → Actions. 값 입력은 대표만 · T0):
+#   CONVEX_URL            https://<deployment>.convex.site
+#   CONVEX_INGEST_SECRET  Convex env INGEST_SECRET(또는 INGEST_TOKEN)과 같은 값
+#   둘 중 하나라도 없으면 이 워크플로는 **아무것도 하지 않고 명시적으로 스킵**한다.
+#
+# 경계: 공개 대시보드 데이터 복사만. 브로커 API·주문·계좌 자격증명과 무관(규칙 2 무관 영역).
+
+name: convex-sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      recent:
+        description: '종목당 최근 N봉만 전송 (비우면 전량 백필)'
+        required: false
+        default: '500'
+      dry_run:
+        description: '전송 없이 계획만 출력'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read # 데이터를 커밋하지 않는다 — 읽어서 밀어넣기만 한다
+
+concurrency:
+  group: convex-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # 시크릿 존재 여부만 본다 — 값은 어떤 경로로도 출력하지 않는다.
+      - name: 시크릿 확인 (없으면 스킵)
+        id: gate
+        env:
+          CONVEX_URL: ${{ secrets.CONVEX_URL }}
+          CONVEX_INGEST_SECRET: ${{ secrets.CONVEX_INGEST_SECRET }}
+        run: |
+          if [ -z "$CONVEX_URL" ] || [ -z "$CONVEX_INGEST_SECRET" ]; then
+            echo "::notice::CONVEX_URL / CONVEX_INGEST_SECRET 리포 시크릿이 없어 스킵합니다. (등록은 대표 T0)"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 의존성 불필요 — 스크립트는 Node 내장 fetch만 쓴다
+      - name: Convex 동기화
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          CONVEX_URL: ${{ secrets.CONVEX_URL }}
+          CONVEX_INGEST_SECRET: ${{ secrets.CONVEX_INGEST_SECRET }}
+        run: |
+          ARGS=""
+          if [ -n "${{ inputs.recent }}" ]; then ARGS="$ARGS --recent=${{ inputs.recent }}"; fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
+          node scripts/convex-sync.mjs $ARGS
