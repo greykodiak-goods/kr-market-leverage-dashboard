@@ -164,6 +164,7 @@ async function main() {
 
   // ---- 감시목록 결정 -------------------------------------------------------
   const stored = listStoredSymbols()
+  const nameBySym = new Map() // 심볼 → 종목명 (랭킹 실측 + 직전 index 유지)
   let symbols
   let watchSource
   if (process.env.INTRADAY_SYMBOLS) {
@@ -180,6 +181,7 @@ async function main() {
       watchSource = `정적 시드 폴백 — 랭킹 조회 실패: ${e.message}`
     }
     symbols = buildWatchlist(ranked, stored, [...SEED_KOSPI, ...SEED_KOSDAQ])
+    for (const r of ranked) if (r.name) nameBySym.set(r.symbol, r.name)
   }
   log(`감시목록 ${symbols.length}종목 · 출처: ${watchSource} · 기존 누적 ${stored.length}종목 유지`)
   log(`range=${RANGE} interval=${INTERVAL}`)
@@ -190,6 +192,13 @@ async function main() {
   let failed = 0
   let unchanged = 0
   const summary = {}
+  // 랭킹 이탈(orphan) 종목은 직전 index.json의 이름을 유지한다 — UI 종목명 표시용
+  try {
+    const prev = JSON.parse(readFileSync(join(OUT_DIR, 'index.json'), 'utf8'))
+    for (const [s, v] of Object.entries(prev.symbols ?? {})) if (v?.name && !nameBySym.has(s)) nameBySym.set(s, v.name)
+  } catch {
+    /* 첫 실행이면 없음 */
+  }
 
   for (const sym of symbols) {
     try {
@@ -209,7 +218,14 @@ async function main() {
       const merged = mergeBars(before, r.bars)
       const added = merged.length - before.length
       const cov = coverage(merged)
-      summary[sym] = { bars: merged.length, days: cov.days, first: cov.firstDate, last: cov.lastDate, thin: cov.thinDays.length }
+      summary[sym] = {
+        ...(nameBySym.get(sym) ? { name: nameBySym.get(sym) } : {}),
+        bars: merged.length,
+        days: cov.days,
+        first: cov.firstDate,
+        last: cov.lastDate,
+        thin: cov.thinDays.length,
+      }
       const next = JSON.stringify({ symbol: sym, bars: packBars(merged), coverage: cov, tz: r.tz })
       // 내용이 그대로면 다시 쓰지 않는다 — 휴장일에 전 파일이 갈리는 것을 방지
       const prevRaw = existsSync(symbolFile(sym)) ? readFileSync(symbolFile(sym), 'utf8') : null

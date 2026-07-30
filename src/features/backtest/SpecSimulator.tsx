@@ -28,6 +28,7 @@ import {
 import { KpiCard } from '../../components/KpiCard'
 import { EquityChart } from './EquityChart'
 import { InfoTip } from '../../components/InfoTip'
+import { displaySymbol } from '../../lib/krNames'
 
 // ---- 저장 ------------------------------------------------------------------
 
@@ -472,6 +473,21 @@ export function SpecSimulator() {
   function patchEntry(nextFlat: FlatCond[]) {
     setSpec((s) => ({ ...s, entry: toEntry(nextFlat) }))
   }
+
+  // 종목명 맵 — index.json의 실측 이름(크론이 채움)이 정본, 정적 맵은 폴백
+  const [nameMap, setNameMap] = useState<Record<string, string>>({})
+  useEffect(() => {
+    fetch(`${import.meta.env.BASE_URL}data/intraday/index.json`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((idx: { symbols?: Record<string, { name?: string }> } | null) => {
+        if (!idx?.symbols) return
+        const m: Record<string, string> = {}
+        for (const [s, v] of Object.entries(idx.symbols)) if (v?.name) m[s] = v.name
+        if (Object.keys(m).length) setNameMap(m)
+      })
+      .catch(() => {})
+  }, [])
+  const dispSym = (sym?: string) => (sym ? displaySymbol(sym, nameMap) : '—')
 
   // 시총 상위 원클릭 — 5분봉 크론이 매일 실측으로 갱신하는 랭킹 목록(index.json)에서 가져온다
   async function loadTopSymbols(kind: 'kospi20' | 'kospi40' | 'all') {
@@ -986,7 +1002,7 @@ export function SpecSimulator() {
                 <tbody>
                   {recentTrades.map((t, i) => (
                     <tr key={i}>
-                      <td>{t.symbol}</td>
+                      <td>{dispSym(t.symbol)}</td>
                       <td>{t.entryDate}</td>
                       <td>{t.exitDate ?? '보유중'}</td>
                       <td className={(t.pnlPct ?? 0) >= 0 ? 'pos' : 'neg'}>{t.pnlPct != null ? fmtPct(t.pnlPct, 2) : '—'}</td>
@@ -1018,7 +1034,7 @@ export function SpecSimulator() {
                   {screenRows.map((r) => (
                     <tr key={r.symbol}>
                       <td>{r.rank ?? '—'}</td>
-                      <td>{r.symbol}</td>
+                      <td>{dispSym(r.symbol)}</td>
                       <td className={(r.changePct ?? 0) >= 0 ? 'pos' : 'neg'}>
                         {r.changePct != null ? fmtPct(r.changePct, 2) : '—'}
                       </td>
