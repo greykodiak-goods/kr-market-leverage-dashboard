@@ -363,6 +363,30 @@ async function main() {
       cost: COST,
       windows: w2,
     },
+    // ---- 조기 익절 변형: 승률 60%가 나오는가, 대가는 얼마인가 ---------------
+    // 익절이 먼저 걸리고(배열 순서), 안 걸리면 기존 5일선 이탈로 청산.
+    ...([2, 3, 5] as const).map((tp) => ({
+      label: `W${tp} V1+익절+${tp}%`,
+      spec: baseSpec({
+        entry: GOBLIN_ENTRY,
+        universe: { ...baseSpec({}).universe, symbols: kospi20 },
+        regime: KOSPI_REGIME,
+        exits: [{ kind: 'takeProfit' as const, pct: tp }, { kind: 'maBreak' as const, maPeriod: 5 }],
+      }),
+      cost: COST,
+      windows: w2,
+    })),
+    ...([3, 5] as const).map((tp) => ({
+      label: `X${tp} V4+익절+${tp}%`,
+      spec: baseSpec({
+        entry: { op: 'and', nodes: [...GOBLIN_NODES, F.볼륨서지] } as ConditionNode,
+        universe: { ...baseSpec({}).universe, symbols: kospi20 },
+        regime: KOSPI_REGIME,
+        exits: [{ kind: 'takeProfit' as const, pct: tp }, { kind: 'maBreak' as const, maPeriod: 5, pct: 2 }],
+      }),
+      cost: COST,
+      windows: w2,
+    })),
   ]
 
   log('')
@@ -387,7 +411,9 @@ async function main() {
   for (const [s, bars] of Object.entries(histories)) histFit[s] = bars.filter((b) => b.date <= CUT)
   const benchFit = bench.filter((b) => b.date <= CUT)
   const finalists = variants.filter((v) =>
-    ['A', 'H', 'L', 'P', 'R', 'S', 'T', 'U', 'V0', 'V1', 'V2', 'V3', 'V4'].includes(v.label.split(' ')[0]),
+    ['A', 'H', 'L', 'P', 'R', 'S', 'T', 'U', 'V0', 'V1', 'V2', 'V3', 'V4', 'W2', 'W3', 'W5', 'X3', 'X5'].includes(
+      v.label.split(' ')[0],
+    ),
   )
   log('')
   log(`홀드아웃 분리: 전반부(~${CUT}) vs 후반부(2024-01-01~)`)
