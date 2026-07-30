@@ -111,7 +111,8 @@ async function main() {
   }
   if (failed.length) console.log(`⚠️ 로드 실패 ${failed.length}: ${failed.join(', ')}`)
   if (Object.keys(histories).length < 20) throw new Error('시세 로드가 너무 적어 중단 — 오늘 기록을 갱신하지 않는다')
-  const bench = await fetchDaily(config.benchmark, config.inception)
+  // 개시일이 아직 오지 않았을 수 있으므로(미래 period1 → Yahoo 400) 워밍업 시점부터 받아 자른다
+  const bench = (await fetchDaily(config.benchmark, warmupStart)).filter((b) => b.date >= config.inception)
 
   mkdirSync(paperDir, { recursive: true })
   for (const [trackId, track] of Object.entries(config.tracks)) {
