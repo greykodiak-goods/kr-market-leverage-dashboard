@@ -650,33 +650,48 @@ async function payoff() {
 async function era() {
   // 2009년부터 당겨 2010년 첫 진입 전 MA40·신고가 워밍업 확보
   const { histories, bench, tradable } = await loadAll('since:2009-01-01')
-  const spec = baseSpec({
-    entry: {
-      op: 'and',
-      nodes: [c('20일선돌파', { kind: 'maCross', period: 20, dir: 'above' }), c('20일신고가', { kind: 'highBreak', days: 20 })],
+  const entry20 = {
+    op: 'and',
+    nodes: [c('20일선돌파', { kind: 'maCross', period: 20, dir: 'above' }), c('20일신고가', { kind: 'highBreak', days: 20 })],
+  } as ConditionNode
+  const uni = { ...baseSpec({}).universe, symbols: tradable }
+  const SLOW = { kind: 'maBreak' as const, maPeriod: 40, pct: 2 }
+  // 지수 레짐: 코스피 종가가 지수 20일선 위일 때만 신규 진입 (채굴 5차에서 검증된 조건)
+  const REGIME20: StrategySpec['regime'] = {
+    symbol: KOSPI_INDEX,
+    entry: { op: 'and', nodes: [c('지수20일선위', { kind: 'maPosition', period: 20, dir: 'above' })] },
+  }
+  // 손실 누적 완화 변형: 레짐 게이트(약세장 진입 차단) vs 초기 손절(개별 손실 꼬리 컷)
+  const variants: { label: string; spec: StrategySpec }[] = [
+    { label: '원형', spec: baseSpec({ entry: entry20, exits: [SLOW], universe: uni }) },
+    { label: '+지수레짐(20일선)', spec: baseSpec({ entry: entry20, exits: [SLOW], universe: uni, regime: REGIME20 }) },
+    { label: '+손절−7%', spec: baseSpec({ entry: entry20, exits: [{ kind: 'stopLoss', pct: 7 }, SLOW], universe: uni }) },
+    {
+      label: '+레짐+손절−7%',
+      spec: baseSpec({ entry: entry20, exits: [{ kind: 'stopLoss', pct: 7 }, SLOW], universe: uni, regime: REGIME20 }),
     },
-    exits: [{ kind: 'maBreak', maPeriod: 40, pct: 2 }],
-    universe: { ...baseSpec({}).universe, symbols: tradable },
-  })
+  ]
 
   const at2010 = tradable.filter((s) => (histories[s]?.[0]?.date ?? '9999') <= '2010-01-15').length
   log('')
   log(`데이터 커버리지: ${tradable.length}종목 중 2010년 초 시세 존재 ${at2010}종목 — 나머지는 상장 이후 시점부터 편입`)
   log('⚠️ 유니버스는 2026년 오늘의 시총 상위(사후 선택) — 2010년에 이 목록을 알 수 없었다. 수치는 상한선.')
   log('')
-  log('| 구간 | 승률 | 손익비 | PF | **CAGR** | 벤치CAGR | 알파(연) | 총수익 | MDD | 매매 | 평균보유일 |')
-  log('|---|---|---|---|---|---|---|---|---|---|---|')
+  log('| 변형 | 구간 | 승률 | 손익비 | PF | **CAGR** | 벤치CAGR | 알파(연) | 총수익 | MDD | 매매 | 평균보유일 |')
+  log('|---|---|---|---|---|---|---|---|---|---|---|---|')
   const spans: [string, string, string][] = [
     ['2010–2023 전체', '2010-01-01', '2023-12-31'],
     ['2010–2015', '2010-01-01', '2015-12-31'],
     ['2016–2019', '2016-01-01', '2019-12-31'],
     ['2020–2023', '2020-01-01', '2023-12-31'],
+    ['2024~현재', '2024-01-01', '9999-12-31'],
   ]
+  for (const v of variants)
   for (const [label, start, end] of spans) {
     const hist: Record<string, DailyBar[]> = {}
     for (const [s, bars] of Object.entries(histories)) hist[s] = bars.filter((b) => b.date <= end)
     const benchCut = bench.filter((b) => b.date <= end)
-    const r = runStrategySpec(hist, start, spec, COST)
+    const r = runStrategySpec(hist, start, v.spec, COST)
     const s = stats(label, label, r, benchCut, COST.initialCapital)
     const closed = r.trades.filter((t) => t.exitDate != null)
     const wins = closed.filter((t) => (t.pnlPct ?? 0) > 0)
@@ -689,11 +704,11 @@ async function era() {
     const sumLoss = Math.abs(losses.reduce((sum, t) => sum + (t.pnlPct ?? 0), 0))
     const pf = sumLoss > 0 ? sumWin / sumLoss : null
     log(
-      `| ${label} | ${s.winRatePct?.toFixed(0) ?? '—'}% | ${ratio?.toFixed(2) ?? '—'} | ${pf?.toFixed(2) ?? '—'} | **${f1(
-        s.cagrPct,
-      )}%** | ${f1(s.benchCagrPct)}% | ${f1(s.alphaPct)}%p | ${f1(s.totalPct)}% | ${f1(s.mddPct)}% | ${s.trades} | ${
-        s.avgHoldDays?.toFixed(1) ?? '—'
-      } |`,
+      `| ${v.label} | ${label} | ${s.winRatePct?.toFixed(0) ?? '—'}% | ${ratio?.toFixed(2) ?? '—'} | ${
+        pf?.toFixed(2) ?? '—'
+      } | **${f1(s.cagrPct)}%** | ${f1(s.benchCagrPct)}% | ${f1(s.alphaPct)}%p | ${f1(s.totalPct)}% | ${f1(
+        s.mddPct,
+      )}% | ${s.trades} | ${s.avgHoldDays?.toFixed(1) ?? '—'} |`,
     )
   }
   log('')
