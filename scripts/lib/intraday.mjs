@@ -112,6 +112,45 @@ export function coverage(bars) {
 }
 
 /**
+ * 네이버 시총 랭킹 응답 → 감시 심볼 목록.
+ *
+ * 유니버스 정책(전략 스펙과 동일)에 따라 걸러낸다:
+ *   - 우선주 제외: 이름이 '우'/'우B'/'우C'로 끝나거나 코드가 6자리 숫자가 아닌 것
+ *     (우선주 변형 코드 00088K 등 — Yahoo 심볼도 없다)
+ *   - 스팩 제외
+ * 랭킹 순서를 유지하고 topN에서 자른다.
+ */
+export function rankingToSymbols(json, market, topN) {
+  const suffix = market === 'KOSDAQ' ? '.KQ' : '.KS'
+  const out = []
+  for (const s of json?.stocks ?? []) {
+    const code = s?.itemCode
+    const name = s?.stockName ?? ''
+    if (!/^\d{6}$/.test(code ?? '')) continue
+    if (/우[BC]?$/.test(name)) continue
+    if (/스팩|SPAC/i.test(name)) continue
+    out.push({ symbol: code + suffix, name })
+    if (out.length >= topN) break
+  }
+  return out
+}
+
+/**
+ * 최종 감시목록 = 오늘 랭킹 ∪ 기존 누적 종목 (∪ 시드 — 랭킹 실패 시).
+ *
+ * 기존 누적 종목을 유지하는 이유: 시총 순위는 매일 바뀐다. 랭킹에서 빠졌다고
+ * 수집을 끊으면 그 종목의 누적 구간이 고아가 되고, 나중에 다시 들어오면
+ * 중간에 구멍이 생긴다. 한 번 시작한 종목은 계속 쌓는다(용량은 index가 보고).
+ */
+export function buildWatchlist(ranked, existingSymbols, seedSymbols) {
+  const set = new Set()
+  for (const r of ranked) set.add(r.symbol)
+  for (const s of existingSymbols ?? []) set.add(s)
+  if (ranked.length === 0) for (const s of seedSymbols ?? []) set.add(s)
+  return [...set]
+}
+
+/**
  * 5분봉 → 일봉 집계. 조건식의 일봉 조건(등락률·양봉·이평)을 같은 데이터에서
  * 계산하려면 필요하다. 서로 다른 소스를 섞으면 정합성이 깨진다.
  */
