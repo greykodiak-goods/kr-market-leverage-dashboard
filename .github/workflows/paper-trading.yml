@@ -1,0 +1,51 @@
+# 페이퍼 트레이딩 일일 갱신 — 평일 장마감 후 07:40 UTC (16:40 KST).
+#
+# MA20돌파×20일신고가·느린청산을 두 트랙(전체 80 / 코스닥 40)으로 모의 운용한다.
+# 방식은 엔진 재실행형(scripts/paper-trade.entry.ts 주석 참조) — 유니버스·스펙은
+# public/data/paper/config.json에 동결, 결과 JSON을 main에 커밋한다.
+#
+# 실계좌 경계(규칙 2): 공개 시세 조회 + 시뮬레이션만. 주문·자격증명 없음.
+
+name: paper-trading
+
+on:
+  schedule:
+    - cron: '40 7 * * 1-5' # 16:40 KST 평일
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: paper-trading
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: 페이퍼 트레이딩 갱신
+        run: node scripts/paper-trade.mjs
+
+      - name: 변경 시 커밋
+        run: |
+          git add public/data/paper
+          if git diff --cached --quiet; then
+            echo "변경 없음 — 커밋 생략"
+            exit 0
+          fi
+          git config user.name "paper-trading-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git commit -m "data(paper): $(date -u +%Y-%m-%d) 페이퍼 트레이딩 갱신"
+          git pull --rebase origin main
+          git push origin main
