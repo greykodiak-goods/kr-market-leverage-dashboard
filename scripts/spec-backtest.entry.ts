@@ -253,11 +253,16 @@ async function loadAll() {
   const kospi20 = allSyms.filter((s) => s.endsWith('.KS') && !ETF_IN_STORE.has(s)).slice(0, 20)
   log(`일봉 로드: ${Object.keys(histories).length}종목 성공, 실패/제외 ${failed.length}${failed.length ? ` — ${failed.join(', ')}` : ''}`)
   log(`벤치마크 ${BENCH}: ${bench.length}봉 (${bench[0]?.date} ~ ${bench[bench.length - 1]?.date})`)
-  return { histories, bench, kospi20 }
+  // 지수는 레짐 판정 전용 — 매매 유니버스에서 항상 제외한 목록을 함께 준다
+  const tradable = Object.keys(histories).filter((s) => s !== KOSPI_INDEX)
+  return { histories, bench, kospi20, tradable }
 }
 
 async function main() {
-  const { histories, bench, kospi20 } = await loadAll()
+  const { histories, bench, kospi20, tradable } = await loadAll()
+  // 유니버스 미지정 스펙에 지수(^KS11)가 섞이지 않도록 tradable을 채운다
+  const withUni = (spec: StrategySpec): StrategySpec =>
+    spec.universe.symbols?.length ? spec : { ...spec, universe: { ...spec.universe, symbols: tradable } }
 
   // 구간: 전체(10y) · 최근 3년 · 최근 1년
   const today = new Date()
@@ -400,7 +405,7 @@ async function main() {
   const all: RunStats[] = []
   for (const v of variants) {
     for (const [wLabel, start] of v.windows) {
-      const r = runStrategySpec(histories, start, v.spec, v.cost)
+      const r = runStrategySpec(histories, start, withUni(v.spec), v.cost)
       const s = stats(v.label, wLabel, r, bench, v.cost.initialCapital)
       all.push(s)
       printRow(s)
@@ -425,8 +430,8 @@ async function main() {
   log('| 변형 | 전반 알파(연) | 전반 승률 | 후반 알파(연) | 후반 승률 | 후반 MDD |')
   log('|---|---|---|---|---|---|')
   for (const v of finalists) {
-    const fit = stats(v.label, 'fit', runStrategySpec(histFit, '0000-00-00', v.spec, v.cost), benchFit, v.cost.initialCapital)
-    const val = stats(v.label, 'val', runStrategySpec(histories, '2024-01-01', v.spec, v.cost), bench, v.cost.initialCapital)
+    const fit = stats(v.label, 'fit', runStrategySpec(histFit, '0000-00-00', withUni(v.spec), v.cost), benchFit, v.cost.initialCapital)
+    const val = stats(v.label, 'val', runStrategySpec(histories, '2024-01-01', withUni(v.spec), v.cost), bench, v.cost.initialCapital)
     log(
       `| ${v.label} | ${f1(fit.alphaPct)}%p | ${fit.winRatePct?.toFixed(0) ?? '—'}% | ${f1(val.alphaPct)}%p | ${
         val.winRatePct?.toFixed(0) ?? '—'
@@ -435,7 +440,7 @@ async function main() {
   }
 
   // whipsaw 진단 — A 원문형 전체 구간의 손실 매매 분포
-  const rA = runStrategySpec(histories, '0000-00-00', variants[0].spec, COST)
+  const rA = runStrategySpec(histories, '0000-00-00', withUni(variants[0].spec), COST)
   const closed = rA.trades.filter((t) => t.exitDate != null)
   const losers = closed.filter((t) => (t.pnlPct ?? 0) <= 0)
   const quickLosers = losers.filter(
@@ -462,7 +467,7 @@ async function main() {
  * 선발과 검증을 같은 데이터로 하지 않는 것이 핵심 — 후반에서도 살아남아야 진짜다.
  */
 async function sweep() {
-  const { histories, bench } = await loadAll()
+  const { histories, bench, tradable } = await loadAll()
   const CUT = '2023-12-31'
   const histFit: Record<string, DailyBar[]> = {}
   for (const [s, bars] of Object.entries(histories)) histFit[s] = bars.filter((b) => b.date <= CUT)
@@ -498,6 +503,7 @@ async function sweep() {
         const spec = baseSpec({
           entry: { op: 'and', nodes: [c('돌파', { kind: 'maCross', period: p, dir: 'above' }), ...fs.nodes] },
           exits: exitsOf(p, ek),
+          universe: { ...baseSpec({}).universe, symbols: tradable },
         })
         const label = `MA${p}·${fs.name}·${ek}`
         const fit = stats(label, 'fit', runStrategySpec(histFit, '0000-00-00', spec, COST), benchFit, COST.initialCapital)
