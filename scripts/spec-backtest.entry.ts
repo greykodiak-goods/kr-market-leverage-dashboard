@@ -910,6 +910,140 @@ async function band() {
 }
 
 /**
+ * 강건성 검증 배터리 (MODE=robust) — "모델 검증 더 하자" (2026-07-30 대표).
+ *
+ * 승자 조합(MA20×신고20·느린청산·전체80)에 대해 아직 안 한 검증 4종:
+ *   A. 연도별 일관성 — 해마다 알파가 나오나, 특정 해 몰빵인가
+ *   B. 파라미터 고원 — 20/20/40/−2%가 뾰족한 봉우리(과최적화)인가 고원인가
+ *   C. 비용 스트레스 — 슬리피지 2~5배에서도 알파가 사나
+ *   D. 블록 부트스트랩 — 일별 수익률 재표집 500회로 CAGR·MDD 분포·손실 확률
+ * 유니버스는 오늘 목록(상한선) — 절대치가 아니라 "구조가 버티는가"를 본다.
+ */
+async function robust() {
+  const { histories, bench, tradable } = await loadAll()
+  const uni = { ...baseSpec({}).universe, symbols: tradable }
+  const mkSpec = (ma: number, hb: number, exitMa: number, exitPct: number): StrategySpec =>
+    baseSpec({
+      entry: {
+        op: 'and',
+        nodes: [c('돌파', { kind: 'maCross', period: ma, dir: 'above' }), c('신고가', { kind: 'highBreak', days: hb })],
+      },
+      exits: [{ kind: 'maBreak', maPeriod: exitMa, pct: exitPct }],
+      universe: uni,
+    })
+  const WINNER = mkSpec(20, 20, 40, 2)
+  const y3 = new Date(Date.now() - 3 * 365.25 * 86400e3).toISOString().slice(0, 10)
+
+  // ---- A. 연도별 일관성 ------------------------------------------------------
+  log('')
+  log('### A. 연도별 일관성 (승자 조합 · 전체 80 · 오늘 목록 상한선)')
+  log('| 연도 | 전략 | 벤치 | 초과 | 매매 | 승률 |')
+  log('|---|---|---|---|---|---|')
+  const thisYear = new Date().getFullYear()
+  let positiveYears = 0
+  let totalYears = 0
+  for (let y = 2017; y <= thisYear; y++) {
+    const end = `${y}-12-31`
+    const hist: Record<string, DailyBar[]> = {}
+    for (const [s, bars] of Object.entries(histories)) hist[s] = bars.filter((b) => b.date <= end)
+    const r = runStrategySpec(hist, `${y}-01-01`, WINNER, COST)
+    const finalEq = r.equity.length ? r.equity[r.equity.length - 1].equity : COST.initialCapital
+    const ret = (finalEq / COST.initialCapital - 1) * 100
+    const inYear = bench.filter((b) => b.date >= `${y}-01-01` && b.date <= end)
+    const bret = inYear.length >= 2 ? (inYear[inYear.length - 1].c / inYear[0].c - 1) * 100 : 0
+    const closed = r.trades.filter((t) => t.exitDate != null)
+    const wins = closed.filter((t) => (t.pnlPct ?? 0) > 0).length
+    totalYears++
+    if (ret > bret) positiveYears++
+    log(
+      `| ${y} | ${f1(ret)}% | ${f1(bret)}% | ${f1(ret - bret)}%p | ${closed.length} | ${
+        closed.length ? ((wins / closed.length) * 100).toFixed(0) : '—'
+      }% |`,
+    )
+  }
+  log(`벤치 초과 연도: ${positiveYears}/${totalYears}`)
+
+  // ---- B. 파라미터 고원 ------------------------------------------------------
+  log('')
+  log('### B. 파라미터 고원 — 중심(20/20/40/−2%)에서 한 축씩 이동, 최근 3y 알파')
+  log('| 변형 | 3y 알파 | 3y MDD | 매매 |')
+  log('|---|---|---|---|')
+  const variations: { label: string; spec: StrategySpec }[] = [
+    { label: '중심 20/20/40/−2%', spec: WINNER },
+    ...[15, 25, 30].map((ma) => ({ label: `진입 MA${ma}`, spec: mkSpec(ma, 20, 40, 2) })),
+    ...[10, 30, 55].map((hb) => ({ label: `신고가 ${hb}일`, spec: mkSpec(20, hb, 40, 2) })),
+    ...[30, 50, 60].map((em) => ({ label: `청산 MA${em}`, spec: mkSpec(20, 20, em, 2) })),
+    ...[0, 1, 3].map((ep) => ({ label: `버퍼 −${ep}%`, spec: mkSpec(20, 20, 40, ep) })),
+  ]
+  for (const v of variations) {
+    const s = stats(v.label, '3y', runStrategySpec(histories, y3, v.spec, COST), bench, COST.initialCapital)
+    log(`| ${v.label} | ${f1(s.alphaPct)}%p | ${f1(s.mddPct)}% | ${s.trades} |`)
+  }
+
+  // ---- C. 비용 스트레스 ------------------------------------------------------
+  log('')
+  log('### C. 비용 스트레스 — 슬리피지 배수별 3y 알파 (기본 0.1%)')
+  log('| 슬리피지 | 왕복 비용 | 3y 알파 | 3y CAGR |')
+  log('|---|---|---|---|')
+  for (const slip of [0.1, 0.2, 0.3, 0.5, 1.0]) {
+    const cost: CostSettings = { ...COST, slippagePct: slip }
+    const s = stats(`slip${slip}`, '3y', runStrategySpec(histories, y3, WINNER, cost), bench, COST.initialCapital)
+    const roundTrip = COST.feePct * 2 + COST.taxPct + slip * 2
+    log(`| ${slip}% | ~${roundTrip.toFixed(2)}% | ${f1(s.alphaPct)}%p | ${f1(s.cagrPct)}% |`)
+  }
+
+  // ---- D. 블록 부트스트랩 ----------------------------------------------------
+  // 전략 일별 수익률(3y)을 20일 블록으로 재표집해 500개 가상 3y 경로 생성.
+  // 순서 의존(추세 군집)을 블록이 보존한다. 시드 고정(재현 가능).
+  log('')
+  log('### D. 블록 부트스트랩 (3y 일별 수익률 · 블록 20일 · 500경로 · 시드 고정)')
+  {
+    const r = runStrategySpec(histories, y3, WINNER, COST)
+    const eq = r.equity.map((e) => e.equity)
+    const daily: number[] = []
+    for (let i = 1; i < eq.length; i++) daily.push(eq[i] / eq[i - 1] - 1)
+    const BLOCK = 20
+    let seed = 20260730
+    const rand = () => {
+      // LCG — Math.random 대신 시드 고정
+      seed = (seed * 1664525 + 1013904223) % 4294967296
+      return seed / 4294967296
+    }
+    const totals: number[] = []
+    const mdds: number[] = []
+    for (let p = 0; p < 500; p++) {
+      let equity = 1
+      let peak = 1
+      let mdd = 0
+      let n = 0
+      while (n < daily.length) {
+        const start = Math.floor(rand() * Math.max(1, daily.length - BLOCK))
+        for (let k = 0; k < BLOCK && n < daily.length; k++, n++) {
+          equity *= 1 + daily[start + k]
+          if (equity > peak) peak = equity
+          mdd = Math.min(mdd, equity / peak - 1)
+        }
+      }
+      totals.push((equity - 1) * 100)
+      mdds.push(mdd * 100)
+    }
+    totals.sort((a, b) => a - b)
+    mdds.sort((a, b) => a - b)
+    const pct = (arr: number[], q: number) => arr[Math.min(arr.length - 1, Math.floor(q * arr.length))]
+    const lossProb = (totals.filter((t) => t < 0).length / totals.length) * 100
+    const benchIn = bench.filter((b) => b.date >= y3)
+    const benchTotal = benchIn.length >= 2 ? (benchIn[benchIn.length - 1].c / benchIn[0].c - 1) * 100 : 0
+    const underBench = (totals.filter((t) => t < benchTotal).length / totals.length) * 100
+    log(`3y 총수익 분포: 5% ${f1(pct(totals, 0.05))}% · 중앙값 ${f1(pct(totals, 0.5))}% · 95% ${f1(pct(totals, 0.95))}%`)
+    log(`3y MDD 분포:   5%(약한 쪽) ${f1(pct(mdds, 0.95))}% · 중앙값 ${f1(pct(mdds, 0.5))}% · 95%(깊은 쪽) ${f1(pct(mdds, 0.05))}%`)
+    log(`3년 손실(원금 미만) 확률: ${lossProb.toFixed(1)}% · 벤치(${f1(benchTotal)}%) 미달 확률: ${underBench.toFixed(1)}%`)
+  }
+  log('')
+  log('⚠️ 오늘 목록 유니버스 — 절대치는 상한선. 부트스트랩은 과거 분포의 재표집이지 미래 보장이 아니다.')
+  log('⚠️ 시뮬레이션이며 투자자문이 아니다.')
+}
+
+/**
  * 시점 고정 코스닥 상위 검증 (MODE=pitkq) — 2026-07-30 대표 지시.
  *
  * "그 시점 코스닥 상위 40으로" — 단 과거 코스닥 랭킹 40개 전체의 신뢰 가능한
@@ -1314,7 +1448,7 @@ async function mine() {
   log('⚠️ 유니버스가 "오늘의 시총 상위"라 수치는 부풀려질 수 있다(선택편향). 조건 간 상대 비교 중심으로 볼 것.')
 }
 
-const MODES: Record<string, () => Promise<void>> = { sweep, mine, payoff, era, tqqq, pit, pitkq, band, backtest: main }
+const MODES: Record<string, () => Promise<void>> = { sweep, mine, payoff, era, tqqq, pit, pitkq, band, robust, backtest: main }
 const entry = MODES[process.env.MODE ?? 'backtest'] ?? main
 entry().catch((e) => {
   console.error('실행 실패:', e)
