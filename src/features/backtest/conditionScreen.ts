@@ -49,7 +49,7 @@ export function exitRuleLabel(r: ExitRule): string {
     case 'takeProfit':
       return `익절 +${r.pct}%`
     case 'maBreak':
-      return `${r.maPeriod}일선 이탈`
+      return r.pct ? `${r.maPeriod}일선 −${r.pct}% 이탈` : `${r.maPeriod}일선 이탈`
     case 'sameDayClose':
       return '당일 종가 청산'
     case 'timeExit':
@@ -358,11 +358,14 @@ export function runStrategySpec(
             break
           }
           case 'maBreak': {
-            // 전일 종가가 이평 아래로 떨어졌으면 오늘 시가 청산 (종가 판단 → 익일 체결)
+            // 전일 종가가 이평 아래로 떨어졌으면 오늘 시가 청산 (종가 판단 → 익일 체결).
+            // rule.pct = 이탈 버퍼(%) — 이평을 살짝 스치는 whipsaw에 잘리지 않도록
+            // 이평 × (1 − pct/100) 아래로 **확실히** 깨졌을 때만 발동.
             const pi = idxOf[sym].get(calendar[d - 1])
             if (pi != null) {
               const ma = smaAt(histories[sym], pi, rule.maPeriod ?? 5)
-              if (ma != null && histories[sym][pi].c < ma) fired = { kind: 'maBreak', price: bar.o }
+              const line = ma != null ? ma * (1 - (rule.pct ?? 0) / 100) : null
+              if (line != null && histories[sym][pi].c < line) fired = { kind: 'maBreak', price: bar.o }
             }
             break
           }

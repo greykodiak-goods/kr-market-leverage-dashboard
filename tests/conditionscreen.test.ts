@@ -337,6 +337,46 @@ section('9) 라벨·집계')
   check('스크리닝 결과 보존', r.lastScreen.length >= 1)
 }
 
+// ---------------------------------------------- 9-1) 이탈 버퍼 (maBreak pct)
+section('9-1) 5일선 이탈 버퍼 — 살짝 스치면 보유, 확실히 깨지면 매도')
+{
+  // 진입 후 종가가 이평 대비 약 −1%까지만 내려가는 시계열
+  const mk = (dipPct: number): DailyBar[] => {
+    const bars = flatThenBreakout(40, 10)
+    bars[11] = bar(11, 11000, 11100, 10900, 11000, 1_000_000)
+    // 12일 이후: 이평(≈11000) 아래로 dipPct%만큼 내려간 종가 유지
+    const c = 11000 * (1 - dipPct / 100)
+    for (let i = 12; i <= 25; i++) bars[i] = bar(i, c, c + 50, c - 50, c, 1_000_000)
+    return bars
+  }
+  const noBuffer = runConditionScreen(
+    { AAA: mk(1) },
+    d(0),
+    { ...DEFAULT_CONDITION, maxPositions: 1, exits: [{ kind: 'maBreak', maPeriod: 5 }] },
+    NOCOST,
+  )
+  check('버퍼 없음 → 얕은 이탈에도 청산', noBuffer.events.some((e) => e.action === '매도'))
+
+  const withBuffer = runConditionScreen(
+    { AAA: mk(1) },
+    d(0),
+    { ...DEFAULT_CONDITION, maxPositions: 1, exits: [{ kind: 'maBreak', maPeriod: 5, pct: 3 }] },
+    NOCOST,
+  )
+  check('버퍼 3% → 얕은 이탈(−1%)은 보유 유지', !withBuffer.events.some((e) => e.action === '매도'))
+
+  const deepBreak = runConditionScreen(
+    { AAA: mk(8) },
+    d(0),
+    { ...DEFAULT_CONDITION, maxPositions: 1, exits: [{ kind: 'maBreak', maPeriod: 5, pct: 3 }] },
+    NOCOST,
+  )
+  check('버퍼 3% → 깊은 이탈(−8%)은 청산', deepBreak.events.some((e) => e.action === '매도'))
+
+  eq('버퍼 라벨', exitRuleLabel({ kind: 'maBreak', maPeriod: 5, pct: 3 }), '5일선 −3% 이탈')
+  eq('버퍼 없는 라벨은 기존 유지', exitRuleLabel({ kind: 'maBreak', maPeriod: 5 }), '5일선 이탈')
+}
+
 // ------------------------------------------ 10) 스펙 엔진 (runStrategySpec)
 section('10) 전략 스펙 엔진 — 정본 경로')
 {

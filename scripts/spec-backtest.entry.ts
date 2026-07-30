@@ -17,7 +17,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { runStrategySpec, type ConditionResult, type CostSettings } from '../src/features/backtest/conditionScreen'
-import { SPEC_VERSION, type ConditionNode, type StrategySpec } from '../src/features/backtest/strategySpec'
+import { SPEC_VERSION, type Condition, type ConditionNode, type StrategySpec } from '../src/features/backtest/strategySpec'
 import type { DailyBar } from '../src/features/backtest/types'
 
 // CJS 번들에서 import.meta.url이 없으므로 런처가 REPO_ROOT를 넘긴다.
@@ -95,14 +95,21 @@ function baseSpec(over: Partial<StrategySpec> & { entry?: ConditionNode }): Stra
   }
 }
 
-const ALIGN_ENTRY: ConditionNode = {
-  op: 'and',
-  nodes: [
-    { op: 'cond', id: '양봉', cond: { kind: 'candle', bull: true } },
-    { op: 'cond', id: '5일선돌파', cond: { kind: 'maCross', period: 5, dir: 'above' } },
-    { op: 'cond', id: '정배열', cond: { kind: 'maAlign', fast: 5, slow: 10 } },
-  ],
+// 필터 조립 헬퍼 — 기본 진입(양봉+5일선 돌파)에 종목선정 필터를 얹는다
+const c = (id: string, cond: Condition): ConditionNode => ({ op: 'cond', id, cond })
+const BASE = [c('양봉', { kind: 'candle', bull: true }), c('5일선돌파', { kind: 'maCross', period: 5, dir: 'above' })]
+const withFilters = (...extra: ConditionNode[]): ConditionNode => ({ op: 'and', nodes: [...BASE, ...extra] })
+
+const F = {
+  정배열: c('정배열', { kind: 'maAlign', fast: 5, slow: 10 }),
+  거래대금: c('거래대금100억', { kind: 'tradingValue', min: 1e10 }),
+  볼륨서지: c('거래량1.5배', { kind: 'volumeSurge', days: 20, ratio: 1.5 }),
+  중기추세: c('20일선위', { kind: 'maPosition', period: 20, dir: 'above' }),
+  강한돌파: c('등락률+2%', { kind: 'changePct', min: 2 }),
+  신고가: c('20일신고가', { kind: 'highBreak', days: 20 }),
+  과열회피: c('RSI≤70', { kind: 'rsi', period: 14, max: 70 }),
 }
+const BUFFER_EXIT = [{ kind: 'maBreak' as const, maPeriod: 5, pct: 2 }]
 
 // ---- 지표 계산 --------------------------------------------------------------
 
@@ -235,27 +242,44 @@ async function main() {
     ['최근 1년', y1],
   ]
 
+  const w2 = [windows[0], windows[1]] // 전체 + 최근 3년 — 두 구간 모두 개선돼야 '고원'
   const variants: { label: string; spec: StrategySpec; cost: CostSettings; windows: [string, string][] }[] = [
-    { label: 'A 원문형(종가LOC)', spec: baseSpec({}), cost: COST, windows },
+    { label: 'A 원문형(기준선)', spec: baseSpec({}), cost: COST, windows },
+    { label: 'D 원문형·비용0(참고)', spec: baseSpec({}), cost: NOCOST, windows: [windows[0]] },
+    // ---- 종목선정 필터 단독 (진입 조건 추가) --------------------------------
+    { label: 'G 거래대금≥100억', spec: baseSpec({ entry: withFilters(F.거래대금) }), cost: COST, windows: w2 },
+    { label: 'H 거래량 1.5배 급증', spec: baseSpec({ entry: withFilters(F.볼륨서지) }), cost: COST, windows: w2 },
+    { label: 'I 20일선 위(중기추세)', spec: baseSpec({ entry: withFilters(F.중기추세) }), cost: COST, windows: w2 },
+    { label: 'J 정배열+20일선 위', spec: baseSpec({ entry: withFilters(F.정배열, F.중기추세) }), cost: COST, windows: w2 },
+    { label: 'K 돌파일 등락률≥+2%', spec: baseSpec({ entry: withFilters(F.강한돌파) }), cost: COST, windows: w2 },
+    { label: 'L 20일 신고가 동반', spec: baseSpec({ entry: withFilters(F.신고가) }), cost: COST, windows: w2 },
+    { label: 'M RSI(14)≤70 과열회피', spec: baseSpec({ entry: withFilters(F.과열회피) }), cost: COST, windows: w2 },
+    // ---- 이탈 버퍼 (whipsaw 직접 공략) --------------------------------------
+    { label: 'P 이탈버퍼 −2%', spec: baseSpec({ exits: BUFFER_EXIT }), cost: COST, windows: w2 },
+    // ---- 콤보 ---------------------------------------------------------------
     {
-      label: 'B 보수형(익일시가)',
-      spec: baseSpec({ execution: { timing: 'nextOpen', orderType: 'market' } }),
+      label: 'N 콤보(대금+20일선+돌파2%)',
+      spec: baseSpec({ entry: withFilters(F.거래대금, F.중기추세, F.강한돌파) }),
       cost: COST,
-      windows,
+      windows: w2,
     },
-    { label: 'C 정배열 추가(5>10)', spec: baseSpec({ entry: ALIGN_ENTRY }), cost: COST, windows },
-    { label: 'D 원문형·비용 0', spec: baseSpec({}), cost: NOCOST, windows: [windows[0]] },
     {
-      label: 'E 슬롯 5',
-      spec: baseSpec({ sizing: { maxPositions: 5, mode: 'equalSlot' } }),
+      label: 'O 콤보N+정배열',
+      spec: baseSpec({ entry: withFilters(F.거래대금, F.중기추세, F.강한돌파, F.정배열) }),
       cost: COST,
-      windows: [windows[0]],
+      windows: w2,
     },
     {
-      label: 'F 슬롯 20',
-      spec: baseSpec({ sizing: { maxPositions: 20, mode: 'equalSlot' } }),
+      label: 'Q 콤보O+이탈버퍼−2%',
+      spec: baseSpec({ entry: withFilters(F.거래대금, F.중기추세, F.강한돌파, F.정배열), exits: BUFFER_EXIT }),
       cost: COST,
-      windows: [windows[0]],
+      windows: w2,
+    },
+    {
+      label: 'R 버퍼+신고가+거래대금',
+      spec: baseSpec({ entry: withFilters(F.거래대금, F.신고가), exits: BUFFER_EXIT }),
+      cost: COST,
+      windows: w2,
     },
   ]
 
