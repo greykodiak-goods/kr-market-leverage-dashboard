@@ -281,6 +281,20 @@ async function main() {
       cost: COST,
       windows: w2,
     },
+    // ---- 1차 그리드의 두 승자(거래량 급증 H · 신고가 L) 결합 -----------------
+    { label: 'S 급증+신고가', spec: baseSpec({ entry: withFilters(F.볼륨서지, F.신고가) }), cost: COST, windows: w2 },
+    {
+      label: 'T 급증+신고가+버퍼−2%',
+      spec: baseSpec({ entry: withFilters(F.볼륨서지, F.신고가), exits: BUFFER_EXIT }),
+      cost: COST,
+      windows: w2,
+    },
+    {
+      label: 'U 급증+신고가+대금+버퍼',
+      spec: baseSpec({ entry: withFilters(F.볼륨서지, F.신고가, F.거래대금), exits: BUFFER_EXIT }),
+      cost: COST,
+      windows: w2,
+    },
   ]
 
   log('')
@@ -294,6 +308,29 @@ async function main() {
       all.push(s)
       printRow(s)
     }
+  }
+
+  // ---- 홀드아웃 (과최적화 방어) --------------------------------------------
+  // 필터를 같은 데이터로 고르고 같은 데이터로 자랑하면 과최적화다.
+  // 전반부(~2023-12-31)에서의 성적과, 그 뒤(2024~)에서의 성적을 분리해서 본다 —
+  // 후반부에서도 개선이 유지돼야 '고원'이다.
+  const CUT = '2023-12-31'
+  const histFit: Record<string, DailyBar[]> = {}
+  for (const [s, bars] of Object.entries(histories)) histFit[s] = bars.filter((b) => b.date <= CUT)
+  const benchFit = bench.filter((b) => b.date <= CUT)
+  const finalists = variants.filter((v) => ['A', 'H', 'L', 'P', 'R', 'S', 'T', 'U'].includes(v.label.split(' ')[0]))
+  log('')
+  log(`홀드아웃 분리: 전반부(~${CUT}) vs 후반부(2024-01-01~)`)
+  log('| 변형 | 전반 알파(연) | 전반 승률 | 후반 알파(연) | 후반 승률 | 후반 MDD |')
+  log('|---|---|---|---|---|---|')
+  for (const v of finalists) {
+    const fit = stats(v.label, 'fit', runStrategySpec(histFit, '0000-00-00', v.spec, v.cost), benchFit, v.cost.initialCapital)
+    const val = stats(v.label, 'val', runStrategySpec(histories, '2024-01-01', v.spec, v.cost), bench, v.cost.initialCapital)
+    log(
+      `| ${v.label} | ${f1(fit.alphaPct)}%p | ${fit.winRatePct?.toFixed(0) ?? '—'}% | ${f1(val.alphaPct)}%p | ${
+        val.winRatePct?.toFixed(0) ?? '—'
+      }% | ${f1(val.mddPct)}% |`,
+    )
   }
 
   // whipsaw 진단 — A 원문형 전체 구간의 손실 매매 분포
