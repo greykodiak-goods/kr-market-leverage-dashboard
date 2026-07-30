@@ -716,6 +716,120 @@ async function era() {
 }
 
 /**
+ * 시점 고정(point-in-time) 코스피 상위 10 검증 (MODE=pit) — 2026-07-30 대표 지시.
+ *
+ * "그 시점의 코스피 상위 10종목만 한다면?" — 오늘의 목록으로 과거를 돌리는
+ * 선택편향을 제거하기 위해, 각 연도 초 기준 코스피 시총 상위 10을 유니버스로
+ * 쓰고 해마다 갈아끼운다.
+ *
+ * ⚠️ 정직성(규칙 3): 연도별 상위 10 목록은 **모델 지식 기반 [추정]**이다 —
+ * 과거 시총 랭킹의 무료 데이터 소스가 없어 정확한 순위가 아니며 ±2순위 오차가
+ * 있을 수 있다(우선주 제외, 연초 기준 근사). 연 단위 실행을 이어붙이므로
+ * 연말에 보유 중이던 포지션은 연말 종가 평가로 마감되고 다음 해 빈손 시작
+ * (연말 강제 청산 근사)이라는 한계도 있다.
+ */
+const PIT_KOSPI10: Record<number, string[]> = {
+  2010: ['005930', '005490', '005380', '055550', '105560', '015760', '066570', '017670', '051910', '009540'],
+  2011: ['005930', '005490', '005380', '051910', '012330', '009540', '055550', '105560', '000270', '066570'],
+  2012: ['005930', '005380', '005490', '012330', '000270', '051910', '032830', '055550', '105560', '009540'],
+  2013: ['005930', '005380', '005490', '012330', '000270', '032830', '051910', '055550', '000660', '105560'],
+  2014: ['005930', '005380', '005490', '012330', '000660', '032830', '051910', '055550', '000270', '015760'],
+  2015: ['005930', '005380', '000660', '005490', '012330', '032830', '015760', '051910', '055550', '000270'],
+  2016: ['005930', '000660', '005380', '012330', '032830', '015760', '090430', '051910', '055550', '035420'],
+  2017: ['005930', '000660', '005380', '015760', '012330', '035420', '032830', '051910', '055550', '005490'],
+  2018: ['005930', '000660', '068270', '005380', '051910', '012330', '005490', '035420', '105560', '055550'],
+  2019: ['005930', '000660', '068270', '005380', '051910', '012330', '035420', '005490', '105560', '051900'],
+  2020: ['005930', '000660', '035420', '051910', '068270', '005380', '035720', '012330', '051900', '006400'],
+  2021: ['005930', '000660', '051910', '035420', '005380', '006400', '035720', '068270', '000270', '051900'],
+  2022: ['005930', '373220', '000660', '006400', '035420', '051910', '005380', '035720', '000270', '068270'],
+  2023: ['005930', '373220', '000660', '006400', '051910', '005380', '000270', '035420', '005490', '035720'],
+}
+
+async function pit() {
+  const years = Object.keys(PIT_KOSPI10)
+    .map(Number)
+    .sort((a, b) => a - b)
+  const uniq = [...new Set(Object.values(PIT_KOSPI10).flat())].map((s) => `${s}.KS`)
+  log(`시점 고정 유니버스: ${years[0]}~${years[years.length - 1]} 연도별 코스피 상위 10 [추정] — 고유 종목 ${uniq.length}개`)
+  const histories: Record<string, DailyBar[]> = {}
+  const failed: string[] = []
+  for (const sym of uniq) {
+    try {
+      const bars = await fetchDaily(sym, 'since:2009-01-01')
+      if (bars.length >= 200) histories[sym] = bars
+      else failed.push(`${sym}(짧음 ${bars.length})`)
+    } catch (e) {
+      failed.push(`${sym}(${(e as Error).message})`)
+    }
+    await sleep(150)
+  }
+  const bench = await fetchDaily(BENCH, 'since:2009-01-01')
+  log(`일봉 로드: ${Object.keys(histories).length}종목, 실패 ${failed.length}${failed.length ? ` — ${failed.join(', ')}` : ''}`)
+
+  const entry20 = {
+    op: 'and',
+    nodes: [c('20일선돌파', { kind: 'maCross', period: 20, dir: 'above' }), c('20일신고가', { kind: 'highBreak', days: 20 })],
+  } as ConditionNode
+
+  log('')
+  log('| 연도 | 전략 수익 | 벤치(KODEX200) | 초과 | 매매 | 승률 |')
+  log('|---|---|---|---|---|---|')
+  let factor = 1
+  const chained: { date: string; eq: number }[] = []
+  let tradesTotal = 0
+  let winsTotal = 0
+  let closedTotal = 0
+  let benchFactor = 1
+  for (const y of years) {
+    const syms = PIT_KOSPI10[y].map((s) => `${s}.KS`).filter((s) => histories[s])
+    const end = `${y}-12-31`
+    const hist: Record<string, DailyBar[]> = {}
+    for (const s of syms) hist[s] = histories[s].filter((b) => b.date <= end)
+    const spec = baseSpec({
+      entry: entry20,
+      exits: [{ kind: 'maBreak', maPeriod: 40, pct: 2 }],
+      universe: { ...baseSpec({}).universe, symbols: syms },
+    })
+    const r = runStrategySpec(hist, `${y}-01-01`, spec, COST)
+    const finalEq = r.equity.length ? r.equity[r.equity.length - 1].equity : COST.initialCapital
+    const ret = finalEq / COST.initialCapital
+    const inYear = bench.filter((b) => b.date >= `${y}-01-01` && b.date <= end)
+    const bret = inYear.length >= 2 ? inYear[inYear.length - 1].c / inYear[0].c : 1
+    for (const e of r.equity) chained.push({ date: e.date, eq: (factor * e.equity) / COST.initialCapital })
+    factor *= ret
+    benchFactor *= bret
+    const closed = r.trades.filter((t) => t.exitDate != null)
+    const wins = closed.filter((t) => (t.pnlPct ?? 0) > 0).length
+    tradesTotal += closed.length
+    winsTotal += wins
+    closedTotal += closed.length
+    log(
+      `| ${y} | ${f1((ret - 1) * 100)}% | ${f1((bret - 1) * 100)}% | ${f1((ret - bret) * 100)}%p | ${closed.length} | ${
+        closed.length ? ((wins / closed.length) * 100).toFixed(0) : '—'
+      }% |`,
+    )
+  }
+  let peak = 0
+  let mdd = 0
+  for (const p of chained) {
+    if (p.eq > peak) peak = p.eq
+    mdd = Math.min(mdd, peak > 0 ? (p.eq / peak - 1) * 100 : 0)
+  }
+  const yearsSpan = years.length
+  const cagrPct = (Math.pow(factor, 1 / yearsSpan) - 1) * 100
+  const benchCagrPct = (Math.pow(benchFactor, 1 / yearsSpan) - 1) * 100
+  log('')
+  log(
+    `종합 ${years[0]}~${years[years.length - 1]}: 총수익 ${f1((factor - 1) * 100)}% · CAGR **${f1(cagrPct)}%** · ` +
+      `벤치 CAGR ${f1(benchCagrPct)}% · 알파(연) **${f1(cagrPct - benchCagrPct)}%p** · MDD ${f1(mdd)}% · ` +
+      `매매 ${tradesTotal}회 · 승률 ${closedTotal ? ((winsTotal / closedTotal) * 100).toFixed(0) : '—'}%`,
+  )
+  log('')
+  log('⚠️ 연도별 상위 10 목록은 모델 지식 기반 [추정](±2순위 오차 가능·우선주 제외). 연말 강제 청산 근사.')
+  log('⚠️ 시뮬레이션이며 투자자문이 아니다.')
+}
+
+/**
  * 라오어 무한매수법 TQQQ 비교 (MODE=tqqq) — 2026-07-30 대표 지시.
  *
  * 구현은 **원조 v1의 단순화판**임을 명시한다(규칙 3):
@@ -976,7 +1090,7 @@ async function mine() {
   log('⚠️ 유니버스가 "오늘의 시총 상위"라 수치는 부풀려질 수 있다(선택편향). 조건 간 상대 비교 중심으로 볼 것.')
 }
 
-const MODES: Record<string, () => Promise<void>> = { sweep, mine, payoff, era, tqqq, backtest: main }
+const MODES: Record<string, () => Promise<void>> = { sweep, mine, payoff, era, tqqq, pit, backtest: main }
 const entry = MODES[process.env.MODE ?? 'backtest'] ?? main
 entry().catch((e) => {
   console.error('실행 실패:', e)
