@@ -233,6 +233,8 @@ section('7) 랭킹 파싱 — 우선주·스팩 제외, topN 컷')
       { itemCode: '000660', stockName: 'SK하이닉스' },
       { itemCode: '00088K', stockName: '한화3우B' }, // 코드 비정상 — 제외
       { itemCode: '123450', stockName: '대신밸런스스팩12호' }, // 스팩 — 제외
+      { itemCode: '360750', stockName: 'TIGER 미국S&P500' }, // ETF — 제외 (실제 유입 사례)
+      { itemCode: '069500', stockName: 'KODEX 200' }, // ETF — 제외
       { itemCode: '035420', stockName: 'NAVER' },
       { itemCode: '051910', stockName: 'LG화학' },
     ],

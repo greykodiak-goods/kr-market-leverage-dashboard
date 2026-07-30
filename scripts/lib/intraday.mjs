@@ -118,8 +118,13 @@ export function coverage(bars) {
  *   - 우선주 제외: 이름이 '우'/'우B'/'우C'로 끝나거나 코드가 6자리 숫자가 아닌 것
  *     (우선주 변형 코드 00088K 등 — Yahoo 심볼도 없다)
  *   - 스팩 제외
+ *   - ETF·ETN 제외 — 네이버 시총 랭킹은 ETF를 종목과 섞어서 준다(2026-07-30 첫 실행에서
+ *     TIGER 미국S&P500이 코스피 상위권에 실제로 들어왔다). 브랜드 접두어로 거른다.
  * 랭킹 순서를 유지하고 topN에서 자른다.
  */
+const ETF_BRAND =
+  /^(KODEX|TIGER|RISE|KBSTAR|ACE|SOL|PLUS|ARIRANG|HANARO|KOSEF|KIWOOM|WON|1Q|KoAct|TIMEFOLIO|FOCUS|BNK|UNICORN|마이티|히어로즈)\s/i
+
 export function rankingToSymbols(json, market, topN) {
   const suffix = market === 'KOSDAQ' ? '.KQ' : '.KS'
   const out = []
@@ -129,6 +134,7 @@ export function rankingToSymbols(json, market, topN) {
     if (!/^\d{6}$/.test(code ?? '')) continue
     if (/우[BC]?$/.test(name)) continue
     if (/스팩|SPAC/i.test(name)) continue
+    if (ETF_BRAND.test(name) || /\bETN\b/.test(name)) continue
     out.push({ symbol: code + suffix, name })
     if (out.length >= topN) break
   }
