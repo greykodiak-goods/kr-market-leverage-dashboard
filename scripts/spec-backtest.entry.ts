@@ -771,59 +771,67 @@ async function pit() {
     nodes: [c('20일선돌파', { kind: 'maCross', period: 20, dir: 'above' }), c('20일신고가', { kind: 'highBreak', days: 20 })],
   } as ConditionNode
 
-  log('')
-  log('| 연도 | 전략 수익 | 벤치(KODEX200) | 초과 | 매매 | 승률 |')
-  log('|---|---|---|---|---|---|')
-  let factor = 1
-  const chained: { date: string; eq: number }[] = []
-  let tradesTotal = 0
-  let winsTotal = 0
-  let closedTotal = 0
-  let benchFactor = 1
-  for (const y of years) {
-    const syms = PIT_KOSPI10[y].map((s) => `${s}.KS`).filter((s) => histories[s])
-    const end = `${y}-12-31`
-    const hist: Record<string, DailyBar[]> = {}
-    for (const s of syms) hist[s] = histories[s].filter((b) => b.date <= end)
-    const spec = baseSpec({
-      entry: entry20,
-      exits: [{ kind: 'maBreak', maPeriod: 40, pct: 2 }],
-      universe: { ...baseSpec({}).universe, symbols: syms },
-    })
-    const r = runStrategySpec(hist, `${y}-01-01`, spec, COST)
-    const finalEq = r.equity.length ? r.equity[r.equity.length - 1].equity : COST.initialCapital
-    const ret = finalEq / COST.initialCapital
-    const inYear = bench.filter((b) => b.date >= `${y}-01-01` && b.date <= end)
-    const bret = inYear.length >= 2 ? inYear[inYear.length - 1].c / inYear[0].c : 1
-    for (const e of r.equity) chained.push({ date: e.date, eq: (factor * e.equity) / COST.initialCapital })
-    factor *= ret
-    benchFactor *= bret
-    const closed = r.trades.filter((t) => t.exitDate != null)
-    const wins = closed.filter((t) => (t.pnlPct ?? 0) > 0).length
-    tradesTotal += closed.length
-    winsTotal += wins
-    closedTotal += closed.length
+  // 슬롯 10 = 원형 그대로(종목 10개면 노출이 희석됨) / 슬롯 3 = 종목당 자본 1/3로 집중
+  for (const slots of [10, 3]) {
+    log('')
+    log(`### 슬롯 ${slots} (한 종목당 자본 1/${slots})`)
+    log('| 연도 | 전략 수익 | 벤치(KODEX200) | 초과 | 매매 | 승률 | 평균손익/회 |')
+    log('|---|---|---|---|---|---|---|')
+    let factor = 1
+    const chained: { date: string; eq: number }[] = []
+    let winsTotal = 0
+    let closedTotal = 0
+    let pnlSum = 0
+    let benchFactor = 1
+    for (const y of years) {
+      const syms = PIT_KOSPI10[y].map((s) => `${s}.KS`).filter((s) => histories[s])
+      const end = `${y}-12-31`
+      const hist: Record<string, DailyBar[]> = {}
+      for (const s of syms) hist[s] = histories[s].filter((b) => b.date <= end)
+      const spec = baseSpec({
+        entry: entry20,
+        exits: [{ kind: 'maBreak', maPeriod: 40, pct: 2 }],
+        universe: { ...baseSpec({}).universe, symbols: syms },
+        sizing: { maxPositions: slots, mode: 'equalSlot' },
+      })
+      const r = runStrategySpec(hist, `${y}-01-01`, spec, COST)
+      const finalEq = r.equity.length ? r.equity[r.equity.length - 1].equity : COST.initialCapital
+      const ret = finalEq / COST.initialCapital
+      const inYear = bench.filter((b) => b.date >= `${y}-01-01` && b.date <= end)
+      const bret = inYear.length >= 2 ? inYear[inYear.length - 1].c / inYear[0].c : 1
+      for (const e of r.equity) chained.push({ date: e.date, eq: (factor * e.equity) / COST.initialCapital })
+      factor *= ret
+      benchFactor *= bret
+      const closed = r.trades.filter((t) => t.exitDate != null)
+      const wins = closed.filter((t) => (t.pnlPct ?? 0) > 0).length
+      const pnl = closed.reduce((s2, t) => s2 + (t.pnlPct ?? 0), 0)
+      winsTotal += wins
+      closedTotal += closed.length
+      pnlSum += pnl
+      log(
+        `| ${y} | ${f1((ret - 1) * 100)}% | ${f1((bret - 1) * 100)}% | ${f1((ret - bret) * 100)}%p | ${closed.length} | ${
+          closed.length ? ((wins / closed.length) * 100).toFixed(0) : '—'
+        }% | ${closed.length ? f2(pnl / closed.length) : '—'}% |`,
+      )
+    }
+    let peak = 0
+    let mdd = 0
+    for (const p of chained) {
+      if (p.eq > peak) peak = p.eq
+      mdd = Math.min(mdd, peak > 0 ? (p.eq / peak - 1) * 100 : 0)
+    }
+    const yearsSpan = years.length
+    const cagrPct = (Math.pow(factor, 1 / yearsSpan) - 1) * 100
+    const benchCagrPct = (Math.pow(benchFactor, 1 / yearsSpan) - 1) * 100
+    log('')
     log(
-      `| ${y} | ${f1((ret - 1) * 100)}% | ${f1((bret - 1) * 100)}% | ${f1((ret - bret) * 100)}%p | ${closed.length} | ${
-        closed.length ? ((wins / closed.length) * 100).toFixed(0) : '—'
-      }% |`,
+      `종합(슬롯 ${slots}) ${years[0]}~${years[years.length - 1]}: 총수익 ${f1((factor - 1) * 100)}% · CAGR **${f1(
+        cagrPct,
+      )}%** · 벤치 CAGR ${f1(benchCagrPct)}% · 알파(연) **${f1(cagrPct - benchCagrPct)}%p** · MDD ${f1(mdd)}% · ` +
+        `매매 ${closedTotal}회 · 승률 ${closedTotal ? ((winsTotal / closedTotal) * 100).toFixed(0) : '—'}% · ` +
+        `평균손익/회 ${closedTotal ? f2(pnlSum / closedTotal) : '—'}%`,
     )
   }
-  let peak = 0
-  let mdd = 0
-  for (const p of chained) {
-    if (p.eq > peak) peak = p.eq
-    mdd = Math.min(mdd, peak > 0 ? (p.eq / peak - 1) * 100 : 0)
-  }
-  const yearsSpan = years.length
-  const cagrPct = (Math.pow(factor, 1 / yearsSpan) - 1) * 100
-  const benchCagrPct = (Math.pow(benchFactor, 1 / yearsSpan) - 1) * 100
-  log('')
-  log(
-    `종합 ${years[0]}~${years[years.length - 1]}: 총수익 ${f1((factor - 1) * 100)}% · CAGR **${f1(cagrPct)}%** · ` +
-      `벤치 CAGR ${f1(benchCagrPct)}% · 알파(연) **${f1(cagrPct - benchCagrPct)}%p** · MDD ${f1(mdd)}% · ` +
-      `매매 ${tradesTotal}회 · 승률 ${closedTotal ? ((winsTotal / closedTotal) * 100).toFixed(0) : '—'}%`,
-  )
   log('')
   log('⚠️ 연도별 상위 10 목록은 모델 지식 기반 [추정](±2순위 오차 가능·우선주 제외). 연말 강제 청산 근사.')
   log('⚠️ 시뮬레이션이며 투자자문이 아니다.')
