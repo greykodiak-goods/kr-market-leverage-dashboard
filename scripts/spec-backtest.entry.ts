@@ -1044,6 +1044,152 @@ async function robust() {
 }
 
 /**
+ * 도전자 비교 (MODE=challenger) — "더 좋은 기법은 없을까" (2026-07-30 대표).
+ *
+ * 승자(MA20×신고20·느린청산·슬롯10·거래대금랭킹)를 기준으로, 구조가 다른 도전자를
+ * 같은 홀드아웃 규율(전반 ~23 / 후반 24~ / 3y)로 비교한다. 세 구간 모두 승자보다
+ * 좋아야 교체 후보다(한 구간 우위는 노이즈로 취급).
+ *
+ * 추가로 승자의 알려진 약점(초강세장 추격 실패 = 유휴현금이 놀아서)을 겨냥해
+ * **유휴현금 지수(KODEX200) 파킹**을 [근사] 오버레이로 계산한다 — 엔진 수정 없이
+ * 일별 투자비중을 매매 기록에서 재구성해 유휴분에 벤치 일수익을 얹는다
+ * (슬롯 크기 피드백은 무시하는 1차 근사).
+ */
+async function challenger() {
+  const { histories, bench, tradable } = await loadAll()
+  const uni = { ...baseSpec({}).universe, symbols: tradable }
+  const mk = (over: Partial<StrategySpec> & { entry?: ConditionNode }): StrategySpec =>
+    baseSpec({
+      entry: {
+        op: 'and',
+        nodes: [c('돌파', { kind: 'maCross', period: 20, dir: 'above' }), c('신고가', { kind: 'highBreak', days: 20 })],
+      },
+      exits: [{ kind: 'maBreak', maPeriod: 40, pct: 2 }],
+      universe: uni,
+      ...over,
+    })
+  const WINNER = mk({})
+  const contenders: { label: string; spec: StrategySpec }[] = [
+    { label: '기준: 승자(슬롯10·대금랭킹)', spec: WINNER },
+    { label: '슬롯 5 (집중)', spec: mk({ sizing: { maxPositions: 5, mode: 'equalSlot' } }) },
+    { label: '슬롯 15 (분산)', spec: mk({ sizing: { maxPositions: 15, mode: 'equalSlot' } }) },
+    { label: '슬롯 20 (분산)', spec: mk({ sizing: { maxPositions: 20, mode: 'equalSlot' } }) },
+    { label: '랭킹: 등락률(돌파 강도순)', spec: mk({ ranking: { by: 'changePct', dir: 'desc' } }) },
+    {
+      label: '진입 MA15',
+      spec: mk({
+        entry: {
+          op: 'and',
+          nodes: [c('돌파', { kind: 'maCross', period: 15, dir: 'above' }), c('신고가', { kind: 'highBreak', days: 20 })],
+        },
+      }),
+    },
+    {
+      label: '신고가 10일',
+      spec: mk({
+        entry: {
+          op: 'and',
+          nodes: [c('돌파', { kind: 'maCross', period: 20, dir: 'above' }), c('신고가', { kind: 'highBreak', days: 10 })],
+        },
+      }),
+    },
+    {
+      label: 'MA15×신고10 (결합)',
+      spec: mk({
+        entry: {
+          op: 'and',
+          nodes: [c('돌파', { kind: 'maCross', period: 15, dir: 'above' }), c('신고가', { kind: 'highBreak', days: 10 })],
+        },
+      }),
+    },
+    { label: '청산: 트레일링 −10%', spec: mk({ exits: [{ kind: 'trailing', pct: 10 }] }) },
+    { label: '청산: 트레일링 −15%', spec: mk({ exits: [{ kind: 'trailing', pct: 15 }] }) },
+    { label: '청산: MA40−2% + 트레일링 −20%', spec: mk({ exits: [{ kind: 'trailing', pct: 20 }, { kind: 'maBreak', maPeriod: 40, pct: 2 }] }) },
+  ]
+
+  const CUT = '2023-12-31'
+  const histFit: Record<string, DailyBar[]> = {}
+  for (const [s, bars] of Object.entries(histories)) histFit[s] = bars.filter((b) => b.date <= CUT)
+  const benchFit = bench.filter((b) => b.date <= CUT)
+  const y3 = new Date(Date.now() - 3 * 365.25 * 86400e3).toISOString().slice(0, 10)
+
+  log('')
+  log('| 도전자 | 전반(~23) 알파/MDD | **후반(24~) 알파/MDD** | 3y 알파/MDD | 3y CAGR | 매매(3y) |')
+  log('|---|---|---|---|---|---|')
+  for (const v of contenders) {
+    const fit = stats(v.label, 'fit', runStrategySpec(histFit, '0000-00-00', v.spec, COST), benchFit, COST.initialCapital)
+    const val = stats(v.label, 'val', runStrategySpec(histories, '2024-01-01', v.spec, COST), bench, COST.initialCapital)
+    const w3 = stats(v.label, '3y', runStrategySpec(histories, y3, v.spec, COST), bench, COST.initialCapital)
+    log(
+      `| ${v.label} | ${f1(fit.alphaPct)}%p/${f1(fit.mddPct)}% | **${f1(val.alphaPct)}%p/${f1(val.mddPct)}%** | ${f1(
+        w3.alphaPct,
+      )}%p/${f1(w3.mddPct)}% | ${f1(w3.cagrPct)}% | ${w3.trades} |`,
+    )
+  }
+
+  // ---- 유휴현금 지수 파킹 [근사] --------------------------------------------
+  // 일별 투자금 = 열려 있는 매매의 qty×종가 합. 유휴비중 × 벤치 일수익을 엔진
+  // 수익률에 더한다. 슬롯 크기 피드백(파킹 수익이 슬롯을 키우는 효과)은 무시 — 1차 근사.
+  log('')
+  log('### 유휴현금 KODEX200 파킹 [근사 오버레이] — 승자 기준')
+  log('| 구간 | 원본 총수익 | 파킹 총수익 | 원본 알파(연) | **파킹 알파(연)** | 평균 유휴비중 |')
+  log('|---|---|---|---|---|---|')
+  const closeMaps: Record<string, Map<string, number>> = {}
+  for (const [s, bars] of Object.entries(histories)) closeMaps[s] = new Map(bars.map((b) => [b.date, b.c]))
+  const benchMap = new Map(bench.map((b) => [b.date, b.c]))
+  const windows: [string, string, Record<string, DailyBar[]>, DailyBar[]][] = [
+    ['전반(~23)', '0000-00-00', histFit, benchFit],
+    ['후반(24~)', '2024-01-01', histories, bench],
+    ['최근 3y', y3, histories, bench],
+  ]
+  for (const [label, start, hist, benchWin] of windows) {
+    const r = runStrategySpec(hist, start, WINNER, COST)
+    if (r.equity.length < 2) continue
+    // 일별 투자금 재구성
+    const investedByDate = new Map<string, number>()
+    for (const t of r.trades) {
+      const cm = closeMaps[t.symbol]
+      if (!cm) continue
+      for (const e of r.equity) {
+        if (e.date < t.entryDate) continue
+        if (t.exitDate != null && e.date >= t.exitDate) continue
+        const px = cm.get(e.date)
+        if (px != null) investedByDate.set(e.date, (investedByDate.get(e.date) ?? 0) + t.qty * px)
+      }
+    }
+    let overlay = 1
+    let idleSum = 0
+    let prevBench = benchMap.get(r.equity[0].date) ?? null
+    for (let i = 1; i < r.equity.length; i++) {
+      const prev = r.equity[i - 1]
+      const cur = r.equity[i]
+      const stratRet = cur.equity / prev.equity - 1
+      const invested = investedByDate.get(prev.date) ?? 0
+      const idleFrac = Math.max(0, Math.min(1, 1 - invested / prev.equity))
+      idleSum += idleFrac
+      const bNow = benchMap.get(cur.date) ?? null
+      const bRet = prevBench != null && bNow != null ? bNow / prevBench - 1 : 0
+      if (bNow != null) prevBench = bNow
+      overlay *= 1 + stratRet + idleFrac * bRet
+    }
+    const years = yearsBetween(r.equity[0].date, r.equity[r.equity.length - 1].date)
+    const origTotal = (r.equity[r.equity.length - 1].equity / COST.initialCapital - 1) * 100
+    const overlayTotal = (overlay - 1) * 100
+    const bIn = benchWin.filter((b) => b.date >= r.equity[0].date && b.date <= r.equity[r.equity.length - 1].date)
+    const bCagr = bIn.length >= 2 ? cagr(bIn[bIn.length - 1].c / bIn[0].c, years) : 0
+    log(
+      `| ${label} | ${f1(origTotal)}% | ${f1(overlayTotal)}% | ${f1(cagr(1 + origTotal / 100, years) - bCagr)}%p | **${f1(
+        cagr(overlay, years) - bCagr,
+      )}%p** | ${((idleSum / (r.equity.length - 1)) * 100).toFixed(0)}% |`,
+    )
+  }
+  log('')
+  log('⚠️ 세 구간 모두 기준 초과인 도전자만 교체 후보 — 한 구간 우위는 다중비교 노이즈. 오늘 목록 상한선 동일.')
+  log('⚠️ 파킹 오버레이는 1차 근사(슬롯 피드백 무시) — 채택하려면 엔진에 정식 구현 후 절단 불변성 테스트 필수.')
+  log('⚠️ 시뮬레이션이며 투자자문이 아니다.')
+}
+
+/**
  * 시점 고정 코스닥 상위 검증 (MODE=pitkq) — 2026-07-30 대표 지시.
  *
  * "그 시점 코스닥 상위 40으로" — 단 과거 코스닥 랭킹 40개 전체의 신뢰 가능한
@@ -1448,7 +1594,7 @@ async function mine() {
   log('⚠️ 유니버스가 "오늘의 시총 상위"라 수치는 부풀려질 수 있다(선택편향). 조건 간 상대 비교 중심으로 볼 것.')
 }
 
-const MODES: Record<string, () => Promise<void>> = { sweep, mine, payoff, era, tqqq, pit, pitkq, band, robust, backtest: main }
+const MODES: Record<string, () => Promise<void>> = { sweep, mine, payoff, era, tqqq, pit, pitkq, band, robust, challenger, backtest: main }
 const entry = MODES[process.env.MODE ?? 'backtest'] ?? main
 entry().catch((e) => {
   console.error('실행 실패:', e)
