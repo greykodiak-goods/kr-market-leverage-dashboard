@@ -838,6 +838,150 @@ async function pit() {
 }
 
 /**
+ * 시점 고정 코스닥 상위 검증 (MODE=pitkq) — 2026-07-30 대표 지시.
+ *
+ * "그 시점 코스닥 상위 40으로" — 단 과거 코스닥 랭킹 40개 전체의 신뢰 가능한
+ * 소스가 없어 **연도별 상위 ~12종목 [추정: 모델 지식 기반]**으로 축소 실행한다.
+ * 순위 오차가 코스피보다 크고, 상폐·합병 종목(SK브로드밴드·GS홈쇼핑·
+ * 셀트리온헬스케어·SK머티리얼즈·코오롱티슈진 등)은 Yahoo에 데이터가 없어
+ * 빠진다 — **이 공백 자체가 생존편향**이므로 연도별 커버리지를 함께 찍는다.
+ * 코스닥→코스피 이전 종목은 현재 접미사로 전 기간 시세가 이어진다(.KQ→.KS 폴백).
+ */
+const PIT_KOSDAQ12: Record<number, string[]> = {
+  2010: ['068270', '046890', '035720', '072870', '033630', '035760', '044490', '022100', '026960', '014620', '034230', '028150'],
+  2011: ['068270', '035720', '046890', '035760', '033630', '034230', '026960', '022100', '072870', '028150', '130960', '053800'],
+  2012: ['068270', '035720', '130960', '034230', '026960', '035760', '033630', '046890', '028150', '022100', '112040', '053800'],
+  2013: ['068270', '035720', '130960', '034230', '035760', '026960', '033630', '028150', '046890', '022100', '096530', '086900'],
+  2014: ['035720', '068270', '026960', '130960', '034230', '035760', '028150', '078340', '086900', '096530', '022100', '039030'],
+  2015: ['035720', '068270', '026960', '130960', '086900', '041960', '084990', '078340', '035760', '034230', '016170', '145020'],
+  2016: ['068270', '035720', '130960', '016170', '086900', '041960', '084990', '078340', '036490', '034230', '035760', '145020'],
+  2017: ['068270', '091990', '215600', '130960', '084990', '086900', '145020', '041960', '016170', '253450', '263750', '036490'],
+  2018: ['091990', '215600', '035760', '084990', '086900', '263750', '253450', '028300', '145020', '068760', '003670', '112040'],
+  2019: ['091990', '035760', '028300', '084990', '263750', '253450', '086900', '145020', '032500', '068760', '036490', '034230'],
+  2020: ['091990', '096530', '028300', '196170', '068760', '293490', '247540', '263750', '036490', '035760', '032500', '095700'],
+  2021: ['091990', '247540', '263750', '293490', '066970', '112040', '036490', '096530', '068760', '028300', '196170', '278280'],
+  2022: ['091990', '247540', '066970', '293490', '263750', '028300', '068760', '086520', '278280', '112040', '196170', '035900'],
+  2023: ['247540', '086520', '091990', '066970', '028300', '035900', '022100', '068760', '196170', '293490', '263750', '214150'],
+}
+
+/** 코스닥 출신 종목 폴백 로드 — .KQ 우선, 실패/짧으면 .KS (이전 상장 종목은 현재 접미사에 전 이력) */
+async function fetchKrDual(code: string, range: string): Promise<DailyBar[] | null> {
+  let best: DailyBar[] | null = null
+  for (const suffix of ['.KQ', '.KS']) {
+    try {
+      const bars = await fetchDaily(`${code}${suffix}`, range)
+      if (!best || bars.length > best.length) best = bars
+      if (bars.length >= 200) break
+    } catch {
+      /* 다음 접미사 시도 */
+    }
+    await sleep(120)
+  }
+  return best && best.length >= 200 ? best : null
+}
+
+async function pitkq() {
+  const years = Object.keys(PIT_KOSDAQ12)
+    .map(Number)
+    .sort((a, b) => a - b)
+  const uniq = [...new Set(Object.values(PIT_KOSDAQ12).flat())]
+  log(`시점 고정 코스닥 상위 ~12 [추정] · ${years[0]}~${years[years.length - 1]} · 고유 종목 ${uniq.length}개`)
+  const histories: Record<string, DailyBar[]> = {}
+  const failed: string[] = []
+  for (const code of uniq) {
+    const bars = await fetchKrDual(code, 'since:2009-01-01')
+    if (bars) histories[code] = bars
+    else failed.push(code)
+    await sleep(150)
+  }
+  const bench = await fetchDaily(BENCH, 'since:2009-01-01')
+  let kqIndex: DailyBar[] = []
+  try {
+    kqIndex = await fetchDaily('^KQ11', 'since:2009-01-01')
+  } catch {
+    log('⚠️ 코스닥 지수(^KQ11) 로드 실패 — 지수 비교 생략')
+  }
+  log(
+    `일봉 로드: ${Object.keys(histories).length}/${uniq.length}종목 · 데이터 없음(상폐·합병 등) ${failed.length}개 — ${failed.join(', ')}`,
+  )
+  log('⚠️ 빠진 종목이 당시 시총 상위였다는 사실 자체가 생존편향 공백이다(신라젠 정지·헬스케어 합병 등).')
+
+  const entry20 = {
+    op: 'and',
+    nodes: [c('20일선돌파', { kind: 'maCross', period: 20, dir: 'above' }), c('20일신고가', { kind: 'highBreak', days: 20 })],
+  } as ConditionNode
+
+  for (const slots of [10, 5]) {
+    log('')
+    log(`### 슬롯 ${slots} (한 종목당 자본 1/${slots})`)
+    log('| 연도 | 커버 | 전략 수익 | KODEX200 | 코스닥지수 | 초과(vs KODEX) | 매매 | 승률 | 평균손익/회 |')
+    log('|---|---|---|---|---|---|---|---|---|')
+    let factor = 1
+    const chained: number[] = []
+    let winsTotal = 0
+    let closedTotal = 0
+    let pnlSum = 0
+    let benchFactor = 1
+    for (const y of years) {
+      const list = PIT_KOSDAQ12[y]
+      const syms = list.filter((s) => histories[s])
+      const end = `${y}-12-31`
+      const hist: Record<string, DailyBar[]> = {}
+      for (const s of syms) hist[s] = histories[s].filter((b) => b.date <= end)
+      const spec = baseSpec({
+        entry: entry20,
+        exits: [{ kind: 'maBreak', maPeriod: 40, pct: 2 }],
+        universe: { ...baseSpec({}).universe, symbols: syms },
+        sizing: { maxPositions: slots, mode: 'equalSlot' },
+      })
+      const r = runStrategySpec(hist, `${y}-01-01`, spec, COST)
+      const finalEq = r.equity.length ? r.equity[r.equity.length - 1].equity : COST.initialCapital
+      const ret = finalEq / COST.initialCapital
+      const inYear = bench.filter((b) => b.date >= `${y}-01-01` && b.date <= end)
+      const bret = inYear.length >= 2 ? inYear[inYear.length - 1].c / inYear[0].c : 1
+      const kqYear = kqIndex.filter((b) => b.date >= `${y}-01-01` && b.date <= end)
+      const kqret = kqYear.length >= 2 ? kqYear[kqYear.length - 1].c / kqYear[0].c : null
+      for (const e of r.equity) chained.push((factor * e.equity) / COST.initialCapital)
+      factor *= ret
+      benchFactor *= bret
+      const closed = r.trades.filter((t) => t.exitDate != null)
+      const wins = closed.filter((t) => (t.pnlPct ?? 0) > 0).length
+      const pnl = closed.reduce((s2, t) => s2 + (t.pnlPct ?? 0), 0)
+      winsTotal += wins
+      closedTotal += closed.length
+      pnlSum += pnl
+      log(
+        `| ${y} | ${syms.length}/${list.length} | ${f1((ret - 1) * 100)}% | ${f1((bret - 1) * 100)}% | ${
+          kqret != null ? `${f1((kqret - 1) * 100)}%` : '—'
+        } | ${f1((ret - bret) * 100)}%p | ${closed.length} | ${
+          closed.length ? ((wins / closed.length) * 100).toFixed(0) : '—'
+        }% | ${closed.length ? f2(pnl / closed.length) : '—'}% |`,
+      )
+    }
+    let peak = 0
+    let mdd = 0
+    for (const eq of chained) {
+      if (eq > peak) peak = eq
+      mdd = Math.min(mdd, peak > 0 ? (eq / peak - 1) * 100 : 0)
+    }
+    const yearsSpan = years.length
+    const cagrPct = (Math.pow(factor, 1 / yearsSpan) - 1) * 100
+    const benchCagrPct = (Math.pow(benchFactor, 1 / yearsSpan) - 1) * 100
+    log('')
+    log(
+      `종합(슬롯 ${slots}) ${years[0]}~${years[years.length - 1]}: 총수익 ${f1((factor - 1) * 100)}% · CAGR **${f1(
+        cagrPct,
+      )}%** · KODEX200 CAGR ${f1(benchCagrPct)}% · 알파(연) **${f1(cagrPct - benchCagrPct)}%p** · MDD ${f1(mdd)}% · ` +
+        `매매 ${closedTotal}회 · 승률 ${closedTotal ? ((winsTotal / closedTotal) * 100).toFixed(0) : '—'}% · ` +
+        `평균손익/회 ${closedTotal ? f2(pnlSum / closedTotal) : '—'}%`,
+    )
+  }
+  log('')
+  log('⚠️ 유니버스는 연도별 상위 ~12 [추정: 모델 지식·순위 오차 큼] — "상위 40"의 대용이지 실측 랭킹이 아니다.')
+  log('⚠️ 상폐·합병 종목 데이터 공백 = 생존편향 잔존. 연말 강제 청산 근사. 시뮬레이션이며 투자자문이 아니다.')
+}
+
+/**
  * 라오어 무한매수법 TQQQ 비교 (MODE=tqqq) — 2026-07-30 대표 지시.
  *
  * 구현은 **원조 v1의 단순화판**임을 명시한다(규칙 3):
@@ -1098,7 +1242,7 @@ async function mine() {
   log('⚠️ 유니버스가 "오늘의 시총 상위"라 수치는 부풀려질 수 있다(선택편향). 조건 간 상대 비교 중심으로 볼 것.')
 }
 
-const MODES: Record<string, () => Promise<void>> = { sweep, mine, payoff, era, tqqq, pit, backtest: main }
+const MODES: Record<string, () => Promise<void>> = { sweep, mine, payoff, era, tqqq, pit, pitkq, backtest: main }
 const entry = MODES[process.env.MODE ?? 'backtest'] ?? main
 entry().catch((e) => {
   console.error('실행 실패:', e)
