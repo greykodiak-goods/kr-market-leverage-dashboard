@@ -122,6 +122,22 @@ const PRESET_MA20_WINNER: StrategySpec = {
   execution: { timing: 'sameClose', orderType: 'market' },
 }
 
+// 14차 도전자 — 진입 이평만 20→15일(신호 ~1주 빠름). 홀드아웃 3구간 전승했으나 다중비교
+// 잔존 위험 + MDD 4~6%p 깊어짐. 페이퍼 3트랙 실측으로 판정 중 — 확정 전 참고용.
+const PRESET_MA15_CHALLENGER: StrategySpec = {
+  ...PRESET_MA20_WINNER,
+  id: 'ma15-high20-slow',
+  name: 'MA15 돌파×20일 신고가·느린 청산 (도전자)',
+  source: '2026-07-30 백테스트 14차 도전자 — 후반 알파 +55.9%p·MDD −26~−28% (다중비교 주의, 페이퍼 판정 중)',
+  entry: {
+    op: 'and',
+    nodes: [
+      { op: 'cond', id: '15일선돌파', cond: { kind: 'maCross', period: 15, dir: 'above' } },
+      { op: 'cond', id: '20일신고가', cond: { kind: 'highBreak', days: 20 } },
+    ],
+  },
+}
+
 // 위 승자에 거래량 급증을 얹은 방어 변형 — 알파는 조금 낮고 MDD가 얕다(−22→−19%), 매매도 감소.
 const PRESET_MA20_DEFENSIVE: StrategySpec = {
   ...PRESET_MA20_WINNER,
@@ -140,6 +156,7 @@ const PRESET_MA20_DEFENSIVE: StrategySpec = {
 
 const PRESETS: { id: string; label: string; spec: StrategySpec }[] = [
   { id: 'ma20-winner', label: 'MA20×신고가·느린 청산 (백테스트 승자)', spec: PRESET_MA20_WINNER },
+  { id: 'ma15-chal', label: 'MA15×신고가·느린 청산 (도전자 — 검증 중)', spec: PRESET_MA15_CHALLENGER },
   { id: 'ma20-def', label: 'MA20×급증×신고가 (방어형)', spec: PRESET_MA20_DEFENSIVE },
   { id: 'heromoon', label: '급등주 5일선 돌파 (영웅문 조건식)', spec: HEROMOON_MOMENTUM },
   { id: 'goblin', label: '5일선 기법 — 정배열+코스피 레짐', spec: PRESET_GOBLIN },
