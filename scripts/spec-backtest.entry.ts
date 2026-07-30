@@ -601,8 +601,8 @@ async function payoff() {
   log('')
   log('손익비 = 평균이익 ÷ |평균손실| · PF = 총이익 ÷ |총손실| · 기대값/회 = 승률 반영 평균손익 (비용 포함)')
   log('')
-  log('| 전략 | 구간 | 승률 | 평균이익 | 평균손실 | **손익비** | PF | 기대값/회 | 매매 | 평균보유일 | 알파(연) | MDD |')
-  log('|---|---|---|---|---|---|---|---|---|---|---|---|')
+  log('| 전략 | 구간 | 승률 | 평균이익 | 평균손실 | **손익비** | PF | 기대값/회 | 매매 | 평균보유일 | **CAGR** | 벤치CAGR | 총수익 | 알파(연) | MDD |')
+  log('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|')
   for (const v of candidates) {
     for (const [wLabel, start] of windows) {
       const r = runStrategySpec(histories, start, v.spec, COST)
@@ -620,9 +620,9 @@ async function payoff() {
       log(
         `| ${v.label} | ${wLabel} | ${s.winRatePct?.toFixed(0) ?? '—'}% | ${f2(avgWin)}% | ${f2(avgLoss)}% | **${
           ratio?.toFixed(2) ?? '—'
-        }** | ${pf?.toFixed(2) ?? '—'} | ${f2(s.avgPnlPct)}% | ${s.trades} | ${s.avgHoldDays?.toFixed(1) ?? '—'} | ${f1(
-          s.alphaPct,
-        )}%p | ${f1(s.mddPct)}% |`,
+        }** | ${pf?.toFixed(2) ?? '—'} | ${f2(s.avgPnlPct)}% | ${s.trades} | ${s.avgHoldDays?.toFixed(1) ?? '—'} | **${f1(
+          s.cagrPct,
+        )}%** | ${f1(s.benchCagrPct)}% | ${f1(s.totalPct)}% | ${f1(s.alphaPct)}%p | ${f1(s.mddPct)}% |`,
       )
     }
   }

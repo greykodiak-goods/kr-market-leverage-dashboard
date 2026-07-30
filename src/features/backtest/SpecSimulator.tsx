@@ -101,10 +101,49 @@ const PRESET_BEST_U: StrategySpec = {
   execution: { timing: 'sameClose', orderType: 'market' },
 }
 
+// 스윕 54구성 + 손익비 분해(5·6차 백테스트)의 승자 — 전 구간(전반·후반·3y) 알파 양수인 유일 그룹.
+// 핵심은 익절 없이 40일선 −2%까지 이익을 끌고 가는 느린 청산(손익비 5~6.6). 절대 수치는 선택편향 상한선.
+const PRESET_MA20_WINNER: StrategySpec = {
+  version: SPEC_VERSION,
+  id: 'ma20-high20-slow',
+  name: 'MA20 돌파×20일 신고가·느린 청산',
+  source: '2026-07-30 백테스트 5·6차 승자 — 손익비 5~6.6·PF 3~4·전 구간 알파 양수 (선택편향 주의)',
+  universe: HEROMOON_MOMENTUM.universe,
+  entry: {
+    op: 'and',
+    nodes: [
+      { op: 'cond', id: '20일선돌파', cond: { kind: 'maCross', period: 20, dir: 'above' } },
+      { op: 'cond', id: '20일신고가', cond: { kind: 'highBreak', days: 20 } },
+    ],
+  },
+  ranking: { by: 'tradingValue', dir: 'desc' },
+  exits: [{ kind: 'maBreak', maPeriod: 40, pct: 2 }],
+  sizing: { maxPositions: 10, mode: 'equalSlot' },
+  execution: { timing: 'sameClose', orderType: 'market' },
+}
+
+// 위 승자에 거래량 급증을 얹은 방어 변형 — 알파는 조금 낮고 MDD가 얕다(−22→−19%), 매매도 감소.
+const PRESET_MA20_DEFENSIVE: StrategySpec = {
+  ...PRESET_MA20_WINNER,
+  id: 'ma20-surge-high20-slow',
+  name: 'MA20×급증×신고가·느린 청산 (방어형)',
+  source: '2026-07-30 백테스트 6차 — 승자 변형: MDD 얕음(−18~21%)·매매 감소, 알파 소폭 하락',
+  entry: {
+    op: 'and',
+    nodes: [
+      { op: 'cond', id: '20일선돌파', cond: { kind: 'maCross', period: 20, dir: 'above' } },
+      { op: 'cond', id: '거래량급증', cond: { kind: 'volumeSurge', days: 20, ratio: 1.5 } },
+      { op: 'cond', id: '20일신고가', cond: { kind: 'highBreak', days: 20 } },
+    ],
+  },
+}
+
 const PRESETS: { id: string; label: string; spec: StrategySpec }[] = [
+  { id: 'ma20-winner', label: 'MA20×신고가·느린 청산 (백테스트 승자)', spec: PRESET_MA20_WINNER },
+  { id: 'ma20-def', label: 'MA20×급증×신고가 (방어형)', spec: PRESET_MA20_DEFENSIVE },
   { id: 'heromoon', label: '급등주 5일선 돌파 (영웅문 조건식)', spec: HEROMOON_MOMENTUM },
   { id: 'goblin', label: '5일선 기법 — 정배열+코스피 레짐', spec: PRESET_GOBLIN },
-  { id: 'best-u', label: '급증×신고가×버퍼 (백테스트 최적)', spec: PRESET_BEST_U },
+  { id: 'best-u', label: '급증×신고가×버퍼 (5일선 계열 최적)', spec: PRESET_BEST_U },
 ]
 
 function loadSaved(): Saved {
