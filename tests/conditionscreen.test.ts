@@ -14,11 +14,14 @@ import {
   compareExits,
   DEFAULT_CONDITION,
   exitRuleLabel,
+  paramsToSpec,
   runConditionScreen,
+  runStrategySpec,
   smaAt,
   type ConditionParams,
   type CostSettings,
 } from '../src/features/backtest/conditionScreen'
+import { SPEC_VERSION, type StrategySpec } from '../src/features/backtest/strategySpec'
 
 const COST: CostSettings = { initialCapital: 10_000_000, feePct: 0.015, taxPct: 0.15, slippagePct: 0.1 }
 const NOCOST: CostSettings = { initialCapital: 10_000_000, feePct: 0, taxPct: 0, slippagePct: 0 }
@@ -332,6 +335,141 @@ section('9) 라벨·집계')
   eq('손절로 집계', r.exitBreakdown[0].kind, 'stopLoss')
   check('평균 손익 음수(손절이므로)', (r.exitBreakdown[0].avgPnlPct ?? 0) < 0)
   check('스크리닝 결과 보존', r.lastScreen.length >= 1)
+}
+
+// ------------------------------------------ 10) 스펙 엔진 (runStrategySpec)
+section('10) 전략 스펙 엔진 — 정본 경로')
+{
+  const BASE_UNIVERSE: StrategySpec['universe'] = {
+    markets: ['KOSPI', 'KOSDAQ'],
+    excludeAdministrative: true,
+    excludeSuspended: true,
+    excludeLiquidation: true,
+    excludePreferred: true,
+    excludeEtf: true,
+  }
+
+  // (a) 래퍼 등가성 — 파라미터 경로와 스펙 경로가 같은 결과를 내는가 (회귀 가드)
+  {
+    const hist = { AAA: flatThenBreakout(30, 10), BBB: flatThenBreakout(30, 15) }
+    const p: ConditionParams = { ...DEFAULT_CONDITION, maxPositions: 1, exits: [{ kind: 'timeExit', days: 2 }] }
+    const a = runConditionScreen(hist, d(0), p, NOCOST)
+    const b = runStrategySpec(hist, d(0), paramsToSpec(p), NOCOST)
+    eq('파라미터 경로 = 스펙 경로 (체결)', JSON.stringify(a.events), JSON.stringify(b.events))
+    eq('파라미터 경로 = 스펙 경로 (자산곡선)', JSON.stringify(a.equity), JSON.stringify(b.equity))
+  }
+
+  // (b) universe.symbols — 표본을 지정하면 그 밖의 종목은 절대 사지 않는다
+  {
+    const hist = { AAA: flatThenBreakout(30, 10), BBB: flatThenBreakout(30, 15) }
+    const spec: StrategySpec = {
+      ...paramsToSpec({ ...DEFAULT_CONDITION, maxPositions: 2, exits: [{ kind: 'timeExit', days: 2 }] }),
+      universe: { ...BASE_UNIVERSE, symbols: ['AAA'] },
+    }
+    const r = runStrategySpec(hist, d(0), spec, NOCOST)
+    const buys = r.events.filter((e) => e.action === '매수')
+    check('표본 내 종목은 매수됨', buys.some((e) => e.symbol === 'AAA'))
+    check('표본 밖 종목은 매수 안 됨', !buys.some((e) => e.symbol === 'BBB'))
+    eq('유니버스도 표본만', r.universe.join(','), 'AAA')
+  }
+
+  // (c) timing=sameClose(LOC) — 신호일 **당일 종가** 체결
+  {
+    const bars = flatThenBreakout(20, 10)
+    const spec: StrategySpec = {
+      ...paramsToSpec({ ...DEFAULT_CONDITION, maxPositions: 1, exits: [{ kind: 'timeExit', days: 2 }] }),
+      execution: { timing: 'sameClose', orderType: 'market' },
+    }
+    const r = runStrategySpec({ AAA: bars }, d(0), spec, NOCOST)
+    const buy = r.events.find((e) => e.action === '매수')
+    check('LOC 체결 발생', !!buy)
+    if (buy) {
+      eq('체결일 = 신호일(돌파일)', buy.date, d(10))
+      close('체결가 = 신호일 종가', buy.price, bars[10].c, 1e-9)
+    }
+    // 마지막 봉 신호는 LOC라도 만들지 않는다 (규칙 1-6 보수 적용)
+    const lastBreak = flatThenBreakout(20, 19)
+    const rLast = runStrategySpec({ AAA: lastBreak }, d(0), spec, NOCOST)
+    eq('마지막 봉 LOC 진입 없음', rLast.events.filter((e) => e.action === '매수').length, 0)
+  }
+
+  // (d) OR 트리 — 고정형 파라미터로는 표현 불가능한 조건식이 돈다
+  {
+    // +5% 급등 **또는** −5% 급락에 진입 (양방향 이벤트 스터디용)
+    const closes = [10000, 10000, 10000, 10000, 10000, 11000, 11000, 11000, 11000, 11000, 9900, 9900, 9900, 9900]
+    const bars = closes.map((c, i) => bar(i, i > 0 ? closes[i - 1] : c, Math.max(c, i > 0 ? closes[i - 1] : c), Math.min(c, i > 0 ? closes[i - 1] : c), c))
+    const orSpec: StrategySpec = {
+      version: SPEC_VERSION,
+      id: 'or-test',
+      name: '급등락 이벤트',
+      universe: BASE_UNIVERSE,
+      entry: {
+        op: 'or',
+        nodes: [
+          { op: 'cond', cond: { kind: 'changePct', min: 5 } },
+          { op: 'cond', cond: { kind: 'changePct', max: -5 } },
+        ],
+      },
+      ranking: null,
+      exits: [{ kind: 'timeExit', days: 1 }],
+      sizing: { maxPositions: 1, mode: 'equalSlot' },
+      execution: { timing: 'nextOpen', orderType: 'market' },
+    }
+    const r = runStrategySpec({ AAA: bars }, d(0), orSpec, NOCOST)
+    const buys = r.events.filter((e) => e.action === '매수')
+    eq('급등·급락 각 1회 진입', buys.length, 2)
+    eq('급등 신호 → 익일 체결', buys[0]?.date, d(6))
+    eq('급락 신호 → 익일 체결', buys[1]?.date, d(11))
+  }
+
+  // (e) 스펙 경로 절단 불변성 (규칙 1) — 새 경로도 미래를 보지 않는다
+  {
+    const mk = (seed: number): DailyBar[] => {
+      const g = rng(seed)
+      const out: DailyBar[] = []
+      let px = 10000
+      for (let i = 0; i < 200; i++) {
+        const ret = 0.04 * (g() * 2 - 1)
+        const o = px
+        const c = px * (1 + ret)
+        out.push(bar(i, o, Math.max(o, c) * 1.01, Math.min(o, c) * 0.99, c, 500_000 + Math.floor(g() * 2_000_000)))
+        px = c
+      }
+      return out
+    }
+    const hist = { AAA: mk(11), BBB: mk(12) }
+    const spec: StrategySpec = {
+      version: SPEC_VERSION,
+      id: 'trunc-test',
+      name: '절단 검증',
+      universe: BASE_UNIVERSE,
+      entry: {
+        op: 'or',
+        nodes: [
+          { op: 'cond', cond: { kind: 'highBreak', days: 10 } },
+          {
+            op: 'and',
+            nodes: [
+              { op: 'cond', cond: { kind: 'rsi', period: 14, max: 30 } },
+              { op: 'not', node: { op: 'cond', cond: { kind: 'streak', dir: 'down', days: 5 } } },
+            ],
+          },
+        ],
+      },
+      ranking: { by: 'tradingValue', dir: 'desc' },
+      exits: [{ kind: 'stopLoss', pct: 4 }, { kind: 'conditionExit' }],
+      sizing: { maxPositions: 2, mode: 'equalSlot' },
+      execution: { timing: 'nextOpen', orderType: 'market' },
+    }
+    const CUT = 140
+    const full = runStrategySpec(hist, d(0), spec, COST)
+    const cut = runStrategySpec({ AAA: hist.AAA.slice(0, CUT), BBB: hist.BBB.slice(0, CUT) }, d(0), spec, COST)
+    const fullBefore = full.events.filter((e) => e.date < d(CUT - 1))
+    const cutBefore = cut.events.filter((e) => e.date < d(CUT - 1))
+    eq('절단 전 체결 건수 동일', cutBefore.length, fullBefore.length)
+    eq('절단 전 체결 내역 일치', JSON.stringify(cutBefore), JSON.stringify(fullBefore))
+    check('체결이 실제로 존재(공허한 통과 방지)', fullBefore.filter((e) => e.action === '매수').length > 0)
+  }
 }
 
 finish()

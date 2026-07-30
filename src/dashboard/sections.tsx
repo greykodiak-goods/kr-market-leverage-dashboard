@@ -13,6 +13,7 @@ import { SmartMoneyRadar } from '../features/mega-investors/SmartMoneyRadar'
 import { FlowRotation } from '../features/mega-investors/FlowRotation'
 import { MegaInvestorsNews } from '../features/mega-investors/MegaInvestorsNews'
 import { BacktestSection } from '../features/backtest/BacktestSection'
+import { SpecSimulator } from '../features/backtest/SpecSimulator'
 
 // ---- Tabs (topic grouping) ----------------------------------------------
 // NOTE: tab-ia-plan §6 capped tabs at 5; 'sim' was added as the 6th by 대표
@@ -64,6 +65,8 @@ export const SECTIONS: SectionDef[] = [
   { id: 'semiconductor', tab: 'semi', title: '반도체 업황 · 상대강도', Component: SemiconductorSection },
   { id: 'leverage', tab: 'market', title: '시장 온도 · 레버리지', Component: LeverageSection },
   { id: 'macro', tab: 'market', title: '매크로 위험 · 지수', Component: MacroSection },
+  // 조건식(영웅문 2차검증)을 모델 플랫폼 위에 — 대표의 현재 워크플로가 조건식 발굴이므로 먼저 보이게.
+  { id: 'spec-sim', tab: 'sim', title: '⚡ 조건식 시뮬레이터 (영웅문 2차검증)', Component: SpecSimulator },
   { id: 'backtest', tab: 'sim', title: '🤖 투자봇 시뮬레이터 (백테스트)', Component: BacktestSection },
   { id: 'news', tab: 'news', title: '📰 시장 전반 뉴스', Component: NewsForecastSection },
   // 계산형(매일 바뀜)을 위, 정적 레퍼런스(분기 갱신)를 아래로 — 볼 것이 있는 순서.

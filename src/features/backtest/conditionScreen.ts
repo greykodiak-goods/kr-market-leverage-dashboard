@@ -22,27 +22,15 @@
 //   - 마지막 봉에서는 체결할 다음 봉이 없으므로 신규 진입을 만들지 않는다
 
 import type { DailyBar, EquityPoint, SimEvent, Trade } from './types'
+import type { CrossSection, ExitKind, ExitRule, StrategySpec } from './strategySpec'
+import { SPEC_VERSION, changePctAt, evaluateEntry, evaluatePersistence } from './strategySpec'
 
 // ---- 매도 규칙 ------------------------------------------------------------
+//
+// ExitKind/ExitRule 타입 정의는 strategySpec.ts 에 있다 — 스펙과 엔진이 같은
+// 타입을 쓰기 위해서다. 여기서는 라벨만 둔다.
 
-export type ExitKind =
-  | 'stopLoss' // 손절 −X%
-  | 'takeProfit' // 익절 +X%
-  | 'maBreak' // N일 이평 이탈(종가 기준) → 다음날 시가
-  | 'sameDayClose' // 당일 종가 청산(데이트레이딩)
-  | 'timeExit' // N거래일 보유 후 청산
-  | 'trailing' // 고점 대비 −X% 트레일링
-  | 'conditionExit' // 조건검색 이탈(= 매수 조건을 더는 만족하지 않음) → 익일 시가
-
-export interface ExitRule {
-  kind: ExitKind
-  /** stopLoss·takeProfit·trailing 에서 % */
-  pct?: number
-  /** maBreak 의 이평 기간 */
-  maPeriod?: number
-  /** timeExit 의 보유 거래일 수 */
-  days?: number
-}
+export type { ExitKind, ExitRule } from './strategySpec'
 
 export const EXIT_LABELS: Record<ExitKind, string> = {
   stopLoss: '손절',
@@ -215,12 +203,45 @@ function buildCalendar(histories: Record<string, DailyBar[]>): string[] {
 }
 
 /**
- * 조건식 백테스트.
- *
- * 하루의 처리 순서 (미래참조 금지):
- *   1) 전일 종가 기준으로 잡힌 진입 대기 종목을 **오늘 시가**에 체결
- *   2) 보유 종목의 청산 조건을 오늘 봉으로 판정 (갭 관통 시 시가 체결)
- *   3) 오늘 종가로 내일 진입 후보를 선정 (오늘 이후 데이터는 보지 않음)
+ * 고정 파라미터(I·A·B·J·K) → 전략 스펙 변환.
+ * 기존 UI·테스트와의 호환 통로다. 새 조건식은 스펙을 직접 만든다.
+ */
+export function paramsToSpec(p: ConditionParams): StrategySpec {
+  return {
+    version: SPEC_VERSION,
+    id: 'iabjk',
+    name: '급등주 조건식 (I·A·B·J·K)',
+    universe: {
+      markets: ['KOSPI', 'KOSDAQ'],
+      excludeAdministrative: true,
+      excludeSuspended: true,
+      excludeLiquidation: true,
+      excludePreferred: true,
+      excludeEtf: true,
+    },
+    entry: {
+      op: 'and',
+      nodes: [
+        { op: 'cond', id: 'I', cond: { kind: 'changeRank', top: p.topRank } },
+        { op: 'cond', id: 'A', cond: { kind: 'priceRange', min: p.minClose, max: p.maxClose } },
+        ...(p.requireBullCandle
+          ? [{ op: 'cond' as const, id: 'B', cond: { kind: 'candle' as const, bull: true } }]
+          : []),
+        { op: 'cond', id: 'J', cond: { kind: 'maCross' as const, period: p.maPeriod, dir: 'above' as const } },
+        { op: 'cond', id: 'K', cond: { kind: 'volume' as const, min: p.minVolume } },
+      ],
+    },
+    ranking: { by: 'changePct', dir: 'desc' },
+    // maBreak에 기간이 비어 있으면 엔진 기본값이 아니라 **이 조건식의 이평 기간**을 쓴다
+    exits: p.exits.map((e) => (e.kind === 'maBreak' ? { ...e, maPeriod: e.maPeriod ?? p.maPeriod } : e)),
+    sizing: { maxPositions: p.maxPositions, mode: 'equalSlot' },
+    execution: { timing: 'nextOpen', orderType: 'market' },
+  }
+}
+
+/**
+ * 조건식 백테스트 (I·A·B·J·K 고정형) — 스펙으로 변환해 runStrategySpec에 위임한다.
+ * 판정 로직이 두 벌 생기지 않도록 이 함수 자체는 아무것도 계산하지 않는다.
  */
 export function runConditionScreen(
   histories: Record<string, DailyBar[]>,
@@ -228,8 +249,38 @@ export function runConditionScreen(
   p: ConditionParams,
   cost: CostSettings,
 ): ConditionResult {
-  const universe = Object.keys(histories).sort()
-  const calendar = buildCalendar(histories).filter((d) => d >= startDate)
+  return runStrategySpec(histories, startDate, paramsToSpec(p), cost)
+}
+
+/**
+ * 전략 스펙 백테스트 — **정본 엔진.**
+ *
+ * 하루의 처리 순서 (미래참조 금지):
+ *   1) 전일 종가 기준으로 잡힌 진입 대기 종목을 **오늘 시가**에 체결 (timing=nextOpen)
+ *   2) 보유 종목의 청산 조건을 오늘 봉으로 판정 (갭 관통 시 시가 체결)
+ *   3) 오늘 종가로 내일 진입 후보를 선정 (오늘 이후 데이터는 보지 않음)
+ *      timing=sameClose(LOC)면 선정 즉시 **오늘 종가**에 체결한다 — 종가로 판단해
+ *      종가에 체결하는 알고리즘형이며, 종가 확정 뒤의 정보는 쓰지 않는다(규칙 1-2).
+ *
+ * 조건 판정은 strategySpec.evaluateEntry / evaluatePersistence **만** 쓴다.
+ * 실시간 평가기가 붙어도 같은 함수를 부르므로 시뮬과 실전 판정이 갈라질 수 없다.
+ * timing='intraday'는 일봉으로 검증할 수 없어 nextOpen으로 근사한다(validateSpec이 경고).
+ */
+export function runStrategySpec(
+  histories: Record<string, DailyBar[]>,
+  startDate: string,
+  spec: StrategySpec,
+  cost: CostSettings,
+): ConditionResult {
+  const maxPositions = Math.max(1, spec.sizing.maxPositions)
+  // universe.symbols가 있으면 그 표본만 — 없으면 데이터에 있는 전 종목
+  const wanted = spec.universe.symbols?.length ? new Set(spec.universe.symbols) : null
+  const universe = Object.keys(histories)
+    .filter((s) => !wanted || wanted.has(s))
+    .sort()
+  const scoped: Record<string, DailyBar[]> = {}
+  for (const s of universe) scoped[s] = histories[s]
+  const calendar = buildCalendar(scoped).filter((d) => d >= startDate)
   const trades: Trade[] = []
   const events: SimEvent[] = []
   const equity: EquityPoint[] = []
@@ -257,31 +308,13 @@ export function runConditionScreen(
     const date = calendar[d]
     const isLast = d === calendar.length - 1
 
-    // ---- 1) 대기 종목 시가 진입 -------------------------------------------
+    // ---- 1) 대기 종목 시가 진입 (timing=nextOpen) --------------------------
     for (const sym of pending) {
-      if (positions.size >= p.maxPositions) break
+      if (positions.size >= maxPositions) break
       const bi = idxOf[sym].get(date)
       if (bi == null) continue // 그날 거래 없음(정지 등) → 진입 취소
       const bar = histories[sym][bi]
-      const slot = cash / Math.max(1, p.maxPositions - positions.size)
-      const fill = buyCost(bar.o)
-      const qty = Math.floor(slot / (fill * (1 + cost.feePct / 100)))
-      if (qty <= 0) continue
-      const gross = qty * fill
-      const fee = gross * (cost.feePct / 100)
-      cash -= gross + fee
-      positions.set(sym, { symbol: sym, entryDate: date, entryPrice: fill, qty, entryIdx: d, peak: bar.h })
-      events.push({
-        date,
-        action: '매수',
-        price: fill,
-        qty,
-        note: '조건 충족 → 익일 시가',
-        symbol: sym,
-        amount: gross,
-        cashAfter: cash,
-        positionsAfter: positions.size,
-      })
+      enterPosition(sym, bar.o, date, d, bar.h, '조건 충족 → 익일 시가')
     }
     pending = []
 
@@ -294,13 +327,13 @@ export function runConditionScreen(
       if (d === pos.entryIdx) {
         // 진입 당일 — sameDayClose 만 평가 (손절/익절도 당일 장중 발동 가능하나,
         // 시가 진입 직후의 장중 경로를 일봉으로는 알 수 없어 보수적으로 다음날부터 본다)
-        const sameDay = p.exits.find((e) => e.kind === 'sameDayClose')
+        const sameDay = spec.exits.find((e) => e.kind === 'sameDayClose')
         if (sameDay) closePosition(sym, pos, bar.c, date, 'sameDayClose', bar)
         continue
       }
 
       let fired: { kind: ExitKind; price: number } | null = null
-      for (const rule of p.exits) {
+      for (const rule of spec.exits) {
         if (fired) break
         switch (rule.kind) {
           case 'stopLoss': {
@@ -328,7 +361,7 @@ export function runConditionScreen(
             // 전일 종가가 이평 아래로 떨어졌으면 오늘 시가 청산 (종가 판단 → 익일 체결)
             const pi = idxOf[sym].get(calendar[d - 1])
             if (pi != null) {
-              const ma = smaAt(histories[sym], pi, rule.maPeriod ?? p.maPeriod)
+              const ma = smaAt(histories[sym], pi, rule.maPeriod ?? 5)
               if (ma != null && histories[sym][pi].c < ma) fired = { kind: 'maBreak', price: bar.o }
             }
             break
@@ -340,24 +373,12 @@ export function runConditionScreen(
           case 'conditionExit': {
             // HTS 조건검색은 편입(신호 발생)뿐 아니라 **이탈**도 실시간으로 준다.
             // 이탈 = 전일 종가 기준으로 매수 조건을 더는 만족하지 않음 → 익일 시가 청산.
-            // 여기서는 이평 위 유지를 조건 존속의 대리 지표로 쓴다. 원래 J는
-            // "상향 돌파"라 진입 다음날부터는 정의상 거짓이 되므로, 돌파가 아니라
-            // "이평 위에 있는가"로 존속을 판정해야 의미가 있다.
+            // 존속 판정은 진입 조건 그대로가 아니라 evaluatePersistence의 변환표를
+            // 따른다(돌파→유지, 트리거 조건 제외 — 그대로 재평가하면 진입 다음날
+            // 무조건 청산되는 1일 보유 전략이 되어 버린다).
             const pi = idxOf[sym].get(calendar[d - 1])
-            if (pi != null) {
-              const prevBar = histories[sym][pi]
-              const ma = smaAt(histories[sym], pi, p.maPeriod)
-              // 이평과 '같은' 것은 이탈이 아니다 — 이탈은 아래로 내려간 경우다.
-              // 진입 조건 J는 돌파라서 strict >를 쓰지만, 존속 판정은 >= 가 맞다.
-              // (strict >를 쓰면 가격이 완전히 평탄한 구간에서 종가 == 이평이 되어
-              //  아무 일도 없는데 청산되는 오작동이 난다.)
-              const stillIn =
-                ma != null &&
-                prevBar.c >= ma &&
-                prevBar.c >= p.minClose &&
-                prevBar.c <= p.maxClose &&
-                prevBar.v >= p.minVolume
-              if (!stillIn) fired = { kind: 'conditionExit', price: bar.o }
+            if (pi != null && !evaluatePersistence(spec.entry, histories[sym], pi, sym)) {
+              fired = { kind: 'conditionExit', price: bar.o }
             }
             break
           }
@@ -373,27 +394,61 @@ export function runConditionScreen(
 
     // ---- 3) 오늘 종가로 내일 후보 선정 ------------------------------------
     // 마지막 봉에서는 체결할 다음 봉이 없으므로 신규 진입을 만들지 않는다(규칙 1-6).
-    if (!isLast && positions.size < p.maxPositions) {
-      const rows: ConditionScreenRow[] = []
+    if (!isLast && positions.size < maxPositions) {
+      // 횡단면 — 그날 봉이 있는 종목의 등락률·거래대금 (changeRank 조건이 쓴다)
+      const cs: CrossSection = { changePct: new Map(), tradingValue: new Map() }
+      const todayIdx = new Map<string, number>()
       for (const sym of universe) {
         const bi = idxOf[sym].get(date)
         if (bi == null) continue
-        const c = checkConditions(histories[sym], bi, p)
+        todayIdx.set(sym, bi)
+        const ch = changePctAt(histories[sym], bi)
+        if (ch != null) cs.changePct.set(sym, ch)
+        const b = histories[sym][bi]
+        cs.tradingValue!.set(sym, b.c * b.v)
+      }
+      const rows: ConditionScreenRow[] = []
+      for (const [sym, bi] of todayIdx) {
+        const r = evaluateEntry(spec.entry, histories[sym], bi, sym, cs)
         rows.push({
           symbol: sym,
-          changePct: c.changePct,
+          changePct: cs.changePct.get(sym) ?? null,
           rank: null,
-          passed: c.A && c.B && c.J && c.K,
-          reasons: c.reasons,
+          passed: r.passed,
+          reasons: r.detail.filter((x) => !x.passed).map((x) => `${x.label} 미충족${x.value ? ` (${x.value})` : ''}`),
         })
       }
-      // I — 등락률 상위 topRank 안에 드는 종목만 후보
-      const ranked = [...rows].sort((a, b) => (b.changePct ?? -Infinity) - (a.changePct ?? -Infinity))
+      // 랭킹 — 후보가 슬롯보다 많을 때의 우선순위 (rank는 표시용)
+      const rankKey = (row: ConditionScreenRow): number => {
+        if (!spec.ranking || spec.ranking.by === 'none') return 0
+        if (spec.ranking.by === 'changePct') return row.changePct ?? -Infinity
+        const b = histories[row.symbol][todayIdx.get(row.symbol)!]
+        return spec.ranking.by === 'tradingValue' ? b.c * b.v : b.v
+      }
+      const dir = spec.ranking?.dir === 'asc' ? 1 : -1
+      const ranked =
+        spec.ranking && spec.ranking.by !== 'none'
+          ? [...rows].sort((a, b) => {
+              const ka = rankKey(a)
+              const kb = rankKey(b)
+              return ka === kb ? 0 : (ka - kb) * dir
+            })
+          : rows
       ranked.forEach((r, i) => (r.rank = i + 1))
       const picks = ranked
-        .filter((r) => r.rank != null && r.rank <= p.topRank && r.passed && !positions.has(r.symbol))
-        .slice(0, p.maxPositions - positions.size)
-      pending = picks.map((r) => r.symbol)
+        .filter((r) => r.passed && !positions.has(r.symbol))
+        .slice(0, maxPositions - positions.size)
+      if (spec.execution.timing === 'sameClose') {
+        // LOC — 오늘 종가 체결. 트레일링 고점은 진입가(종가)에서 시작한다:
+        // 진입 전의 장중 고가를 물려받으면 보유하지 않은 구간의 고점으로 스탑을 재는 셈이다.
+        for (const r of picks) {
+          if (positions.size >= maxPositions) break
+          const bar = histories[r.symbol][todayIdx.get(r.symbol)!]
+          enterPosition(r.symbol, bar.c, date, d, bar.c, '조건 충족 → 당일 종가(LOC)')
+        }
+      } else {
+        pending = picks.map((r) => r.symbol)
+      }
       lastScreen = ranked
       lastScreenDate = date
     }
@@ -412,6 +467,28 @@ export function runConditionScreen(
       equity: eq,
       benchmark: cost.initialCapital, // 이 전략은 종목 유니버스가 매일 바뀌어 단순보유 벤치가 성립하지 않는다
       drawdownPct: peakEquity > 0 ? (eq / peakEquity - 1) * 100 : 0,
+    })
+  }
+
+  function enterPosition(sym: string, rawPx: number, date: string, dayIdx: number, peakInit: number, note: string) {
+    const slot = cash / Math.max(1, maxPositions - positions.size)
+    const fill = buyCost(rawPx)
+    const qty = Math.floor(slot / (fill * (1 + cost.feePct / 100)))
+    if (qty <= 0) return
+    const gross = qty * fill
+    const fee = gross * (cost.feePct / 100)
+    cash -= gross + fee
+    positions.set(sym, { symbol: sym, entryDate: date, entryPrice: fill, qty, entryIdx: dayIdx, peak: peakInit })
+    events.push({
+      date,
+      action: '매수',
+      price: fill,
+      qty,
+      note,
+      symbol: sym,
+      amount: gross,
+      cashAfter: cash,
+      positionsAfter: positions.size,
     })
   }
 
