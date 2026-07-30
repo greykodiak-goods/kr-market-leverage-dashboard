@@ -25,7 +25,7 @@ const paperDir = join(root, 'public', 'data', 'paper')
 interface PaperConfig {
   inception: string
   cost: CostSettings
-  tracks: Record<string, { label: string; symbols: string[] }>
+  tracks: Record<string, { label: string; symbols: string[]; entryMa?: number; inception?: string }>
   benchmark: string
 }
 
@@ -61,12 +61,12 @@ async function fetchDaily(symbol: string, since: string): Promise<DailyBar[]> {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const cond = (id: string, c: unknown): ConditionNode => ({ op: 'cond', id, cond: c as never })
 
-function winnerSpec(symbols: string[]): StrategySpec {
+function winnerSpec(symbols: string[], entryMa = 20): StrategySpec {
   return {
     version: SPEC_VERSION,
-    id: 'paper-ma20-high20-slow',
-    name: 'MA20돌파×20일신고가·느린청산 (페이퍼)',
-    source: '백테스트 5·6차 승자 — 2026-07-30 페이퍼 트레이딩 개시',
+    id: `paper-ma${entryMa}-high20-slow`,
+    name: `MA${entryMa}돌파×20일신고가·느린청산 (페이퍼)`,
+    source: '백테스트 5·6차 승자 (MA15 변형은 14차 도전자) — 2026-07-30 페이퍼 트레이딩 개시',
     universe: {
       markets: ['KOSPI', 'KOSDAQ'],
       excludeAdministrative: true,
@@ -79,7 +79,7 @@ function winnerSpec(symbols: string[]): StrategySpec {
     entry: {
       op: 'and',
       nodes: [
-        cond('20일선돌파', { kind: 'maCross', period: 20, dir: 'above' }),
+        cond(`${entryMa}일선돌파`, { kind: 'maCross', period: entryMa, dir: 'above' }),
         cond('20일신고가', { kind: 'highBreak', days: 20 }),
       ],
     },
@@ -116,8 +116,9 @@ async function main() {
 
   mkdirSync(paperDir, { recursive: true })
   for (const [trackId, track] of Object.entries(config.tracks)) {
-    const spec = winnerSpec(track.symbols.filter((s) => histories[s]))
-    const r = runStrategySpec(histories, config.inception, spec, config.cost)
+    const spec = winnerSpec(track.symbols.filter((s) => histories[s]), track.entryMa ?? 20)
+    const inception = track.inception ?? config.inception
+    const r = runStrategySpec(histories, inception, spec, config.cost)
     const finalEq = r.equity.length ? r.equity[r.equity.length - 1].equity : config.cost.initialCapital
     const benchRet = bench.length >= 2 ? (bench[bench.length - 1].c / bench[0].c - 1) * 100 : null
     const closed = r.trades.filter((t) => t.exitDate != null)
@@ -126,7 +127,7 @@ async function main() {
       track: trackId,
       label: track.label,
       updatedAt: new Date().toISOString(),
-      inception: config.inception,
+      inception,
       dataNote: 'Yahoo 일봉(비공식·총수익 보정) 근사 체결 — 실호가 대조는 2단계에서. 시뮬레이션이며 투자자문 아님.',
       summary: {
         equity: Math.round(finalEq),
