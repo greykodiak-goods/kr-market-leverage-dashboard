@@ -5,12 +5,14 @@
 import { check, close, eq, finish, section } from './harness'
 // @ts-expect-error — .mjs 라이브러리(타입 선언 없음). esbuild가 번들한다.
 import {
+  buildWatchlist,
   coverage,
   KR_BARS_PER_DAY,
   kstDate,
   mergeBars,
   packBars,
   parseYahooIntraday,
+  rankingToSymbols,
   toDailyBars,
   unpackBars,
 } from '../scripts/lib/intraday.mjs'
@@ -219,6 +221,44 @@ section('6) 5분봉 → 일봉 집계')
   const sorted = toDailyBars([...bars].sort((a, b) => a.ts - b.ts))
   eq('정렬 입력 시 시가 동일', sorted[0].o, 100)
   eq('정렬 입력 시 종가 동일', sorted[0].c, 97)
+}
+
+// ------------------------------------------------ 7) 시총 랭킹 → 감시목록
+section('7) 랭킹 파싱 — 우선주·스팩 제외, topN 컷')
+{
+  const json = {
+    stocks: [
+      { itemCode: '005930', stockName: '삼성전자' },
+      { itemCode: '005935', stockName: '삼성전자우' }, // 우선주 — 제외
+      { itemCode: '000660', stockName: 'SK하이닉스' },
+      { itemCode: '00088K', stockName: '한화3우B' }, // 코드 비정상 — 제외
+      { itemCode: '123450', stockName: '대신밸런스스팩12호' }, // 스팩 — 제외
+      { itemCode: '035420', stockName: 'NAVER' },
+      { itemCode: '051910', stockName: 'LG화학' },
+    ],
+  }
+  const r = rankingToSymbols(json, 'KOSPI', 3)
+  eq('topN 컷', r.length, 3)
+  eq('우선주·스팩 걸러진 순서', r.map((x: { symbol: string }) => x.symbol).join(','), '005930.KS,000660.KS,035420.KS')
+  eq('KOSDAQ 접미사', rankingToSymbols(json, 'KOSDAQ', 1)[0].symbol, '005930.KQ')
+  eq('빈 응답 안전', rankingToSymbols({}, 'KOSPI', 10).length, 0)
+  eq('이름에 우 포함(끝 아님)은 유지', rankingToSymbols({ stocks: [{ itemCode: '111111', stockName: '우리금융지주' }] }, 'KOSPI', 5).length, 1)
+}
+
+section('8) 감시목록 조립 — 랭킹 ∪ 기존 누적, 폴백')
+{
+  const ranked = [
+    { symbol: 'A.KS', name: 'a' },
+    { symbol: 'B.KQ', name: 'b' },
+  ]
+  // 랭킹에서 빠진 기존 누적 종목(C)은 유지된다 — 고아 방지
+  const w = buildWatchlist(ranked, ['B.KQ', 'C.KS'], ['S.KS'])
+  eq('랭킹+기존 합집합(중복 제거)', w.sort().join(','), 'A.KS,B.KQ,C.KS')
+  check('랭킹 살아있으면 시드 미사용', !w.includes('S.KS'))
+  // 랭킹 실패(빈 배열) → 시드 폴백 + 기존 유지
+  const fb = buildWatchlist([], ['C.KS'], ['S.KS', 'S2.KQ'])
+  eq('폴백 = 기존 ∪ 시드', fb.sort().join(','), 'C.KS,S.KS,S2.KQ')
+  eq('전부 비면 빈 목록', buildWatchlist([], [], []).length, 0)
 }
 
 finish()
