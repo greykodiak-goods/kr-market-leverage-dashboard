@@ -273,11 +273,15 @@ export function runStrategySpec(
   cost: CostSettings,
 ): ConditionResult {
   const maxPositions = Math.max(1, spec.sizing.maxPositions)
-  // universe.symbols가 있으면 그 표본만 — 없으면 데이터에 있는 전 종목
+  // universe.symbols가 있으면 그 표본만 — 없으면 데이터에 있는 전 종목.
+  // 레짐 심볼(지수)은 판정에만 쓰고 절대 매매 대상에 넣지 않는다.
   const wanted = spec.universe.symbols?.length ? new Set(spec.universe.symbols) : null
   const universe = Object.keys(histories)
-    .filter((s) => !wanted || wanted.has(s))
+    .filter((s) => (!wanted || wanted.has(s)) && s !== spec.regime?.symbol)
     .sort()
+  const regimeBars = spec.regime ? histories[spec.regime.symbol] : undefined
+  const regimeIdx = new Map<string, number>()
+  regimeBars?.forEach((b, i) => regimeIdx.set(b.date, i))
   const scoped: Record<string, DailyBar[]> = {}
   for (const s of universe) scoped[s] = histories[s]
   const calendar = buildCalendar(scoped).filter((d) => d >= startDate)
@@ -397,7 +401,16 @@ export function runStrategySpec(
 
     // ---- 3) 오늘 종가로 내일 후보 선정 ------------------------------------
     // 마지막 봉에서는 체결할 다음 봉이 없으므로 신규 진입을 만들지 않는다(규칙 1-6).
-    if (!isLast && positions.size < maxPositions) {
+    // 레짐 게이트: 지수 조건이 꺼진 날(또는 지수 봉이 없는 날 — 보수적)은
+    // 신규 진입 후보를 뽑지 않는다. 청산(단계 2)은 이미 위에서 돌았다.
+    const regimeOn = !spec.regime
+      ? true
+      : (() => {
+          const ri = regimeIdx.get(date)
+          if (regimeBars == null || ri == null) return false
+          return evaluateEntry(spec.regime.entry, regimeBars, ri, spec.regime.symbol, null).passed
+        })()
+    if (!isLast && regimeOn && positions.size < maxPositions) {
       // 횡단면 — 그날 봉이 있는 종목의 등락률·거래대금 (changeRank 조건이 쓴다)
       const cs: CrossSection = { changePct: new Map(), tradingValue: new Map() }
       const todayIdx = new Map<string, number>()

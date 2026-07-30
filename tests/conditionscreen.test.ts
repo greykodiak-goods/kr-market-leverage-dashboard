@@ -512,4 +512,62 @@ section('10) 전략 스펙 엔진 — 정본 경로')
   }
 }
 
+// ---------------------------------------------- 11) 장 레짐 게이트 (regime)
+section('11) 레짐 게이트 — 지수 조건이 꺼지면 신규 진입 금지, 청산은 계속')
+{
+  const BASE_UNIVERSE: StrategySpec['universe'] = {
+    markets: ['KOSPI', 'KOSDAQ'],
+    excludeAdministrative: true,
+    excludeSuspended: true,
+    excludeLiquidation: true,
+    excludePreferred: true,
+    excludeEtf: true,
+  }
+  const spec = (regimeEntry: StrategySpec['entry'] | null): StrategySpec => ({
+    version: SPEC_VERSION,
+    id: 'regime-test',
+    name: '레짐 테스트',
+    universe: BASE_UNIVERSE,
+    entry: {
+      op: 'and',
+      nodes: [{ op: 'cond', cond: { kind: 'maCross', period: 5, dir: 'above' } }],
+    },
+    ranking: null,
+    exits: [{ kind: 'timeExit', days: 2 }],
+    sizing: { maxPositions: 1, mode: 'equalSlot' },
+    execution: { timing: 'nextOpen', orderType: 'market' },
+    regime: regimeEntry ? { symbol: 'INDEX', entry: regimeEntry } : null,
+  })
+  const alignNode: StrategySpec['entry'] = { op: 'and', nodes: [{ op: 'cond', cond: { kind: 'maAlign', fast: 5, slow: 10 } }] }
+
+  const stock = flatThenBreakout(30, 12)
+  // 지수: 꾸준한 상승(정배열 유지) vs 꾸준한 하락(역배열)
+  const idxUp = Array.from({ length: 30 }, (_, i) => bar(i, 100 + i, 100.5 + i, 99.5 + i, 100 + i))
+  const idxDown = Array.from({ length: 30 }, (_, i) => bar(i, 200 - i, 200.5 - i, 199.5 - i, 200 - i))
+
+  const on = runStrategySpec({ AAA: stock, INDEX: idxUp }, d(0), spec(alignNode), NOCOST)
+  check('레짐 ON(지수 정배열) → 진입 발생', on.events.some((e) => e.action === '매수'))
+  check('지수 심볼은 매매 대상 아님', !on.events.some((e) => e.symbol === 'INDEX'))
+  check('유니버스에서 지수 제외', !on.universe.includes('INDEX'))
+
+  const off = runStrategySpec({ AAA: stock, INDEX: idxDown }, d(0), spec(alignNode), NOCOST)
+  eq('레짐 OFF(지수 역배열) → 진입 0', off.events.filter((e) => e.action === '매수').length, 0)
+
+  // 레짐 데이터가 없으면 보수적으로 진입 금지
+  const noIdx = runStrategySpec({ AAA: stock }, d(0), spec(alignNode), NOCOST)
+  eq('레짐 심볼 데이터 없음 → 진입 0 (보수)', noIdx.events.filter((e) => e.action === '매수').length, 0)
+
+  // 레짐 없는 스펙은 종전과 동일
+  const plain = runStrategySpec({ AAA: stock }, d(0), spec(null), NOCOST)
+  check('레짐 미지정 → 정상 진입', plain.events.some((e) => e.action === '매수'))
+
+  // 청산은 레짐과 무관: 레짐이 중간에 꺼져도 보유분은 timeExit로 청산된다
+  // 지수: 전반 상승 → 후반 하락 (돌파 시점엔 ON, 이후 OFF)
+  const idxFlip = Array.from({ length: 30 }, (_, i) =>
+    i <= 14 ? bar(i, 100 + i, 100.5 + i, 99.5 + i, 100 + i) : bar(i, 130 - (i - 14) * 3, 130.5 - (i - 14) * 3, 129.5 - (i - 14) * 3, 130 - (i - 14) * 3),
+  )
+  const flip = runStrategySpec({ AAA: stock, INDEX: idxFlip }, d(0), spec(alignNode), NOCOST)
+  check('레짐 꺼진 뒤에도 청산은 실행', flip.events.some((e) => e.action === '매도'))
+}
+
 finish()

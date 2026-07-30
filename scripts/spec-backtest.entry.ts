@@ -111,6 +111,19 @@ const F = {
 }
 const BUFFER_EXIT = [{ kind: 'maBreak' as const, maPeriod: 5, pct: 2 }]
 
+// 코스피 지수 레짐: 지수 5·10일선 정배열일 때만 신규 진입 (2026-07-30 대표 지정 기법)
+const KOSPI_INDEX = '^KS11'
+const KOSPI_REGIME = {
+  symbol: KOSPI_INDEX,
+  entry: { op: 'and', nodes: [c('지수정배열', { kind: 'maAlign', fast: 5, slow: 10 })] } as ConditionNode,
+}
+// 대표 지정 종목 조건: 종목 정배열(5>10) + 5일선 아래→위 돌파 (양봉 요구 없음)
+const GOBLIN_NODES: ConditionNode[] = [
+  c('정배열', { kind: 'maAlign', fast: 5, slow: 10 }),
+  c('5일선돌파', { kind: 'maCross', period: 5, dir: 'above' }),
+]
+const GOBLIN_ENTRY: ConditionNode = { op: 'and', nodes: GOBLIN_NODES }
+
 // ---- 지표 계산 --------------------------------------------------------------
 
 interface RunStats {
@@ -228,6 +241,16 @@ async function main() {
     throw new Error(`일봉 로드 ${Object.keys(histories).length}종목뿐 — 표본이 너무 얇아 중단 (실패: ${failed.slice(0, 5).join(', ')} …)`)
   }
   const bench = await fetchDaily(BENCH)
+  // 코스피 지수(레짐 판정용) — 매매 대상 아님
+  try {
+    histories[KOSPI_INDEX] = await fetchDaily(KOSPI_INDEX)
+    log(`레짐 지수 ${KOSPI_INDEX}: ${histories[KOSPI_INDEX].length}봉`)
+  } catch (e) {
+    log(`⚠️ 지수 로드 실패 — 레짐 변형은 진입 0이 된다: ${(e as Error).message}`)
+  }
+  // 코스피 시총 상위 20 — index.json의 순서는 수집 당시 랭킹 순서다
+  const kospi20 = allSyms.filter((s) => s.endsWith('.KS') && !ETF_IN_STORE.has(s)).slice(0, 20)
+  log(`코스피 상위 20 표본: ${kospi20.join(', ')}`)
   log(`일봉 로드: ${Object.keys(histories).length}종목 성공, 실패/제외 ${failed.length}${failed.length ? ` — ${failed.join(', ')}` : ''}`)
   log(`벤치마크 ${BENCH}: ${bench.length}봉 (${bench[0]?.date} ~ ${bench[bench.length - 1]?.date})`)
 
@@ -295,6 +318,51 @@ async function main() {
       cost: COST,
       windows: w2,
     },
+    // ---- 대표 지정 기법(2026-07-30): 코스피20 · 지수 레짐 · 종목 정배열+돌파 --
+    {
+      label: 'V0 코스피20 정배열돌파(레짐 없음)',
+      spec: baseSpec({ entry: GOBLIN_ENTRY, universe: { ...baseSpec({}).universe, symbols: kospi20 } }),
+      cost: COST,
+      windows: w2,
+    },
+    {
+      label: 'V1 V0+지수레짐(5>10)',
+      spec: baseSpec({ entry: GOBLIN_ENTRY, universe: { ...baseSpec({}).universe, symbols: kospi20 }, regime: KOSPI_REGIME }),
+      cost: COST,
+      windows: w2,
+    },
+    {
+      label: 'V2 V1+이탈버퍼−2%',
+      spec: baseSpec({
+        entry: GOBLIN_ENTRY,
+        universe: { ...baseSpec({}).universe, symbols: kospi20 },
+        regime: KOSPI_REGIME,
+        exits: BUFFER_EXIT,
+      }),
+      cost: COST,
+      windows: w2,
+    },
+    {
+      label: 'V3 V1+거래량급증',
+      spec: baseSpec({
+        entry: { op: 'and', nodes: [...GOBLIN_NODES, F.볼륨서지] } as ConditionNode,
+        universe: { ...baseSpec({}).universe, symbols: kospi20 },
+        regime: KOSPI_REGIME,
+      }),
+      cost: COST,
+      windows: w2,
+    },
+    {
+      label: 'V4 V1+급증+버퍼',
+      spec: baseSpec({
+        entry: { op: 'and', nodes: [...GOBLIN_NODES, F.볼륨서지] } as ConditionNode,
+        universe: { ...baseSpec({}).universe, symbols: kospi20 },
+        regime: KOSPI_REGIME,
+        exits: BUFFER_EXIT,
+      }),
+      cost: COST,
+      windows: w2,
+    },
   ]
 
   log('')
@@ -318,7 +386,9 @@ async function main() {
   const histFit: Record<string, DailyBar[]> = {}
   for (const [s, bars] of Object.entries(histories)) histFit[s] = bars.filter((b) => b.date <= CUT)
   const benchFit = bench.filter((b) => b.date <= CUT)
-  const finalists = variants.filter((v) => ['A', 'H', 'L', 'P', 'R', 'S', 'T', 'U'].includes(v.label.split(' ')[0]))
+  const finalists = variants.filter((v) =>
+    ['A', 'H', 'L', 'P', 'R', 'S', 'T', 'U', 'V0', 'V1', 'V2', 'V3', 'V4'].includes(v.label.split(' ')[0]),
+  )
   log('')
   log(`홀드아웃 분리: 전반부(~${CUT}) vs 후반부(2024-01-01~)`)
   log('| 변형 | 전반 알파(연) | 전반 승률 | 후반 알파(연) | 후반 승률 | 후반 MDD |')

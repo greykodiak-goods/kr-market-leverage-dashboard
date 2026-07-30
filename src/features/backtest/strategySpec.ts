@@ -137,6 +137,13 @@ export interface StrategySpec {
   exits: ExitRule[]
   sizing: SizingSpec
   execution: ExecutionSpec
+  /**
+   * 장(레짐) 게이트 — 지정 심볼(예: 코스피 지수 ^KS11)의 조건이 참인 날에만
+   * **신규 진입 후보를 뽑는다**. 보유 종목의 청산 규칙은 레짐과 무관하게 계속
+   * 동작한다(안 그러면 하락장에서 청산도 못 하는 모순이 생긴다).
+   * 레짐 판정도 당일 종가 확정 후 → 다음날 체결 순서라 미래참조가 없다.
+   */
+  regime?: { symbol: string; entry: ConditionNode } | null
 }
 
 // ---- 평가 컨텍스트 ---------------------------------------------------------
