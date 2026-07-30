@@ -255,12 +255,14 @@ async function loadAll(range = '10y') {
     log(`⚠️ 지수 로드 실패 — 레짐 변형은 진입 0이 된다: ${(e as Error).message}`)
   }
   // 코스피 시총 상위 20 — index.json의 순서는 수집 당시 랭킹 순서다
-  const kospi20 = allSyms.filter((s) => s.endsWith('.KS') && !ETF_IN_STORE.has(s)).slice(0, 20)
+  const ksRanked = allSyms.filter((s) => s.endsWith('.KS') && !ETF_IN_STORE.has(s))
+  const kqRanked = allSyms.filter((s) => s.endsWith('.KQ') && !ETF_IN_STORE.has(s))
+  const kospi20 = ksRanked.slice(0, 20)
   log(`일봉 로드: ${Object.keys(histories).length}종목 성공, 실패/제외 ${failed.length}${failed.length ? ` — ${failed.join(', ')}` : ''}`)
   log(`벤치마크 ${BENCH}: ${bench.length}봉 (${bench[0]?.date} ~ ${bench[bench.length - 1]?.date})`)
   // 지수는 레짐 판정 전용 — 매매 유니버스에서 항상 제외한 목록을 함께 준다
   const tradable = Object.keys(histories).filter((s) => s !== KOSPI_INDEX)
-  return { histories, bench, kospi20, tradable }
+  return { histories, bench, kospi20, tradable, ksRanked, kqRanked }
 }
 
 async function main() {
@@ -838,6 +840,76 @@ async function pit() {
 }
 
 /**
+ * 유니버스 밴드 탐색 (MODE=band) — "수익 최대·MDD 최소 종목 범위를 역산" (2026-07-30 대표).
+ *
+ * 승자 조합(MA20×신고20·느린청산)을 시총 랭킹 밴드별로 전수 실행한다.
+ * 과최적화 방어: 전반(~2023)에서 고르고 후반(2024~)·3y에서 재현 확인 — 세 구간
+ * 부호가 일치하는 밴드만 후보로 삼는다. 랭킹은 오늘 목록(선택편향 상한선)이며,
+ * 9·10차 시점 고정 결과(초대형주 엣지 없음·코스닥 꼬리 실존)와 교차 해석할 것.
+ */
+async function band() {
+  const { histories, bench, ksRanked, kqRanked } = await loadAll()
+  const has = (s: string) => !!histories[s]
+  const ks = ksRanked.filter(has)
+  const kq = kqRanked.filter(has)
+  const bands: { name: string; syms: string[] }[] = [
+    { name: '코스피 1-10', syms: ks.slice(0, 10) },
+    { name: '코스피 11-20', syms: ks.slice(10, 20) },
+    { name: '코스피 21-40', syms: ks.slice(20, 40) },
+    { name: '코스피 전체', syms: ks },
+    { name: '코스닥 1-10', syms: kq.slice(0, 10) },
+    { name: '코스닥 11-20', syms: kq.slice(10, 20) },
+    { name: '코스닥 21-40', syms: kq.slice(20, 40) },
+    { name: '코스닥 전체', syms: kq },
+    { name: '전체 80', syms: [...ks, ...kq] },
+    { name: '초대형 제외(KS11-40+KQ)', syms: [...ks.slice(10, 40), ...kq] },
+    { name: '중소형(KS21-40+KQ11-40)', syms: [...ks.slice(20, 40), ...kq.slice(10, 40)] },
+  ]
+  const entry20 = {
+    op: 'and',
+    nodes: [c('20일선돌파', { kind: 'maCross', period: 20, dir: 'above' }), c('20일신고가', { kind: 'highBreak', days: 20 })],
+  } as ConditionNode
+  const CUT = '2023-12-31'
+  const histFit: Record<string, DailyBar[]> = {}
+  for (const [s, bars] of Object.entries(histories)) histFit[s] = bars.filter((b) => b.date <= CUT)
+  const benchFit = bench.filter((b) => b.date <= CUT)
+  const y3 = new Date(Date.now() - 3 * 365.25 * 86400e3).toISOString().slice(0, 10)
+
+  log('')
+  log('밴드별 승자 조합(MA20×신고20·느린청산) — 슬롯 = min(10, max(5, 종목수/2)) · 랭킹은 오늘 목록(상한선)')
+  log('')
+  log('| 밴드(종목수·슬롯) | 전반(~23) 알파/MDD | **후반(24~) 알파/MDD** | 3y 알파/MDD | 3y CAGR | 3y 승률 | 매매(3y) |')
+  log('|---|---|---|---|---|---|---|')
+  for (const b of bands) {
+    const n = b.syms.length
+    if (n < 5) {
+      log(`| ${b.name} | 종목 부족(${n}) | | | | | |`)
+      continue
+    }
+    const slots = Math.min(10, Math.max(5, Math.floor(n / 2)))
+    const spec = baseSpec({
+      entry: entry20,
+      exits: [{ kind: 'maBreak', maPeriod: 40, pct: 2 }],
+      universe: { ...baseSpec({}).universe, symbols: b.syms },
+      sizing: { maxPositions: slots, mode: 'equalSlot' },
+    })
+    const fit = stats(b.name, 'fit', runStrategySpec(histFit, '0000-00-00', spec, COST), benchFit, COST.initialCapital)
+    const val = stats(b.name, 'val', runStrategySpec(histories, '2024-01-01', spec, COST), bench, COST.initialCapital)
+    const w3 = stats(b.name, '3y', runStrategySpec(histories, y3, spec, COST), bench, COST.initialCapital)
+    log(
+      `| ${b.name} (${n}·${slots}) | ${f1(fit.alphaPct)}%p/${f1(fit.mddPct)}% | **${f1(val.alphaPct)}%p/${f1(
+        val.mddPct,
+      )}%** | ${f1(w3.alphaPct)}%p/${f1(w3.mddPct)}% | ${f1(w3.cagrPct)}% | ${w3.winRatePct?.toFixed(0) ?? '—'}% | ${
+        w3.trades
+      } |`,
+    )
+  }
+  log('')
+  log('⚠️ 전반·후반·3y 부호가 모두 양수인 밴드만 후보. 밴드 선택 자체가 다중비교라 최종 판단은 페이퍼 트레이딩.')
+  log('⚠️ 시점 고정이 아닌 오늘 목록 기준 — 절대 수치는 상한선(9·10차 참조). 시뮬레이션이며 투자자문이 아니다.')
+}
+
+/**
  * 시점 고정 코스닥 상위 검증 (MODE=pitkq) — 2026-07-30 대표 지시.
  *
  * "그 시점 코스닥 상위 40으로" — 단 과거 코스닥 랭킹 40개 전체의 신뢰 가능한
@@ -1242,7 +1314,7 @@ async function mine() {
   log('⚠️ 유니버스가 "오늘의 시총 상위"라 수치는 부풀려질 수 있다(선택편향). 조건 간 상대 비교 중심으로 볼 것.')
 }
 
-const MODES: Record<string, () => Promise<void>> = { sweep, mine, payoff, era, tqqq, pit, pitkq, backtest: main }
+const MODES: Record<string, () => Promise<void>> = { sweep, mine, payoff, era, tqqq, pit, pitkq, band, backtest: main }
 const entry = MODES[process.env.MODE ?? 'backtest'] ?? main
 entry().catch((e) => {
   console.error('실행 실패:', e)
