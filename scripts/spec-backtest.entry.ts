@@ -35,9 +35,14 @@ function log(msg: string) {
 // ---- 데이터 -----------------------------------------------------------------
 
 async function fetchDaily(symbol: string, range = '10y'): Promise<DailyBar[]> {
+  // 'since:YYYY-MM-DD' 형식이면 period1/period2로 요청한다 — range=max는 Yahoo가
+  // interval=1d를 무시하고 월봉을 돌려주므로(2026-07-30 실측) 장기 구간엔 쓰지 않는다.
+  const qs = range.startsWith('since:')
+    ? `period1=${Math.floor(Date.parse(range.slice(6)) / 1000)}&period2=${Math.floor(Date.now() / 1000)}`
+    : `range=${range}`
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
     symbol,
-  )}?range=${range}&interval=1d&events=div%2Csplit`
+  )}?${qs}&interval=1d&events=div%2Csplit`
   const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' } })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const json = (await res.json()) as any
@@ -643,7 +648,8 @@ async function payoff() {
  * 이 구간 수치는 상한선 중의 상한선 — 커버리지(2010년 초 시세 존재 종목 수)를 함께 찍는다.
  */
 async function era() {
-  const { histories, bench, tradable } = await loadAll('max')
+  // 2009년부터 당겨 2010년 첫 진입 전 MA40·신고가 워밍업 확보
+  const { histories, bench, tradable } = await loadAll('since:2009-01-01')
   const spec = baseSpec({
     entry: {
       op: 'and',
