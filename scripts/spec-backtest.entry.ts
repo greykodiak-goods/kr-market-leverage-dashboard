@@ -209,7 +209,7 @@ function printRow(s: RunStats) {
 // ---- 실행 -------------------------------------------------------------------
 
 /** 데이터 일괄 로드 — main()·sweep() 공용 */
-async function loadAll() {
+async function loadAll(range = '10y') {
   // 유니버스 = 5분봉 크론이 오늘 실측으로 뽑은 시총 상위 목록 (ETF 제외)
   // 로컬에 없으면(작업 브랜치 체크아웃) main의 실측 목록을 가져온다.
   let index: { symbols?: Record<string, unknown> }
@@ -230,7 +230,7 @@ async function loadAll() {
   const failed: string[] = []
   for (const sym of universe) {
     try {
-      const bars = await fetchDaily(sym)
+      const bars = await fetchDaily(sym, range)
       if (bars.length >= 300) histories[sym] = bars
       else failed.push(`${sym}(짧음 ${bars.length})`)
     } catch (e) {
@@ -241,10 +241,10 @@ async function loadAll() {
   if (Object.keys(histories).length < 10) {
     throw new Error(`일봉 로드 ${Object.keys(histories).length}종목뿐 — 표본이 너무 얇아 중단 (실패: ${failed.slice(0, 5).join(', ')} …)`)
   }
-  const bench = await fetchDaily(BENCH)
+  const bench = await fetchDaily(BENCH, range)
   // 코스피 지수(레짐 판정용) — 매매 대상 아님
   try {
-    histories[KOSPI_INDEX] = await fetchDaily(KOSPI_INDEX)
+    histories[KOSPI_INDEX] = await fetchDaily(KOSPI_INDEX, range)
     log(`레짐 지수 ${KOSPI_INDEX}: ${histories[KOSPI_INDEX].length}봉`)
   } catch (e) {
     log(`⚠️ 지수 로드 실패 — 레짐 변형은 진입 0이 된다: ${(e as Error).message}`)
@@ -632,6 +632,69 @@ async function payoff() {
 }
 
 /**
+ * 과거 구간 검증 (MODE=era) — "승자 조합을 2010~2023으로 돌리면?" (2026-07-30 대표).
+ *
+ * MA20×20일신고가·느린청산(40일선 −2%)을 Yahoo 'max' 범위로 당겨와
+ * 2023-12-31에서 절단하고 2010-01-01부터 실행한다. 하위 구간도 나눠 본다 —
+ * 14년 단일 수치는 구간 편차를 숨기기 때문.
+ *
+ * ⚠️ 정직성: 유니버스가 "2026년 오늘의 시총 상위 80"이므로 2010년 시점엔 알 수
+ * 없던 목록이다(사후 선택). 2010년 이후 상장 종목은 상장일부터 편입된다.
+ * 이 구간 수치는 상한선 중의 상한선 — 커버리지(2010년 초 시세 존재 종목 수)를 함께 찍는다.
+ */
+async function era() {
+  const { histories, bench, tradable } = await loadAll('max')
+  const spec = baseSpec({
+    entry: {
+      op: 'and',
+      nodes: [c('20일선돌파', { kind: 'maCross', period: 20, dir: 'above' }), c('20일신고가', { kind: 'highBreak', days: 20 })],
+    },
+    exits: [{ kind: 'maBreak', maPeriod: 40, pct: 2 }],
+    universe: { ...baseSpec({}).universe, symbols: tradable },
+  })
+
+  const at2010 = tradable.filter((s) => (histories[s]?.[0]?.date ?? '9999') <= '2010-01-15').length
+  log('')
+  log(`데이터 커버리지: ${tradable.length}종목 중 2010년 초 시세 존재 ${at2010}종목 — 나머지는 상장 이후 시점부터 편입`)
+  log('⚠️ 유니버스는 2026년 오늘의 시총 상위(사후 선택) — 2010년에 이 목록을 알 수 없었다. 수치는 상한선.')
+  log('')
+  log('| 구간 | 승률 | 손익비 | PF | **CAGR** | 벤치CAGR | 알파(연) | 총수익 | MDD | 매매 | 평균보유일 |')
+  log('|---|---|---|---|---|---|---|---|---|---|---|')
+  const spans: [string, string, string][] = [
+    ['2010–2023 전체', '2010-01-01', '2023-12-31'],
+    ['2010–2015', '2010-01-01', '2015-12-31'],
+    ['2016–2019', '2016-01-01', '2019-12-31'],
+    ['2020–2023', '2020-01-01', '2023-12-31'],
+  ]
+  for (const [label, start, end] of spans) {
+    const hist: Record<string, DailyBar[]> = {}
+    for (const [s, bars] of Object.entries(histories)) hist[s] = bars.filter((b) => b.date <= end)
+    const benchCut = bench.filter((b) => b.date <= end)
+    const r = runStrategySpec(hist, start, spec, COST)
+    const s = stats(label, label, r, benchCut, COST.initialCapital)
+    const closed = r.trades.filter((t) => t.exitDate != null)
+    const wins = closed.filter((t) => (t.pnlPct ?? 0) > 0)
+    const losses = closed.filter((t) => (t.pnlPct ?? 0) <= 0)
+    const avgOf = (a: typeof closed) => (a.length ? a.reduce((sum, t) => sum + (t.pnlPct ?? 0), 0) / a.length : null)
+    const avgWin = avgOf(wins)
+    const avgLoss = avgOf(losses)
+    const ratio = avgWin != null && avgLoss != null && avgLoss !== 0 ? avgWin / Math.abs(avgLoss) : null
+    const sumWin = wins.reduce((sum, t) => sum + (t.pnlPct ?? 0), 0)
+    const sumLoss = Math.abs(losses.reduce((sum, t) => sum + (t.pnlPct ?? 0), 0))
+    const pf = sumLoss > 0 ? sumWin / sumLoss : null
+    log(
+      `| ${label} | ${s.winRatePct?.toFixed(0) ?? '—'}% | ${ratio?.toFixed(2) ?? '—'} | ${pf?.toFixed(2) ?? '—'} | **${f1(
+        s.cagrPct,
+      )}%** | ${f1(s.benchCagrPct)}% | ${f1(s.alphaPct)}%p | ${f1(s.totalPct)}% | ${f1(s.mddPct)}% | ${s.trades} | ${
+        s.avgHoldDays?.toFixed(1) ?? '—'
+      } |`,
+    )
+  }
+  log('')
+  log('⚠️ 시뮬레이션이며 투자자문이 아니다. 선택편향·생존편향 최대 구간 — 절대 수치가 아니라 구간 간 일관성을 볼 것.')
+}
+
+/**
  * 돌파 이벤트 채굴 (MODE=mine) — 대표 제안(2026-07-30):
  * "5일선 돌파 구간을 모두 기록한 다음, 수익 나는 시점의 주변 조건들을 추려서
  *  가장 많이 겹치는 조건을 찾는다."
@@ -788,8 +851,8 @@ async function mine() {
   log('⚠️ 유니버스가 "오늘의 시총 상위"라 수치는 부풀려질 수 있다(선택편향). 조건 간 상대 비교 중심으로 볼 것.')
 }
 
-const entry =
-  process.env.MODE === 'sweep' ? sweep : process.env.MODE === 'mine' ? mine : process.env.MODE === 'payoff' ? payoff : main
+const MODES: Record<string, () => Promise<void>> = { sweep, mine, payoff, era, backtest: main }
+const entry = MODES[process.env.MODE ?? 'backtest'] ?? main
 entry().catch((e) => {
   console.error('실행 실패:', e)
   process.exit(1)
