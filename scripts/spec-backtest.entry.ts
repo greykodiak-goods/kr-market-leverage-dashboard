@@ -716,6 +716,110 @@ async function era() {
 }
 
 /**
+ * 라오어 무한매수법 TQQQ 비교 (MODE=tqqq) — 2026-07-30 대표 지시.
+ *
+ * 구현은 **원조 v1의 단순화판**임을 명시한다(규칙 3):
+ *   - 원금 40분할, 매일 종가에 1회분 매수 (분할 소진 시 매수 중단·보유 대기)
+ *   - 평단가(수수료 포함) +10% 도달 종가에 전량 매도 → 원금+수익 재분할(복리)
+ *   - 손절 없음 (v1 원칙)
+ *   - 미구현: v2.2의 LOC 반반 매수·전후반전 로직·큰수매수 — 결과가 다를 수 있다
+ * 비용: 왕복 0.2% 가정(해외 수수료+환전 스프레드 근사). USD 기준 — 환율 손익·
+ * 해외주식 양도세 22% 미반영. 소수점 수량 허용(시뮬 단순화).
+ */
+async function tqqq() {
+  const bars = await fetchDaily('TQQQ', 'since:2010-02-01')
+  log(`TQQQ ${bars.length}봉 (${bars[0]?.date} ~ ${bars[bars.length - 1]?.date}) — 총수익 보정(adjclose) 적용`)
+  const FEE = 0.1 // 편도 %
+
+  interface SimRes {
+    cagrPct: number
+    totalPct: number
+    mddPct: number
+    cycles: number
+  }
+  const dd = (eq: number, peak: number) => (peak > 0 ? (eq / peak - 1) * 100 : 0)
+
+  function infiniteBuy(win: DailyBar[]): SimRes | null {
+    if (win.length < 60) return null
+    let cash = 10_000
+    let shares = 0
+    let cost = 0 // 보유분 총매입원가(수수료 포함) — 평단 = cost/shares
+    let splits = 0
+    let splitAmt = cash / 40
+    let cycles = 0
+    let peak = cash
+    let mdd = 0
+    for (const b of win) {
+      const px = b.c
+      const avg = shares > 0 ? cost / shares : 0
+      if (shares > 0 && px >= avg * 1.1) {
+        cash += shares * px * (1 - FEE / 100)
+        shares = 0
+        cost = 0
+        splits = 0
+        cycles++
+        splitAmt = cash / 40
+      } else if (splits < 40 && cash > 0) {
+        const spend = Math.min(splitAmt, cash)
+        const qty = spend / (px * (1 + FEE / 100))
+        shares += qty
+        cost += spend
+        cash -= spend
+        splits++
+      }
+      const eq = cash + shares * px
+      if (eq > peak) peak = eq
+      mdd = Math.min(mdd, dd(eq, peak))
+    }
+    const finalEq = cash + shares * win[win.length - 1].c
+    const years = yearsBetween(win[0].date, win[win.length - 1].date)
+    return { cagrPct: cagr(finalEq / 10_000, years), totalPct: (finalEq / 10_000 - 1) * 100, mddPct: mdd, cycles }
+  }
+
+  function buyHold(win: DailyBar[]): SimRes | null {
+    if (win.length < 2) return null
+    let peak = 0
+    let mdd = 0
+    for (const b of win) {
+      if (b.c > peak) peak = b.c
+      mdd = Math.min(mdd, dd(b.c, peak))
+    }
+    const ratio = (win[win.length - 1].c * (1 - FEE / 100)) / (win[0].c * (1 + FEE / 100))
+    const years = yearsBetween(win[0].date, win[win.length - 1].date)
+    return { cagrPct: cagr(ratio, years), totalPct: (ratio - 1) * 100, mddPct: mdd, cycles: 0 }
+  }
+
+  const spans: [string, string, string][] = [
+    ['2010–2023 (14y)', '2010-02-01', '2023-12-31'],
+    ['2010–2015', '2010-02-01', '2015-12-31'],
+    ['2016–2019', '2016-01-01', '2019-12-31'],
+    ['2020–2023', '2020-01-01', '2023-12-31'],
+    ['2024~현재', '2024-01-01', '9999-12-31'],
+    ['전체 2010~현재', '2010-02-01', '9999-12-31'],
+  ]
+  log('')
+  log('| 구간 | 무한매수 CAGR | 무한매수 총수익 | 무한매수 MDD | 사이클 | TQQQ 거치 CAGR | TQQQ 거치 MDD |')
+  log('|---|---|---|---|---|---|---|')
+  for (const [label, start, end] of spans) {
+    const win = bars.filter((b) => b.date >= start && b.date <= end)
+    const ib = infiniteBuy(win)
+    const bh = buyHold(win)
+    if (!ib || !bh) {
+      log(`| ${label} | 데이터 부족 | | | | | |`)
+      continue
+    }
+    log(
+      `| ${label} | **${f1(ib.cagrPct)}%** | ${f1(ib.totalPct)}% | ${f1(ib.mddPct)}% | ${ib.cycles}회 | ${f1(
+        bh.cagrPct,
+      )}% | ${f1(bh.mddPct)}% |`,
+    )
+  }
+  log('')
+  log('⚠️ 단순화 v1 구현(LOC 반반·전후반전 미구현) — 라오어 원저 성적과 다를 수 있다. USD 기준·환율/양도세 미반영.')
+  log('⚠️ 시뮬레이션이며 투자자문이 아니다. 3배 레버리지 ETF는 변동성 잠식·극단 낙폭(−80%대) 상품이다.')
+}
+
+/**
  * 돌파 이벤트 채굴 (MODE=mine) — 대표 제안(2026-07-30):
  * "5일선 돌파 구간을 모두 기록한 다음, 수익 나는 시점의 주변 조건들을 추려서
  *  가장 많이 겹치는 조건을 찾는다."
@@ -872,7 +976,7 @@ async function mine() {
   log('⚠️ 유니버스가 "오늘의 시총 상위"라 수치는 부풀려질 수 있다(선택편향). 조건 간 상대 비교 중심으로 볼 것.')
 }
 
-const MODES: Record<string, () => Promise<void>> = { sweep, mine, payoff, era, backtest: main }
+const MODES: Record<string, () => Promise<void>> = { sweep, mine, payoff, era, tqqq, backtest: main }
 const entry = MODES[process.env.MODE ?? 'backtest'] ?? main
 entry().catch((e) => {
   console.error('실행 실패:', e)
