@@ -46,7 +46,8 @@ if (!key.value || !secret.value) {
   console.error(key.help ?? secret.help)
   process.exit(1)
 }
-const client = createKiwoomClient({ appKey: key.value, appSecret: secret.value })
+// 백필은 대량 연속조회라 유량 제한에 민감 — 호출 간격을 1.2초로 넉넉히 (429 실측 대응)
+const client = createKiwoomClient({ appKey: key.value, appSecret: secret.value, minIntervalMs: 1200 })
 console.log(`서버: ${client.base} (모의서버 — 시세가 실서버와 동일한지는 대조 보고로 확인 [미검증])`)
 console.log(`모드: ${DRY_RUN ? 'dry-run(보고만)' : '병합 저장'} · 소급 목표 ${MAX_DAYS}일`)
 
@@ -160,6 +161,9 @@ for (const sym of targets) {
   const merged = mergeBars(existing, incoming) // 키움(신규) 우선
   const oldestNew = merged[0]?.ts
   const days = oldestNew ? Math.round((Date.now() / 1000 - oldestNew) / 86400) : 0
+  // 키움이 실제로 준 가장 오래된 봉 — 병합(Yahoo 포함) 깊이와 분리해 보고해야 소급 한도가 보인다
+  const kOldest = collected.reduce((m, b) => Math.min(m, b.t), Infinity)
+  const kDays = Number.isFinite(kOldest) ? Math.round((Date.now() / 1000 - kOldest) / 86400) : 0
 
   if (!DRY_RUN) {
     const cov = coverage(merged)
@@ -171,20 +175,23 @@ for (const sym of targets) {
     수집봉: collected.length,
     병합후: merged.length,
     소급일: days,
+    키움소급일: kDays,
     중단사유: stop,
     오프셋: `${offset}s (${basis})`,
     대조: cmp.n ? `겹침 ${cmp.n}봉 · 불일치(>0.1%) ${cmp.badPct.toFixed(1)}% · 평균편차 ${cmp.avgDevPct.toFixed(3)}%` : '겹침 없음',
   })
-  console.log(`${sym}: ${collected.length}봉(+${requests}req) → 소급 ${days}일 · ${report[report.length - 1].대조} · ${stop}`)
+  console.log(
+    `${sym}: ${collected.length}봉(+${requests}req) → 키움 소급 ${kDays}일 · 병합 후 ${days}일 · ${report[report.length - 1].대조} · ${stop}`,
+  )
 }
 
 // ---- 최종 보고 ---------------------------------------------------------------
 console.log('')
 console.log(`총 요청 ${requestsTotal}회 · 처리 ${report.length}종목`)
-const withDays = report.filter((r) => r.소급일)
+const withDays = report.filter((r) => r.키움소급일)
 if (withDays.length) {
-  const ds = withDays.map((r) => r.소급일).sort((a, b) => a - b)
-  console.log(`실측 소급 한도: 최소 ${ds[0]}일 · 중앙값 ${ds[Math.floor(ds.length / 2)]}일 · 최대 ${ds[ds.length - 1]}일`)
+  const ds = withDays.map((r) => r.키움소급일).sort((a, b) => a - b)
+  console.log(`키움 실측 소급: 최소 ${ds[0]}일 · 중앙값 ${ds[Math.floor(ds.length / 2)]}일 · 최대 ${ds[ds.length - 1]}일 (Yahoo 병합분 제외한 순수 키움 깊이)`)
   const limited = withDays.filter((r) => String(r.중단사유).includes('소급 한도')).length
   console.log(`서버 한도로 중단: ${limited}종목 — 이 값이 키움의 실제 5분봉 보관 깊이다`)
   const cmps = report.filter((r) => r.대조 && !String(r.대조).startsWith('겹침 없음'))

@@ -98,25 +98,34 @@ export function createKiwoomClient({ appKey, appSecret, baseUrl, fetchImpl = fet
 
   /**
    * 조회 TR 공통 호출. 주문 계열 api-id는 이 클라이언트에서 호출하지 않는다.
+   * 429(유량 초과)는 일시 상태라 자동 백오프 재시도한다(2026-07-31 백필 실측:
+   * 모의서버 조회 유량이 빡빡해 연속조회 몇 회마다 429가 난다).
    * @returns {{ json: any, cont: { contYn: string|null, nextKey: string|null } }}
    */
   async function request(path, apiId, body, { contYn = 'N', nextKey = '' } = {}) {
     await ensureToken()
-    await throttle()
-    const res = await fetchImpl(`${base}${path}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json;charset=UTF-8',
-        authorization: `Bearer ${token}`,
-        'api-id': apiId,
-        'cont-yn': contYn,
-        'next-key': nextKey,
-      },
-      body: JSON.stringify(body),
-    })
-    const json = await res.json().catch(() => ({}))
-    if (!res.ok) throw new Error(`${apiId} HTTP ${res.status} — 응답 키: [${Object.keys(json).join(', ')}]${apiStatus(json)}`)
-    return { json, cont: { contYn: res.headers.get('cont-yn'), nextKey: res.headers.get('next-key') } }
+    const BACKOFF_MS = [2000, 10000, 35000, 65000]
+    for (let attempt = 0; ; attempt++) {
+      await throttle()
+      const res = await fetchImpl(`${base}${path}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json;charset=UTF-8',
+          authorization: `Bearer ${token}`,
+          'api-id': apiId,
+          'cont-yn': contYn,
+          'next-key': nextKey,
+        },
+        body: JSON.stringify(body),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (res.status === 429 && attempt < BACKOFF_MS.length) {
+        await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt]))
+        continue
+      }
+      if (!res.ok) throw new Error(`${apiId} HTTP ${res.status} — 응답 키: [${Object.keys(json).join(', ')}]${apiStatus(json)}`)
+      return { json, cont: { contYn: res.headers.get('cont-yn'), nextKey: res.headers.get('next-key') } }
+    }
   }
 
   /** 주식 분봉차트 조회 (api-id ka10080 [미검증]) — 조회 전용 */
