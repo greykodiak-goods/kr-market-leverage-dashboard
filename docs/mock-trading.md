@@ -208,6 +208,11 @@ doppler run --project investing-ops --config prd -- node scripts/verify-intraday
 
 ## 5. Windows 작업 스케줄러 등록
 
+> **2026-07-31 이후 표준은 EC2 크론이다** — 기존 쿠팡 프록시 EC2(고정 IP 54.116.72.9)에
+> `awning-ops`의 `deploy-investing.yml` 워크플로가 크론을 설치한다(러너 정본:
+> `scripts/server/investing-cron.sh` — 평일 15:20 모의운용 · 토 09:30 백필+검증+커밋).
+> 아래 schtasks는 EC2 크론이 살아 있는 동안 등록하지 않는다(이중 실행 방지).
+
 평일 15:20 실행(장 마감 15:30 직전). 리포 경로는 실제 경로로 바꿔 넣는다.
 
 ```powershell
