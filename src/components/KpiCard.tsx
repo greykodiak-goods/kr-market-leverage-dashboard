@@ -9,6 +9,9 @@ interface KpiCardProps {
   direction?: 'up' | 'down' | 'flat'
   invertColor?: boolean // when true, up is treated as "bad" (e.g. 미수금 증가)
   info?: string
+  /** 카드에 붙는 주의 배지 — 예: 벤치마크 데이터가 구간을 다 덮지 못할 때 */
+  badge?: string
+  badgeTitle?: string
 }
 
 export function KpiCard({
@@ -20,6 +23,8 @@ export function KpiCard({
   direction = 'flat',
   invertColor,
   info,
+  badge,
+  badgeTitle,
 }: KpiCardProps) {
   // Default: KR convention (up = red, down = blue). invertColor flips the
   // *meaning* so a decrease reads positive (green) and an increase negative
@@ -50,6 +55,11 @@ export function KpiCard({
             {arrow} {changeText}
           </span>
           <span className="muted">{changeLabel}</span>
+        </div>
+      )}
+      {badge && (
+        <div className="kpi-badge" title={badgeTitle}>
+          {badge}
         </div>
       )}
     </div>

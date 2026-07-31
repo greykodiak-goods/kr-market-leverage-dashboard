@@ -39,6 +39,9 @@ interface Saved {
   symbolsText: string
   range: HistoryRange
   startDate: string
+  /** 종료일 — 이 날짜 이후 봉을 잘라내고 실행한다. 없거나 빈 문자열이면 데이터 끝까지.
+   *  기존 저장본(v1)에는 없는 필드라 **옵션**으로 둔다(STORE_KEY 버전을 올리지 않는다). */
+  endDate?: string
   cost: CostSettings
 }
 
@@ -169,7 +172,8 @@ function loadSaved(): Saved {
     const raw = localStorage.getItem(STORE_KEY)
     if (raw) {
       const s = JSON.parse(raw) as Saved
-      if (s.spec?.version === SPEC_VERSION) return { ...s, cost: s.cost ?? DEFAULT_COST }
+      // endDate가 없는 구 저장본도 그대로 받는다(하위 호환)
+      if (s.spec?.version === SPEC_VERSION) return { ...s, cost: s.cost ?? DEFAULT_COST, endDate: s.endDate ?? '' }
     }
   } catch {
     /* 손상 저장본은 기본값으로 */
@@ -179,6 +183,7 @@ function loadSaved(): Saved {
     symbolsText: DEFAULT_SYMBOLS,
     range: '5y',
     startDate: '',
+    endDate: '',
     cost: DEFAULT_COST,
   }
 }
@@ -225,34 +230,109 @@ const KIND_MENU: { kind: Condition['kind']; label: string; make: () => Condition
   { kind: 'streak', label: '연속 상승/하락', make: () => ({ kind: 'streak', dir: 'up', days: 3 }) },
 ]
 
+/**
+ * 숫자 입력 공용 컴포넌트 — 이 화면의 **모든** 숫자 칸이 이걸 쓴다.
+ *
+ * 왜 로컬 문자열 상태인가 (2026-07-31 대표 실측 버그):
+ *   컨트롤드 number 인풋이 입력값을 매 키 입력마다 숫자로 파싱해 되돌리면, 빈 문자열을
+ *   숫자로 만들 수 없어 마지막 한 자리가 지워지지 않는다 — "34"에서 4는 지워지는데
+ *   3이 안 지워진다. 그래서 **입력 중에는 문자열을 그대로 두고**(빈 값·"1."·"-" 허용),
+ *   blur·Enter 시점에만 파싱해 스펙에 반영한다. 파싱 불가·빈 값이면 직전 유효값을 유지한다.
+ *
+ * 왜 type=text인가:
+ *   type=number는 "1."·"-"·"1e" 같은 중간 상태에서 브라우저가 value를 ''로 돌려주는
+ *   경우가 있어(bad input) 로컬 문자열 방식과 궁합이 나쁘다. 대신 inputMode로 모바일
+ *   숫자 키패드를 띄우고(정수=numeric, 소수=decimal), ↑↓ 키 증감은 직접 구현한다.
+ */
 function Num({
   value,
   onChange,
   title,
   step = 1,
   optional = false,
+  integer = false,
+  min,
+  max,
 }: {
   value: number | undefined
   onChange: (v: number | undefined) => void
   title: string
+  /** ↑↓ 키 증감 폭 */
   step?: number
+  /** 비울 수 있는 값(비우면 undefined로 반영) */
   optional?: boolean
+  /** 정수 전용 — 모바일 키패드를 numeric으로, 커밋 시 반올림 */
+  integer?: boolean
+  min?: number
+  max?: number
 }) {
+  const shown = value == null ? '' : String(value)
+  const [text, setText] = useState(shown)
+  const [editing, setEditing] = useState(false)
+
+  // 외부에서 값이 바뀌면(프리셋 불러오기·JSON 적용 등) 표시를 맞춘다.
+  // 편집 중에는 손대지 않는다 — 사용자가 지우는 중인 글자를 되돌리면 위 버그가 재발한다.
+  useEffect(() => {
+    if (!editing) setText(value == null ? '' : String(value))
+  }, [value, editing])
+
+  /** 문자열 → 숫자 확정. 실패하면 직전 유효값으로 되돌린다. */
+  function commit(raw: string) {
+    const t = raw.trim().replace(/,/g, '')
+    if (t === '') {
+      if (optional) {
+        setText('')
+        onChange(undefined)
+      } else {
+        setText(value == null ? '' : String(value)) // 필수 칸은 비울 수 없다 → 직전 값 복원
+      }
+      return
+    }
+    const n = Number(t)
+    if (!Number.isFinite(n)) {
+      setText(value == null ? '' : String(value))
+      return
+    }
+    let v = integer ? Math.round(n) : n
+    if (min != null && v < min) v = min
+    if (max != null && v > max) v = max
+    setText(String(v))
+    if (v !== value) onChange(v)
+  }
+
+  function bump(dir: 1 | -1) {
+    const base = Number(text.trim() === '' ? (value ?? 0) : text)
+    const cur = Number.isFinite(base) ? base : (value ?? 0)
+    // 부동소수 누적오차 정리 (0.1 + 0.2 → 0.30000000000000004 방지)
+    commit(String(Math.round((cur + dir * step) * 1e6) / 1e6))
+  }
+
   return (
     <input
-      type="number"
-      step={step}
-      value={value ?? ''}
+      type="text"
+      className="bt-num"
+      inputMode={integer ? 'numeric' : 'decimal'}
+      value={text}
       placeholder={optional ? '—' : undefined}
       title={title}
-      onChange={(e) => {
-        const raw = e.target.value
-        if (raw === '') {
-          if (optional) onChange(undefined)
-          return
+      aria-label={title}
+      autoComplete="off"
+      onFocus={() => setEditing(true)}
+      onChange={(e) => setText(e.target.value)} // 입력 중에는 검증하지 않는다
+      onBlur={(e) => {
+        setEditing(false)
+        commit(e.target.value)
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'ArrowUp') {
+          e.preventDefault()
+          bump(1)
+        } else if (e.key === 'ArrowDown') {
+          e.preventDefault()
+          bump(-1)
+        } else if (e.key === 'Enter') {
+          e.currentTarget.blur() // blur에서 커밋된다
         }
-        const n = Number(raw)
-        if (Number.isFinite(n)) onChange(n)
       }}
     />
   )
@@ -263,9 +343,9 @@ function CondFields({ cond, onChange }: { cond: Condition; onChange: (c: Conditi
     case 'priceRange':
       return (
         <>
-          <Num value={cond.min} onChange={(min) => onChange({ ...cond, min })} title="하한(원)" step={100} optional />
+          <Num value={cond.min} onChange={(min) => onChange({ ...cond, min })} title="하한(원)" step={100} integer min={0} optional />
           <span>~</span>
-          <Num value={cond.max} onChange={(max) => onChange({ ...cond, max })} title="상한(원)" step={100} optional />
+          <Num value={cond.max} onChange={(max) => onChange({ ...cond, max })} title="상한(원)" step={100} integer min={0} optional />
           <span>원</span>
         </>
       )
@@ -273,7 +353,7 @@ function CondFields({ cond, onChange }: { cond: Condition; onChange: (c: Conditi
       return (
         <>
           <span>상위</span>
-          <Num value={cond.top} onChange={(top) => onChange({ ...cond, top: top ?? 100 })} title="순위" />
+          <Num value={cond.top} onChange={(top) => onChange({ ...cond, top: top ?? 100 })} title="순위" integer min={1} />
           <span>위 이내</span>
         </>
       )
@@ -297,7 +377,7 @@ function CondFields({ cond, onChange }: { cond: Condition; onChange: (c: Conditi
     case 'maPosition':
       return (
         <>
-          <Num value={cond.period} onChange={(period) => onChange({ ...cond, period: period ?? 5 })} title="이평 기간(일)" />
+          <Num value={cond.period} onChange={(period) => onChange({ ...cond, period: period ?? 5 })} title="이평 기간(일)" integer min={1} />
           <span>일선</span>
           <select value={cond.dir} onChange={(e) => onChange({ ...cond, dir: e.target.value as 'above' | 'below' })}>
             {cond.kind === 'maCross' ? (
@@ -317,23 +397,23 @@ function CondFields({ cond, onChange }: { cond: Condition; onChange: (c: Conditi
     case 'maAlign':
       return (
         <>
-          <Num value={cond.fast} onChange={(fast) => onChange({ ...cond, fast: fast ?? 5 })} title="단기 이평(일)" />
+          <Num value={cond.fast} onChange={(fast) => onChange({ ...cond, fast: fast ?? 5 })} title="단기 이평(일)" integer min={1} />
           <span>일선 &gt;</span>
-          <Num value={cond.slow} onChange={(slow) => onChange({ ...cond, slow: slow ?? 10 })} title="장기 이평(일)" />
+          <Num value={cond.slow} onChange={(slow) => onChange({ ...cond, slow: slow ?? 10 })} title="장기 이평(일)" integer min={1} />
           <span>일선 (정배열)</span>
         </>
       )
     case 'volume':
       return (
         <>
-          <Num value={cond.min} onChange={(min) => onChange({ ...cond, min: min ?? 0 })} title="거래량 하한(주)" step={10000} />
+          <Num value={cond.min} onChange={(min) => onChange({ ...cond, min: min ?? 0 })} title="거래량 하한(주)" step={10000} integer min={0} />
           <span>주 이상</span>
         </>
       )
     case 'tradingValue':
       return (
         <>
-          <Num value={cond.min} onChange={(min) => onChange({ ...cond, min: min ?? 0 })} title="거래대금 하한(원)" step={1e8} />
+          <Num value={cond.min} onChange={(min) => onChange({ ...cond, min: min ?? 0 })} title="거래대금 하한(원)" step={1e8} integer min={0} />
           <span>원 이상</span>
         </>
       )
@@ -341,16 +421,16 @@ function CondFields({ cond, onChange }: { cond: Condition; onChange: (c: Conditi
       return (
         <>
           <span>직전</span>
-          <Num value={cond.days} onChange={(days) => onChange({ ...cond, days: days ?? 20 })} title="평균 산출 일수" />
+          <Num value={cond.days} onChange={(days) => onChange({ ...cond, days: days ?? 20 })} title="평균 산출 일수" integer min={1} />
           <span>일 평균의</span>
-          <Num value={cond.ratio} onChange={(ratio) => onChange({ ...cond, ratio: ratio ?? 2 })} title="배수" step={0.5} />
+          <Num value={cond.ratio} onChange={(ratio) => onChange({ ...cond, ratio: ratio ?? 2 })} title="배수" step={0.5} min={0} />
           <span>배 이상</span>
         </>
       )
     case 'disparity':
       return (
         <>
-          <Num value={cond.period} onChange={(period) => onChange({ ...cond, period: period ?? 20 })} title="이평 기간(일)" />
+          <Num value={cond.period} onChange={(period) => onChange({ ...cond, period: period ?? 20 })} title="이평 기간(일)" integer min={1} />
           <span>일 이격도</span>
           <Num value={cond.min} onChange={(min) => onChange({ ...cond, min })} title="하한(%)" step={0.5} optional />
           <span>~</span>
@@ -361,25 +441,25 @@ function CondFields({ cond, onChange }: { cond: Condition; onChange: (c: Conditi
       return (
         <>
           <span>RSI(</span>
-          <Num value={cond.period} onChange={(period) => onChange({ ...cond, period: period ?? 14 })} title="기간(일)" />
+          <Num value={cond.period} onChange={(period) => onChange({ ...cond, period: period ?? 14 })} title="기간(일)" integer min={1} />
           <span>)</span>
-          <Num value={cond.min} onChange={(min) => onChange({ ...cond, min })} title="하한" optional />
+          <Num value={cond.min} onChange={(min) => onChange({ ...cond, min })} title="하한" min={0} max={100} optional />
           <span>~</span>
-          <Num value={cond.max} onChange={(max) => onChange({ ...cond, max })} title="상한" optional />
+          <Num value={cond.max} onChange={(max) => onChange({ ...cond, max })} title="상한" min={0} max={100} optional />
         </>
       )
     case 'highBreak':
     case 'lowBreak':
       return (
         <>
-          <Num value={cond.days} onChange={(days) => onChange({ ...cond, days: days ?? 20 })} title="기간(일)" />
+          <Num value={cond.days} onChange={(days) => onChange({ ...cond, days: days ?? 20 })} title="기간(일)" integer min={1} />
           <span>{cond.kind === 'highBreak' ? '일 신고가 돌파(당일 제외 직전 극값 기준)' : '일 신저가 이탈'}</span>
         </>
       )
     case 'streak':
       return (
         <>
-          <Num value={cond.days} onChange={(days) => onChange({ ...cond, days: days ?? 3 })} title="연속 일수" />
+          <Num value={cond.days} onChange={(days) => onChange({ ...cond, days: days ?? 3 })} title="연속 일수" integer min={1} />
           <span>일 연속</span>
           <select value={cond.dir} onChange={(e) => onChange({ ...cond, dir: e.target.value as 'up' | 'down' })}>
             <option value="up">상승</option>
@@ -409,21 +489,29 @@ function ExitFields({ rule, onChange }: { rule: ExitRule; onChange: (r: ExitRule
     case 'trailing':
       return (
         <>
-          <Num value={rule.pct} onChange={(pct) => onChange({ ...rule, pct: pct ?? 3 })} title="%" step={0.5} />
+          <Num value={rule.pct} onChange={(pct) => onChange({ ...rule, pct: pct ?? 3 })} title="%" step={0.5} min={0} />
           <span>%</span>
         </>
       )
     case 'maBreak':
       return (
         <>
-          <Num value={rule.maPeriod} onChange={(maPeriod) => onChange({ ...rule, maPeriod: maPeriod ?? 5 })} title="이평 기간(일)" />
+          <Num
+            value={rule.maPeriod}
+            onChange={(maPeriod) => onChange({ ...rule, maPeriod: maPeriod ?? 5 })}
+            title="이평 기간(일)"
+            integer
+            min={1}
+          />
           <span>일선</span>
+          <Num value={rule.pct} onChange={(pct) => onChange({ ...rule, pct })} title="이탈 버퍼(%) — 비우면 버퍼 없음" step={0.5} min={0} optional />
+          <span>% 버퍼</span>
         </>
       )
     case 'timeExit':
       return (
         <>
-          <Num value={rule.days} onChange={(days) => onChange({ ...rule, days: days ?? 3 })} title="보유 거래일" />
+          <Num value={rule.days} onChange={(days) => onChange({ ...rule, days: days ?? 3 })} title="보유 거래일" integer min={1} />
           <span>거래일</span>
         </>
       )
@@ -435,6 +523,20 @@ function ExitFields({ rule, onChange }: { rule: ExitRule; onChange: (r: ExitRule
 // ---- 본체 ------------------------------------------------------------------
 
 const fmtPct = (v: number, digits = 1) => `${v >= 0 ? '+' : ''}${v.toFixed(digits)}%`
+/** 자릿수 구분 — 총 수익률이 네 자리 %를 넘으면 구분 없이는 읽히지 않는다 */
+const fmtPctGrouped = (v: number, digits = 1) =>
+  `${v >= 0 ? '+' : '−'}${Math.abs(v).toLocaleString('ko-KR', { minimumFractionDigits: digits, maximumFractionDigits: digits })}%`
+const fmtPp = (v: number, digits = 1) =>
+  `${v >= 0 ? '+' : '−'}${Math.abs(v).toLocaleString('ko-KR', { minimumFractionDigits: digits, maximumFractionDigits: digits })}%p`
+
+/** 두 날짜 사이 연수 — 헤드리스 러너(scripts/spec-backtest)의 정의와 동일 */
+function yearsBetween(a: string, b: string): number {
+  return Math.max(1 / 365, (Date.parse(b) - Date.parse(a)) / (365.25 * 86400e3))
+}
+/** 연환산 수익률(%) — 누적배수와 연수로 계산 */
+function cagr(totalRatio: number, years: number): number {
+  return (Math.pow(Math.max(totalRatio, 1e-9), 1 / years) - 1) * 100
+}
 
 export function SpecSimulator() {
   const [saved] = useState(loadSaved)
@@ -442,15 +544,25 @@ export function SpecSimulator() {
   const [symbolsText, setSymbolsText] = useState(saved.symbolsText)
   const [range, setRange] = useState<HistoryRange>(saved.range)
   const [startDate, setStartDate] = useState(saved.startDate)
+  const [endDate, setEndDate] = useState(saved.endDate ?? '')
   const [cost, setCost] = useState<CostSettings>(saved.cost)
 
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [loadNote, setLoadNote] = useState<string | null>(null)
+  // 실행 중 생기는 안내는 **덮어쓰지 않고 쌓는다** — 예전엔 "로드 실패 종목" 안내가
+  // 뒤이은 레짐 안내에 지워져 사용자가 못 보고 넘어갔다.
+  const [notes, setNotes] = useState<string[]>([])
   const [result, setResult] = useState<ConditionResult | null>(null)
   const [benchPct, setBenchPct] = useState<number | null>(null)
   const [benchEquity, setBenchEquity] = useState<Map<string, number> | null>(null)
+  /** 벤치마크가 실제로 존재한 구간 — 실행 구간보다 늦게 시작하면 알파가 과대평가된다 */
+  const [benchSpan, setBenchSpan] = useState<{ start: string; end: string } | null>(null)
+  /** 결과 계산의 기준 자본 — **실행 시점 값을 고정**한다.
+   *  설정을 나중에 바꿔도 이미 나온 결과표의 수익률이 따라 흔들리면 안 된다. */
+  const [ranCapital, setRanCapital] = useState(saved.cost.initialCapital)
+
+  const addNote = (m: string) => setNotes((prev) => (prev.includes(m) ? prev : [...prev, m]))
 
   const [jsonOpen, setJsonOpen] = useState(false)
   const [jsonText, setJsonText] = useState('')
@@ -458,17 +570,27 @@ export function SpecSimulator() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify({ spec, symbolsText, range, startDate, cost } satisfies Saved))
+      localStorage.setItem(STORE_KEY, JSON.stringify({ spec, symbolsText, range, startDate, endDate, cost } satisfies Saved))
     } catch {
       /* 저장 실패는 치명적이지 않다 */
     }
-  }, [spec, symbolsText, range, startDate, cost])
+  }, [spec, symbolsText, range, startDate, endDate, cost])
 
   const flat = useMemo(() => asFlatAnd(spec.entry), [spec.entry])
   const issues = useMemo(() => {
     const symbols = symbolsText.split(',').map((s) => s.trim()).filter(Boolean)
     return validateSpec({ ...spec, universe: { ...spec.universe, symbols } })
   }, [spec, symbolsText])
+
+  /** 기간 입력 검증 — 실행 전에 막는다 */
+  const dateError = useMemo(
+    () => (startDate && endDate && endDate < startDate ? `종료일(${endDate})이 시작일(${startDate})보다 앞섭니다` : null),
+    [startDate, endDate],
+  )
+
+  /** 조건식에 이미 들어 있는 종류 — 목록·드롭다운 하이라이팅용 */
+  const usedCondKinds = useMemo(() => new Set((flat ?? []).map((f) => f.cond.kind)), [flat])
+  const usedExitKinds = useMemo(() => new Set(spec.exits.map((r) => r.kind)), [spec.exits])
 
   function patchEntry(nextFlat: FlatCond[]) {
     setSpec((s) => ({ ...s, entry: toEntry(nextFlat) }))
@@ -500,17 +622,19 @@ export function SpecSimulator() {
       const pick = kind === 'kospi20' ? ks.slice(0, 20) : kind === 'kospi40' ? ks.slice(0, 40) : syms
       if (pick.length === 0) throw new Error('목록이 비어 있습니다')
       setSymbolsText(pick.join(', '))
-      setLoadNote(`시총 상위 목록 적용: ${pick.length}종목 (크론이 매일 갱신하는 실측 랭킹)`)
+      setNotes([`시총 상위 목록 적용: ${pick.length}종목 (크론이 매일 갱신하는 실측 랭킹)`])
     } catch (e) {
-      setLoadNote(`⚠️ 시총 랭킹 목록 로드 실패: ${e instanceof Error ? e.message : String(e)}`)
+      setNotes([`⚠️ 시총 랭킹 목록 로드 실패: ${e instanceof Error ? e.message : String(e)}`])
     }
   }
 
   async function run() {
+    if (busy) return // 중복 클릭 방어 (버튼 disabled와 이중 잠금)
     setBusy(true)
     setError(null)
-    setLoadNote(null)
+    setNotes([])
     try {
+      if (dateError) throw new Error(dateError)
       const symbols = symbolsText.split(',').map((s) => s.trim()).filter(Boolean)
       if (symbols.length === 0) throw new Error('표본 종목이 비어 있습니다')
       const histories: Record<string, DailyBar[]> = {}
@@ -527,7 +651,7 @@ export function SpecSimulator() {
       }
       const okCount = Object.keys(histories).length
       if (okCount === 0) throw new Error('시세를 하나도 받지 못했습니다 — 네트워크/프록시 상태를 확인하세요')
-      if (failed.length) setLoadNote(`⚠️ 로드 실패로 제외: ${failed.join(', ')} (${okCount}종목으로 실행)`)
+      if (failed.length) addNote(`⚠️ 로드 실패로 제외: ${failed.join(', ')} (${okCount}종목으로 실행)`)
 
       // 레짐 게이트가 있으면 지수 시세도 필요하다 (매매 대상 아님 — 판정 전용)
       if (spec.regime) {
@@ -535,10 +659,24 @@ export function SpecSimulator() {
         try {
           const rh = await getDailyHistory(spec.regime.symbol, range)
           if (rh.bars.length > 0) histories[spec.regime.symbol] = rh.bars
-          else setLoadNote('⚠️ 레짐 지수 데이터가 비어 있습니다 — 진입이 발생하지 않습니다')
+          else addNote('⚠️ 레짐 지수 데이터가 비어 있습니다 — 진입이 발생하지 않습니다')
         } catch {
-          setLoadNote('⚠️ 레짐 지수 로드 실패 — 진입이 발생하지 않습니다 (레짐을 "없음"으로 바꾸거나 재시도)')
+          addNote('⚠️ 레짐 지수 로드 실패 — 진입이 발생하지 않습니다 (레짐을 "없음"으로 바꾸거나 재시도)')
         }
+      }
+
+      // 종료일 절단 — **엔진은 건드리지 않고 입력 봉만 자른다**(헤드리스 러너와 같은 방식).
+      // 규칙 1(미래참조 금지)의 절단 불변성과 같은 조작이라, 잘라낸 구간 이전 결과는
+      // 자르지 않은 실행과 동일해야 한다.
+      if (endDate) {
+        for (const s of Object.keys(histories)) {
+          const cut = histories[s].filter((b) => b.date <= endDate)
+          if (cut.length === 0) delete histories[s]
+          else histories[s] = cut
+        }
+        const left = Object.keys(histories).filter((s) => s !== spec.regime?.symbol)
+        if (left.length === 0) throw new Error(`종료일(${endDate}) 이전 데이터가 없습니다 — 기간을 다시 확인하세요`)
+        if (left.length < okCount) addNote(`⚠️ 종료일 이전 데이터가 없어 제외된 종목이 있습니다 (${left.length}종목으로 실행)`)
       }
 
       setProgress('백테스트 실행…')
@@ -546,9 +684,12 @@ export function SpecSimulator() {
       const effective: StrategySpec = { ...spec, universe: { ...spec.universe, symbols: tradable } }
       const res = runStrategySpec(histories, startDate || '0000-00-00', effective, cost)
       setResult(res)
+      setRanCapital(cost.initialCapital)
       setTradesPage(0) // 새 실행마다 1페이지부터
 
-      // 벤치마크 — 같은 구간 KODEX 200 단순보유 (규칙 5: 판정은 알파 기준)
+      // 벤치마크 — 같은 구간 KODEX 200 단순보유 (규칙 5: 판정은 알파 기준).
+      // res.startDate/endDate는 위에서 잘라낸 봉으로 만든 달력의 양끝이므로,
+      // 종료일을 지정하면 벤치마크·알파도 자동으로 같은 구간으로 잘린다.
       setProgress('벤치마크 로딩…')
       try {
         const bench = await getDailyHistory(BENCH_SYMBOL, range)
@@ -559,13 +700,16 @@ export function SpecSimulator() {
           const m = new Map<string, number>()
           for (const b of inRange) m.set(b.date, (b.c / first) * cost.initialCapital)
           setBenchEquity(m)
+          setBenchSpan({ start: inRange[0].date, end: inRange[inRange.length - 1].date })
         } else {
           setBenchPct(null)
           setBenchEquity(null)
+          setBenchSpan(null)
         }
       } catch {
         setBenchPct(null)
         setBenchEquity(null)
+        setBenchSpan(null)
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -579,28 +723,47 @@ export function SpecSimulator() {
   const chartEquity = useMemo(() => {
     if (!result) return null
     if (!benchEquity) return result.equity
-    let lastBench = cost.initialCapital
+    let lastBench = ranCapital
     return result.equity.map((p) => {
       lastBench = benchEquity.get(p.date) ?? lastBench
       return { ...p, benchmark: lastBench }
     })
-  }, [result, benchEquity, cost.initialCapital])
+  }, [result, benchEquity, ranCapital])
 
   const summary = useMemo(() => {
     if (!result || result.equity.length === 0) return null
     const finalEq = result.equity[result.equity.length - 1].equity
-    const totalPct = (finalEq / cost.initialCapital - 1) * 100
+    const totalPct = (finalEq / ranCapital - 1) * 100
     const mdd = result.equity.reduce((m, e) => Math.min(m, e.drawdownPct), 0)
     const closed = result.trades.filter((t) => t.exitDate != null)
     const wins = closed.filter((t) => (t.pnlPct ?? 0) > 0).length
+    // 연환산 — 자산곡선 시작·끝 **날짜** 기준 (헤드리스 러너 stats()와 같은 정의).
+    // 총액 %만 보면 장기 구간에서 복리 착시가 생기고, 규칙 5의 판정 기준(연환산 알파)과 어긋난다.
+    const years = yearsBetween(result.startDate, result.endDate)
+    const cagrPct = cagr(finalEq / ranCapital, years)
+    const benchCagrPct = benchPct != null ? cagr(1 + benchPct / 100, years) : null
     return {
       totalPct,
       mdd,
+      years,
+      cagrPct,
+      benchCagrPct,
+      alphaCagrPct: benchCagrPct != null ? cagrPct - benchCagrPct : null,
+      alphaTotalPct: benchPct != null ? totalPct - benchPct : null,
       tradeCount: closed.length,
       winRate: closed.length ? (wins / closed.length) * 100 : null,
       avgPnl: closed.length ? closed.reduce((s, t) => s + (t.pnlPct ?? 0), 0) / closed.length : null,
     }
-  }, [result, cost.initialCapital])
+  }, [result, ranCapital, benchPct])
+
+  /** 벤치마크가 실행 구간보다 늦게 시작하면 그 이전 구간의 알파는 벤치 부재로 과대평가된다.
+   *  휴장일 차이로 하루이틀 어긋나는 것까지 경고하면 노이즈라 30일 이상만 잡는다.
+   *  (KODEX 200 시세는 실행 구간보다 늦게 시작할 수 있다 — 그 앞 구간은 비교 대상이 없다) */
+  const benchGap = useMemo(() => {
+    if (!result || !benchSpan) return null
+    const gapDays = (Date.parse(benchSpan.start) - Date.parse(result.startDate)) / 86400e3
+    return gapDays > 30 ? benchSpan.start : null
+  }, [result, benchSpan])
 
   function exportJson() {
     setJsonText(JSON.stringify(spec, null, 2))
@@ -624,14 +787,15 @@ export function SpecSimulator() {
   // 매매 이력 — 최신순 전체를 페이지로 나눠 전량 열람 (전량 즉시 렌더는 수천 행에서 버벅임)
   const TRADES_PER_PAGE = 50
   const [tradesPage, setTradesPage] = useState(0)
-  const allTrades = result ? [...result.trades].reverse() : []
+  // 매 렌더마다 복사·역순 정렬하면 수천 건에서 낭비다 — 결과가 바뀔 때만 계산한다
+  const allTrades = useMemo(() => (result ? [...result.trades].reverse() : []), [result])
   const tradePages = Math.max(1, Math.ceil(allTrades.length / TRADES_PER_PAGE))
   const pageClamped = Math.min(tradesPage, tradePages - 1)
   const recentTrades = allTrades.slice(pageClamped * TRADES_PER_PAGE, (pageClamped + 1) * TRADES_PER_PAGE)
   const screenRows = result ? result.lastScreen.slice(0, 12) : []
 
   return (
-    <div className="panel bt-panel">
+    <div className="panel bt-panel bt-sim">
       <div className="panel-head">
         <h2>
           ⚡ 조건식 시뮬레이터
@@ -654,35 +818,65 @@ export function SpecSimulator() {
           </div>
         ) : (
           <>
+            {flat.length === 0 && <div className="bt-cond-empty">조건이 없습니다 — 아래에서 추가하세요 (조건 0개면 전 종목이 후보가 됩니다)</div>}
             {flat.map((f, i) => (
-              <div key={i} className="bt-cond-row">
+              // key에 kind를 섞어 종류가 바뀌면 입력 칸이 새로 마운트되게 한다
+              // (인덱스만 쓰면 삭제 시 옆 행의 입력 상태가 딸려온다)
+              <div key={`${i}:${f.cond.kind}`} className="bt-cond-row bt-cond-card is-active">
+                <span className="bt-cond-flag" title="이 조건이 현재 조건식(AND)에 포함되어 있습니다">
+                  ✓ 적용 중
+                </span>
                 <select
+                  className="bt-cond-kind"
                   value={f.cond.kind}
+                  aria-label={`조건 ${i + 1} 종류`}
                   onChange={(e) => {
                     const meta = KIND_MENU.find((k) => k.kind === e.target.value)
-                    if (meta) patchEntry(flat.map((x, j) => (j === i ? { ...x, cond: meta.make() } : x)))
+                    // 종류가 바뀌면 이전 종류에 붙어 있던 id 라벨은 버린다(라벨과 내용 불일치 방지)
+                    if (meta) patchEntry(flat.map((x, j) => (j === i ? { cond: meta.make() } : x)))
                   }}
                 >
                   {KIND_MENU.map((k) => (
                     <option key={k.kind} value={k.kind}>
                       {k.label}
+                      {usedCondKinds.has(k.kind) && k.kind !== f.cond.kind ? ' ✓ 사용 중' : ''}
                     </option>
                   ))}
                 </select>
                 <CondFields cond={f.cond} onChange={(cond) => patchEntry(flat.map((x, j) => (j === i ? { ...x, cond } : x)))} />
                 <button
                   type="button"
-                  className="bt-btn-mini danger"
-                  aria-label="조건 삭제"
+                  className="bt-btn-mini danger bt-cond-del"
+                  aria-label={`조건 ${i + 1} 삭제`}
+                  title="이 조건 삭제"
                   onClick={() => patchEntry(flat.filter((_, j) => j !== i))}
                 >
                   ✕
                 </button>
               </div>
             ))}
-            <button type="button" className="bt-btn-mini" onClick={() => patchEntry([...flat, { cond: KIND_MENU[0].make() }])}>
-              + 조건 추가
-            </button>
+            <div className="bt-add-row">
+              <select
+                className="bt-add-select"
+                value=""
+                aria-label="조건 추가"
+                onChange={(e) => {
+                  const meta = KIND_MENU.find((k) => k.kind === e.target.value)
+                  if (meta) patchEntry([...flat, { cond: meta.make() }])
+                }}
+              >
+                <option value="">＋ 조건 추가…</option>
+                {KIND_MENU.map((k) => (
+                  <option key={k.kind} value={k.kind}>
+                    {k.label}
+                    {usedCondKinds.has(k.kind) ? ' ✓ 사용 중' : ''}
+                  </option>
+                ))}
+              </select>
+              <span className="bt-hint">
+                ✓ 표시는 이미 조건식에 들어 있다는 뜻입니다 — 같은 종류를 여러 번 넣어도 됩니다(예: 5일선·20일선 돌파 동시).
+              </span>
+            </div>
           </>
         )}
       </div>
@@ -693,10 +887,18 @@ export function SpecSimulator() {
           매도 조건 (먼저 걸리는 것이 청산)
           <InfoTip text="조건검색은 매수 신호만 줍니다 — 수익률을 가르는 건 매도 규칙입니다. 손절·익절은 장중 저가/고가가 닿으면 발동하되 갭으로 관통하면 시가(더 불리한 쪽)에 체결한 것으로 계산합니다." />
         </strong>
+        {spec.exits.length === 0 && (
+          <div className="bt-cond-empty">매도 규칙이 없습니다 — 청산 조건이 없으면 진입 후 끝까지 보유합니다.</div>
+        )}
         {spec.exits.map((rule, i) => (
-          <div key={i} className="bt-cond-row">
+          <div key={`${i}:${rule.kind}`} className="bt-cond-row bt-cond-card is-active">
+            <span className="bt-cond-flag" title="이 규칙이 현재 매도 조건에 포함되어 있습니다">
+              ✓ 적용 중
+            </span>
             <select
+              className="bt-cond-kind"
               value={rule.kind}
+              aria-label={`매도 규칙 ${i + 1} 종류`}
               onChange={(e) => {
                 const meta = EXIT_MENU.find((m) => m.make().kind === e.target.value)
                 if (meta) setSpec((s) => ({ ...s, exits: s.exits.map((x, j) => (j === i ? meta.make() : x)) }))
@@ -707,6 +909,7 @@ export function SpecSimulator() {
                 return (
                   <option key={k} value={k}>
                     {EXIT_LABELS[k]}
+                    {usedExitKinds.has(k) && k !== rule.kind ? ' ✓ 사용 중' : ''}
                   </option>
                 )
               })}
@@ -714,37 +917,57 @@ export function SpecSimulator() {
             <ExitFields rule={rule} onChange={(r) => setSpec((s) => ({ ...s, exits: s.exits.map((x, j) => (j === i ? r : x)) }))} />
             <button
               type="button"
-              className="bt-btn-mini danger"
-              aria-label="매도 규칙 삭제"
+              className="bt-btn-mini danger bt-cond-del"
+              aria-label={`매도 규칙 ${i + 1} 삭제`}
+              title="이 규칙 삭제"
               onClick={() => setSpec((s) => ({ ...s, exits: s.exits.filter((_, j) => j !== i) }))}
             >
               ✕
             </button>
           </div>
         ))}
-        <button
-          type="button"
-          className="bt-btn-mini"
-          onClick={() => setSpec((s) => ({ ...s, exits: [...s.exits, { kind: 'stopLoss', pct: 3 }] }))}
-        >
-          + 매도 규칙 추가
-        </button>
+        <div className="bt-add-row">
+          <select
+            className="bt-add-select"
+            value=""
+            aria-label="매도 규칙 추가"
+            onChange={(e) => {
+              const meta = EXIT_MENU.find((m) => m.make().kind === e.target.value)
+              if (meta) setSpec((s) => ({ ...s, exits: [...s.exits, meta.make()] }))
+            }}
+          >
+            <option value="">＋ 매도 규칙 추가…</option>
+            {EXIT_MENU.map((m) => {
+              const k = m.make().kind
+              return (
+                <option key={k} value={k}>
+                  {m.label}
+                  {usedExitKinds.has(k) ? ' ✓ 사용 중' : ''}
+                </option>
+              )
+            })}
+          </select>
+          <span className="bt-hint">
+            여러 규칙 중 <strong>먼저 걸리는 것</strong>이 청산입니다 — 같은 종류를 여러 번 넣어도 됩니다.
+          </span>
+        </div>
       </div>
 
       {/* ---- 실행 설정 ---- */}
       <div className="bt-controls bt-settings">
         <label>
           동시 보유
-          <input
-            type="number"
-            min={1}
-            max={30}
-            value={spec.sizing.maxPositions}
-            onChange={(e) =>
-              setSpec((s) => ({ ...s, sizing: { ...s.sizing, maxPositions: Math.max(1, Number(e.target.value) || 1) } }))
-            }
-          />
-          종목
+          <span className="bt-inline-field">
+            <Num
+              value={spec.sizing.maxPositions}
+              onChange={(v) => setSpec((s) => ({ ...s, sizing: { ...s.sizing, maxPositions: v ?? 1 } }))}
+              title="동시 보유 종목 수"
+              integer
+              min={1}
+              max={30}
+            />
+            종목
+          </span>
         </label>
         <label>
           체결
@@ -800,9 +1023,32 @@ export function SpecSimulator() {
         </label>
         <label>
           시작일
-          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} title="비우면 데이터 시작부터" />
+          <input
+            type="date"
+            value={startDate}
+            max={endDate || undefined}
+            onChange={(e) => setStartDate(e.target.value)}
+            title="비우면 데이터 시작부터"
+          />
         </label>
+        <label>
+          종료일
+          <InfoTip text="이 날짜 이후의 봉을 잘라낸 뒤 백테스트합니다(엔진에 넘기기 전에 자릅니다). 벤치마크·알파도 같은 구간으로 계산됩니다. 비우면 데이터 끝까지 — 최근 구간을 빼고 과거만 검증하는 홀드아웃에 쓰세요." />
+          <input
+            type="date"
+            value={endDate}
+            min={startDate || undefined}
+            onChange={(e) => setEndDate(e.target.value)}
+            title="비우면 데이터 끝까지"
+          />
+        </label>
+        {endDate && (
+          <button type="button" className="bt-btn-mini" onClick={() => setEndDate('')} title="종료일 지우기">
+            종료일 해제
+          </button>
+        )}
       </div>
+      {dateError && <div className="bt-warn">⛔ {dateError} — 기간을 수정하면 실행할 수 있습니다.</div>}
 
       <div className="bt-controls bt-settings">
         <label>
@@ -810,13 +1056,13 @@ export function SpecSimulator() {
           <InfoTip text="조건식을 검증할 표본입니다. 아래 버튼으로 시가총액 상위 목록(크론이 매일 실측 갱신)을 한 번에 넣을 수 있습니다. 전 종목이 아니라 표본이므로 '등락률 상위 N위'는 표본 내 순위로 계산되고, 상장폐지 종목이 빠진 표본은 성적을 부풀립니다(생존편향)." />
         </label>
         <div className="bt-actions">
-          <button type="button" className="bt-btn-mini" onClick={() => loadTopSymbols('kospi20')}>
+          <button type="button" className="bt-btn-mini" disabled={busy} onClick={() => loadTopSymbols('kospi20')}>
             시총 상위: 코스피 20
           </button>
-          <button type="button" className="bt-btn-mini" onClick={() => loadTopSymbols('kospi40')}>
+          <button type="button" className="bt-btn-mini" disabled={busy} onClick={() => loadTopSymbols('kospi40')}>
             코스피 40
           </button>
-          <button type="button" className="bt-btn-mini" onClick={() => loadTopSymbols('all')}>
+          <button type="button" className="bt-btn-mini" disabled={busy} onClick={() => loadTopSymbols('all')}>
             코스피+코스닥 78
           </button>
         </div>
@@ -830,29 +1076,31 @@ export function SpecSimulator() {
         <div className="bt-controls bt-settings" style={{ padding: 0, border: 'none' }}>
           <label>
             수수료(%)
-            <input
-              type="number"
-              step={0.005}
-              value={cost.feePct}
-              onChange={(e) => setCost((c) => ({ ...c, feePct: Number(e.target.value) || 0 }))}
-            />
+            <Num value={cost.feePct} onChange={(v) => setCost((c) => ({ ...c, feePct: v ?? 0 }))} title="편도 수수료(%)" step={0.005} min={0} />
           </label>
           <label>
             거래세(%)
-            <input
-              type="number"
-              step={0.05}
-              value={cost.taxPct}
-              onChange={(e) => setCost((c) => ({ ...c, taxPct: Number(e.target.value) || 0 }))}
-            />
+            <Num value={cost.taxPct} onChange={(v) => setCost((c) => ({ ...c, taxPct: v ?? 0 }))} title="매도 거래세(%)" step={0.05} min={0} />
           </label>
           <label>
             슬리피지(%)
-            <input
-              type="number"
-              step={0.05}
+            <Num
               value={cost.slippagePct}
-              onChange={(e) => setCost((c) => ({ ...c, slippagePct: Number(e.target.value) || 0 }))}
+              onChange={(v) => setCost((c) => ({ ...c, slippagePct: v ?? 0 }))}
+              title="편도 슬리피지(%)"
+              step={0.05}
+              min={0}
+            />
+          </label>
+          <label>
+            초기자본(원)
+            <Num
+              value={cost.initialCapital}
+              onChange={(v) => setCost((c) => ({ ...c, initialCapital: v ?? DEFAULT_COST.initialCapital }))}
+              title="초기 투입 자본(원)"
+              step={1_000_000}
+              integer
+              min={100_000}
             />
           </label>
         </div>
@@ -871,7 +1119,12 @@ export function SpecSimulator() {
 
       {/* ---- 실행 ---- */}
       <div className="bt-actions">
-        <button type="button" className="bt-btn-run" disabled={busy || issues.some((i) => i.level === 'error')} onClick={run}>
+        <button
+          type="button"
+          className="bt-btn-run"
+          disabled={busy || dateError != null || issues.some((i) => i.level === 'error')}
+          onClick={run}
+        >
           {busy ? (progress ?? '실행 중…') : '▶ 백테스트 실행 (2차 검증)'}
         </button>
         <button type="button" className="bt-btn-mini" onClick={exportJson}>
@@ -879,6 +1132,8 @@ export function SpecSimulator() {
         </button>
         <select
           value=""
+          disabled={busy}
+          aria-label="프리셋 불러오기"
           onChange={(e) => {
             const p = PRESETS.find((x) => x.id === e.target.value)
             if (p) {
@@ -898,8 +1153,17 @@ export function SpecSimulator() {
           ))}
         </select>
       </div>
-      {error && <div className="bt-warn">⛔ {error}</div>}
-      {loadNote && <div className="bt-warn">{loadNote}</div>}
+      {error && (
+        <div className="bt-warn" role="alert">
+          ⛔ {error}
+        </div>
+      )}
+      {/* 안내는 쌓아서 전부 보여준다 — 뒤 안내가 앞 안내를 지우지 않는다 */}
+      {notes.map((n, i) => (
+        <div key={i} className={n.startsWith('⚠️') ? 'bt-warn' : 'bt-note'}>
+          {n}
+        </div>
+      ))}
 
       {/* ---- JSON 편집 ---- */}
       {jsonOpen && (
@@ -933,19 +1197,31 @@ export function SpecSimulator() {
           <div className="kpi-row">
             <KpiCard
               label="총 수익률"
-              value={fmtPct(summary.totalPct)}
-              changeText={benchPct != null ? `벤치마크(KODEX 200) ${fmtPct(benchPct)}` : '벤치마크 로드 실패'}
+              value={fmtPctGrouped(summary.totalPct)}
+              unit={` · 연 ${fmtPct(summary.cagrPct)}`}
+              changeText={
+                benchPct != null && summary.benchCagrPct != null
+                  ? `벤치마크(KODEX 200) 총 ${fmtPctGrouped(benchPct)} · 연 ${fmtPct(summary.benchCagrPct)}`
+                  : '벤치마크 로드 실패'
+              }
               changeLabel=""
               direction={benchPct != null && summary.totalPct > benchPct ? 'up' : 'down'}
-              info="같은 구간 KODEX 200 단순보유와 비교하세요. 장이 좋아 번 것은 실력이 아닙니다(판정은 알파 기준)."
+              info="총액 %는 구간이 길수록 복리로 부풀어 보입니다 — 실제 체감은 연환산(CAGR)으로 보세요. 같은 구간 KODEX 200 단순보유와 비교하고, 장이 좋아 번 것은 실력으로 치지 않습니다(판정은 알파 기준)."
             />
             <KpiCard
-              label="초과수익(알파)"
-              value={benchPct != null ? fmtPct(summary.totalPct - benchPct) : '—'}
-              changeText={`${result.startDate} ~ ${result.endDate}`}
+              label="초과수익(알파, 연환산)"
+              value={summary.alphaCagrPct != null ? fmtPp(summary.alphaCagrPct) : '—'}
+              unit=" / 연"
+              changeText={
+                summary.alphaTotalPct != null
+                  ? `총 ${fmtPp(summary.alphaTotalPct)} · ${result.startDate}~${result.endDate} (${summary.years.toFixed(1)}년)`
+                  : `${result.startDate}~${result.endDate} (${summary.years.toFixed(1)}년)`
+              }
               changeLabel=""
-              direction={benchPct != null && summary.totalPct - benchPct > 0 ? 'up' : 'down'}
-              info="전략 수익률 − 벤치마크 수익률(같은 구간 누적). 이 값이 음수면 그냥 지수를 사는 편이 나았다는 뜻입니다."
+              direction={summary.alphaCagrPct != null && summary.alphaCagrPct > 0 ? 'up' : 'down'}
+              badge={benchGap ? `⚠️ 벤치 구간: ${benchGap}~` : undefined}
+              badgeTitle={`벤치마크(KODEX 200) 데이터가 ${benchGap}부터라 그 이전 구간에는 비교 대상이 없습니다 — 그만큼 알파가 과대평가됩니다.`}
+              info="규칙 5의 판정 기준은 연환산 알파(전략 CAGR − 벤치마크 CAGR)입니다. 총액 차이는 보조 지표로만 보세요. 음수면 그냥 지수를 사는 편이 나았다는 뜻입니다."
             />
             <KpiCard
               label="최대 낙폭(MDD)"
@@ -964,6 +1240,14 @@ export function SpecSimulator() {
               direction="flat"
             />
           </div>
+
+          {benchGap && (
+            <div className="bt-bench-note">
+              ⚠️ <strong>벤치마크 구간 부족</strong> — 실행 구간은 {result.startDate}부터인데 KODEX 200 데이터는{' '}
+              {benchGap}부터입니다. 그 이전 구간은 비교 대상 없이 전략 수익만 쌓이므로 <strong>알파가 과대평가</strong>됩니다.
+              시작일을 {benchGap} 이후로 맞추면 같은 구간 비교가 됩니다.
+            </div>
+          )}
 
           {chartEquity && <EquityChart equity={chartEquity} benchmarkLabel="KODEX 200 단순보유" />}
 
