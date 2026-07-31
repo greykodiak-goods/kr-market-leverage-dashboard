@@ -83,6 +83,8 @@ export interface Trade {
   pnlPct: number | null
   reason: ExitReason
   symbol?: string // 포트폴리오(멀티종목) 집계 시 슬리브 종목
+  /** 진입 직후 총자산(현금+보유 평가) 대비 이 포지션 매수금액 비중(%) — 표시용 */
+  entryWeightPct?: number | null
 }
 
 export interface EquityPoint {

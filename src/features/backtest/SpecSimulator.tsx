@@ -523,6 +523,7 @@ function ExitFields({ rule, onChange }: { rule: ExitRule; onChange: (r: ExitRule
 // ---- 본체 ------------------------------------------------------------------
 
 const fmtPct = (v: number, digits = 1) => `${v >= 0 ? '+' : ''}${v.toFixed(digits)}%`
+const fmtWon = (v: number | null | undefined) => (v == null ? '—' : Math.round(v).toLocaleString('ko-KR'))
 /** 자릿수 구분 — 총 수익률이 네 자리 %를 넘으면 구분 없이는 읽히지 않는다 */
 const fmtPctGrouped = (v: number, digits = 1) =>
   `${v >= 0 ? '+' : '−'}${Math.abs(v).toLocaleString('ko-KR', { minimumFractionDigits: digits, maximumFractionDigits: digits })}%`
@@ -1307,7 +1308,11 @@ export function SpecSimulator() {
                   <tr>
                     <th>종목</th>
                     <th>진입</th>
+                    <th>매수가</th>
                     <th>청산</th>
+                    <th>매도가</th>
+                    <th>수량</th>
+                    <th>비중</th>
                     <th>손익</th>
                     <th>사유</th>
                   </tr>
@@ -1317,7 +1322,12 @@ export function SpecSimulator() {
                     <tr key={i}>
                       <td>{dispSym(t.symbol)}</td>
                       <td>{t.entryDate}</td>
+                      <td>{fmtWon(t.entryPrice)}</td>
                       <td>{t.exitDate ?? '보유중'}</td>
+                      <td>{fmtWon(t.exitPrice)}</td>
+                      <td>{t.qty > 0 ? t.qty.toLocaleString('ko-KR') : '—'}</td>
+                      {/* 비중 = 진입 직후 총자산(현금+보유 평가) 대비 매수금액. 슬롯 분할이라 보통 ≈ 100%/슬롯수 */}
+                      <td>{t.entryWeightPct != null ? `${t.entryWeightPct.toFixed(1)}%` : '—'}</td>
                       <td className={(t.pnlPct ?? 0) >= 0 ? 'pos' : 'neg'}>{t.pnlPct != null ? fmtPct(t.pnlPct, 2) : '—'}</td>
                       <td>{t.reason}</td>
                     </tr>

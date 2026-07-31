@@ -592,4 +592,21 @@ section('12) 평가 이월 — 봉이 없는 날은 진입가가 아니라 마�
   check('갭 이후 정상 복귀', after === before)
 }
 
+// --------------------------------------------------- 13) 트레이드 비중 표기
+section('13) 진입 비중(entryWeightPct) — 총자산 대비 매수금액')
+{
+  // 슬롯 1개 = 현금 전부 투입 → 비중 ≈ 100% (수량 내림만큼 약간 미달)
+  const p1: ConditionParams = { ...DEFAULT_CONDITION, maxPositions: 1, exits: [{ kind: 'timeExit', days: 3 }] }
+  const r1 = runConditionScreen({ AAA: flatThenBreakout(30, 10) }, d(0), p1, NOCOST)
+  const t1 = r1.trades[0]
+  check('청산 트레이드에 비중 존재', t1 != null && t1.entryWeightPct != null)
+  check('슬롯1 비중 ≈ 100%', (t1?.entryWeightPct ?? 0) > 90 && (t1?.entryWeightPct ?? 0) <= 100.5)
+
+  // 슬롯 4개 = 첫 진입은 현금의 1/4 → 비중 ≈ 25%
+  const p4: ConditionParams = { ...DEFAULT_CONDITION, maxPositions: 4, exits: [{ kind: 'timeExit', days: 3 }] }
+  const r4 = runConditionScreen({ AAA: flatThenBreakout(30, 10) }, d(0), p4, NOCOST)
+  const t4 = r4.trades[0]
+  check('슬롯4 비중 ≈ 25%', (t4?.entryWeightPct ?? 0) > 20 && (t4?.entryWeightPct ?? 0) <= 26)
+}
+
 finish()

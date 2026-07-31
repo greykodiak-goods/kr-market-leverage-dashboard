@@ -195,6 +195,7 @@ interface Position {
   entryIdx: number // 진입 시점의 캘린더 인덱스
   peak: number // 트레일링용 최고가
   lastClose: number // 마지막으로 관측된 종가 — 봉이 없는 날(정지·캘린더 불일치) 평가에 이월
+  entryWeightPct: number // 진입 직후 총자산 대비 매수금액 비중(%) — 청산 시 트레이드에 실어 표시
 }
 
 function buildCalendar(histories: Record<string, DailyBar[]>): string[] {
@@ -497,7 +498,14 @@ export function runStrategySpec(
     const gross = qty * fill
     const fee = gross * (cost.feePct / 100)
     cash -= gross + fee
-    positions.set(sym, { symbol: sym, entryDate: date, entryPrice: fill, qty, entryIdx: dayIdx, peak: peakInit, lastClose: rawPx })
+    const pos: Position = { symbol: sym, entryDate: date, entryPrice: fill, qty, entryIdx: dayIdx, peak: peakInit, lastClose: rawPx, entryWeightPct: 0 }
+    positions.set(sym, pos)
+    // 진입 직후 총자산(현금 + 전 포지션 평가 — 타 종목은 마지막 관측 종가, 신규는 체결가) 대비 비중.
+    // 그 시점까지의 정보만 쓰므로 인과성(규칙 1) 유지. 표시용이며 매매 판단에 쓰지 않는다.
+    let holdingsNow = 0
+    for (const p of positions.values()) holdingsNow += p.qty * p.lastClose
+    const eqNow = cash + holdingsNow
+    pos.entryWeightPct = eqNow > 0 ? (gross / eqNow) * 100 : 0
     events.push({
       date,
       action: '매수',
@@ -539,6 +547,7 @@ export function runStrategySpec(
       pnlPct,
       reason: kind === 'stopLoss' ? '손절' : kind === 'takeProfit' ? '익절' : '조건 매도',
       symbol: sym,
+      entryWeightPct: pos.entryWeightPct,
     })
     events.push({
       date,
