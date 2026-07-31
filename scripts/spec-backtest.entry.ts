@@ -1925,11 +1925,59 @@ async function decade() {
   log('⚠️ 첫 해·올해는 부분 연도. 유니버스 사후 선택·생존편향으로 절대 수치는 상한선 — 시뮬레이션이며 투자자문이 아니다.')
 }
 
+/**
+ * MODE=slots — 5개 모델 × 동시 보유 종목 수(슬롯) 1~10 수익 변화표 (2026-07-31 대표 질문).
+ * decade와 같은 10y 데이터·비용으로 슬롯만 바꿔 50회 실행, 셀 = CAGR% (MDD%).
+ */
+async function slots() {
+  const { histories, bench, tradable } = await loadAll('10y')
+  const uni = { ...baseSpec({}).universe, symbols: tradable }
+  const mk = (ma: number, hb: number, xm: number, buf: number, maxPositions: number): StrategySpec => ({
+    ...baseSpec({
+      entry: {
+        op: 'and',
+        nodes: [c(`${ma}일선돌파`, { kind: 'maCross', period: ma, dir: 'above' }), c(`${hb}일신고가`, { kind: 'highBreak', days: hb })],
+      },
+      exits: [{ kind: 'maBreak', maPeriod: xm, pct: buf }],
+      universe: uni,
+    }),
+    sizing: { maxPositions, mode: 'equalSlot' },
+  })
+  const models: { label: string; make: (n: number) => StrategySpec }[] = [
+    { label: '현행 MA20×신고20→40선·버퍼2%', make: (n) => mk(20, 20, 40, 2, n) },
+    { label: '도전자 MA15×신고20→40선·버퍼2%', make: (n) => mk(15, 20, 40, 2, n) },
+    { label: '17차후보 MA15×신고20→60선·버퍼2%', make: (n) => mk(15, 20, 60, 2, n) },
+    { label: 'MA25×신고20→20선', make: (n) => mk(25, 20, 20, 0, n) },
+    { label: '방어형 MA30×신고60→40선', make: (n) => mk(30, 60, 40, 0, n) },
+  ]
+  log('')
+  log('슬롯(동시 보유 종목 수) 1~10 × 5모델 — 최근 10y, 셀 = CAGR% (MDD%) [수익÷MDD]:')
+  log(`| 슬롯 | ${models.map((m) => m.label).join(' | ')} |`)
+  log(`|---|${models.map(() => '---').join('|')}|`)
+  const best: Record<string, { n: number; obj: number }> = {}
+  for (let n = 1; n <= 10; n++) {
+    const cells: string[] = []
+    for (const m of models) {
+      const r = runStrategySpec(histories, '0000-01-01', m.make(n), COST)
+      const s = stats(m.label, '10y', r, bench, COST.initialCapital)
+      const mddAbs = Math.abs(s.mddPct ?? 0)
+      const obj = mddAbs > 0.01 ? (s.totalPct ?? 0) / mddAbs : 0
+      cells.push(`${f1(s.cagrPct)}% (${f1(s.mddPct)}%) [${obj.toFixed(1)}]`)
+      if (!best[m.label] || obj > best[m.label].obj) best[m.label] = { n, obj }
+    }
+    log(`| ${n} | ${cells.join(' | ')} |`)
+  }
+  log('')
+  log(`수익÷MDD 최적 슬롯: ${models.map((m) => `${m.label.split(' ')[0]}=${best[m.label].n}`).join(' · ')}`)
+  log('⚠️ 슬롯이 적을수록 집중 — 수익·변동 모두 커지고 종목 선택 우연에 민감해진다. 사후 선택 유니버스 상한선, 투자자문 아님.')
+}
+
 const MODES: Record<string, () => Promise<void>> = {
   sweep,
   mine,
   mar,
   decade,
+  slots,
   payoff,
   era,
   tqqq,
