@@ -167,50 +167,107 @@ export interface EvalResult {
 }
 
 // ---- 지표 (전부 bars[0..i]만 사용) -----------------------------------------
+//
+// 지표 캐시: 시뮬 루프는 같은 bars 배열에 (지표, 기간) 조합을 날짜 수만큼 반복 계산한다
+// (80종목 × 4,000일 × MA20·MA40이면 창 합산만 수천만 회). 배열 단위로 전 구간을 한 번만
+// 계산해 두면 이후 조회는 O(1)이다. 각 원소는 **기존과 같은 순서의 창 루프**로 계산해
+// 부동소수 결과까지 완전히 동일하다(합산 순서가 다르면 경계 비교가 갈릴 수 있다).
+// 인과성(규칙 1): 원소 j는 j 이전 창만 읽으므로 미래참조가 없고, 절단 불변성도 유지된다.
+// bars는 로드 때마다 새 배열이므로 WeakMap 키로 안전하며, 길이가 바뀌면 다시 만든다.
+const indicatorCache = new WeakMap<DailyBar[], Map<string, { len: number; arr: Float64Array }>>()
+
+function cachedSeries(bars: DailyBar[], key: string, fill: (arr: Float64Array) => void): Float64Array {
+  let byKey = indicatorCache.get(bars)
+  if (!byKey) {
+    byKey = new Map()
+    indicatorCache.set(bars, byKey)
+  }
+  const hit = byKey.get(key)
+  if (hit && hit.len === bars.length) return hit.arr
+  const arr = new Float64Array(bars.length).fill(NaN)
+  fill(arr)
+  byKey.set(key, { len: bars.length, arr })
+  return arr
+}
+
+const seriesAt = (arr: Float64Array, i: number): number | null =>
+  i >= 0 && i < arr.length && !Number.isNaN(arr[i]) ? arr[i] : null
 
 export function sma(bars: DailyBar[], i: number, period: number): number | null {
-  if (i < period - 1 || period <= 0) return null
-  let s = 0
-  for (let k = i - period + 1; k <= i; k++) s += bars[k].c
-  return s / period
+  if (period <= 0) return null
+  const arr = cachedSeries(bars, `sma:${period}`, (a) => {
+    for (let j = period - 1; j < bars.length; j++) {
+      let s = 0
+      for (let k = j - period + 1; k <= j; k++) s += bars[k].c
+      a[j] = s / period
+    }
+  })
+  return seriesAt(arr, i)
 }
 
 export function rsi(bars: DailyBar[], i: number, period: number): number | null {
-  if (i < period || period <= 0) return null
-  let gain = 0
-  let loss = 0
-  for (let k = i - period + 1; k <= i; k++) {
-    const d = bars[k].c - bars[k - 1].c
-    if (d > 0) gain += d
-    else loss -= d
-  }
-  const avgG = gain / period
-  const avgL = loss / period
-  if (avgL === 0) return avgG === 0 ? 50 : 100
-  const rs = avgG / avgL
-  return 100 - 100 / (1 + rs)
+  if (period <= 0) return null
+  const arr = cachedSeries(bars, `rsi:${period}`, (a) => {
+    for (let j = period; j < bars.length; j++) {
+      let gain = 0
+      let loss = 0
+      for (let k = j - period + 1; k <= j; k++) {
+        const d = bars[k].c - bars[k - 1].c
+        if (d > 0) gain += d
+        else loss -= d
+      }
+      const avgG = gain / period
+      const avgL = loss / period
+      a[j] = avgL === 0 ? (avgG === 0 ? 50 : 100) : 100 - 100 / (1 + avgG / avgL)
+    }
+  })
+  return seriesAt(arr, i)
 }
 
 /** 당일을 **제외한** 직전 N일 최고 종가 (규칙 1-3 — 당일 포함하면 미래참조) */
 export function priorHigh(bars: DailyBar[], i: number, days: number): number | null {
-  if (i < days || days <= 0) return null
-  let m = -Infinity
-  for (let k = i - days; k <= i - 1; k++) m = Math.max(m, bars[k].c)
-  return Number.isFinite(m) ? m : null
+  if (days <= 0) return null
+  const arr = cachedSeries(bars, `phi:${days}`, (a) => {
+    // 단조 감소 덱으로 O(N) — max는 계산 순서와 무관해 기존 루프와 값이 동일하다
+    const dq = new Int32Array(bars.length)
+    let h = 0
+    let t = 0
+    for (let j = 0; j < bars.length; j++) {
+      while (t > h && dq[h] < j - days) h++
+      if (j >= days && t > h) a[j] = bars[dq[h]].c
+      while (t > h && bars[dq[t - 1]].c <= bars[j].c) t--
+      dq[t++] = j
+    }
+  })
+  return seriesAt(arr, i)
 }
 
 export function priorLow(bars: DailyBar[], i: number, days: number): number | null {
-  if (i < days || days <= 0) return null
-  let m = Infinity
-  for (let k = i - days; k <= i - 1; k++) m = Math.min(m, bars[k].c)
-  return Number.isFinite(m) ? m : null
+  if (days <= 0) return null
+  const arr = cachedSeries(bars, `plo:${days}`, (a) => {
+    const dq = new Int32Array(bars.length)
+    let h = 0
+    let t = 0
+    for (let j = 0; j < bars.length; j++) {
+      while (t > h && dq[h] < j - days) h++
+      if (j >= days && t > h) a[j] = bars[dq[h]].c
+      while (t > h && bars[dq[t - 1]].c >= bars[j].c) t--
+      dq[t++] = j
+    }
+  })
+  return seriesAt(arr, i)
 }
 
 export function avgVolume(bars: DailyBar[], i: number, days: number): number | null {
-  if (i < days || days <= 0) return null
-  let s = 0
-  for (let k = i - days; k <= i - 1; k++) s += bars[k].v
-  return s / days
+  if (days <= 0) return null
+  const arr = cachedSeries(bars, `avol:${days}`, (a) => {
+    for (let j = days; j < bars.length; j++) {
+      let s = 0
+      for (let k = j - days; k <= j - 1; k++) s += bars[k].v
+      a[j] = s / days
+    }
+  })
+  return seriesAt(arr, i)
 }
 
 export function changePctAt(bars: DailyBar[], i: number): number | null {
@@ -286,6 +343,7 @@ export function evaluateCondition(
   i: number,
   symbol: string,
   cs: CrossSection | null,
+  lite = false, // true면 표시용 value 문자열을 만들지 않는다 — 핫루프에서 toLocaleString이 지배적 비용이라
 ): CondEval {
   if (i < 0 || i >= bars.length) return { passed: false, value: null }
   const b = bars[i]
@@ -293,7 +351,7 @@ export function evaluateCondition(
   switch (c.kind) {
     case 'priceRange': {
       const ok = (c.min == null || b.c >= c.min) && (c.max == null || b.c <= c.max)
-      return { passed: ok, value: `${Math.round(b.c).toLocaleString('ko-KR')}원` }
+      return { passed: ok, value: lite ? null : `${Math.round(b.c).toLocaleString('ko-KR')}원` }
     }
     case 'changeRank': {
       if (!cs) return { passed: false, value: '횡단면 없음' }
@@ -306,17 +364,17 @@ export function evaluateCondition(
         if (Number.isFinite(v) && v > mine) better++
       }
       const rank = better + 1
-      return { passed: rank <= c.top, value: `${rank}위` }
+      return { passed: rank <= c.top, value: lite ? null : `${rank}위` }
     }
     case 'changePct': {
       const v = changePctAt(bars, i)
       if (v == null) return { passed: false, value: null }
       const ok = (c.min == null || v >= c.min) && (c.max == null || v <= c.max)
-      return { passed: ok, value: `${v >= 0 ? '+' : ''}${v.toFixed(2)}%` }
+      return { passed: ok, value: lite ? null : `${v >= 0 ? '+' : ''}${v.toFixed(2)}%` }
     }
     case 'candle': {
       const bull = b.c > b.o
-      return { passed: c.bull ? bull : !bull, value: bull ? '양봉' : '음봉' }
+      return { passed: c.bull ? bull : !bull, value: lite ? null : bull ? '양봉' : '음봉' }
     }
     case 'maCross': {
       const now = sma(bars, i, c.period)
@@ -324,13 +382,13 @@ export function evaluateCondition(
       if (now == null || prev == null || i < 1) return { passed: false, value: '데이터 부족' }
       const pc = bars[i - 1].c
       const ok = c.dir === 'above' ? b.c > now && pc <= prev : b.c < now && pc >= prev
-      return { passed: ok, value: `종가 ${Math.round(b.c).toLocaleString('ko-KR')} vs MA ${Math.round(now).toLocaleString('ko-KR')}` }
+      return { passed: ok, value: lite ? null : `종가 ${Math.round(b.c).toLocaleString('ko-KR')} vs MA ${Math.round(now).toLocaleString('ko-KR')}` }
     }
     case 'maPosition': {
       const now = sma(bars, i, c.period)
       if (now == null) return { passed: false, value: '데이터 부족' }
       const ok = c.dir === 'above' ? b.c > now : b.c < now
-      return { passed: ok, value: `종가 ${Math.round(b.c).toLocaleString('ko-KR')} vs MA ${Math.round(now).toLocaleString('ko-KR')}` }
+      return { passed: ok, value: lite ? null : `종가 ${Math.round(b.c).toLocaleString('ko-KR')} vs MA ${Math.round(now).toLocaleString('ko-KR')}` }
     }
     case 'maAlign': {
       const fast = sma(bars, i, c.fast)
@@ -338,47 +396,47 @@ export function evaluateCondition(
       if (fast == null || slow == null) return { passed: false, value: '데이터 부족' }
       return {
         passed: fast > slow,
-        value: `MA${c.fast} ${Math.round(fast).toLocaleString('ko-KR')} vs MA${c.slow} ${Math.round(slow).toLocaleString('ko-KR')}`,
+        value: lite ? null : `MA${c.fast} ${Math.round(fast).toLocaleString('ko-KR')} vs MA${c.slow} ${Math.round(slow).toLocaleString('ko-KR')}`,
       }
     }
     case 'volume':
-      return { passed: Number.isFinite(b.v) && b.v >= c.min, value: `${Math.round(b.v).toLocaleString('ko-KR')}주` }
+      return { passed: Number.isFinite(b.v) && b.v >= c.min, value: lite ? null : `${Math.round(b.v).toLocaleString('ko-KR')}주` }
     case 'tradingValue': {
       const tv = b.c * b.v
-      return { passed: Number.isFinite(tv) && tv >= c.min, value: `${Math.round(tv / 1e8).toLocaleString('ko-KR')}억` }
+      return { passed: Number.isFinite(tv) && tv >= c.min, value: lite ? null : `${Math.round(tv / 1e8).toLocaleString('ko-KR')}억` }
     }
     case 'volumeSurge': {
       const avg = avgVolume(bars, i, c.days)
       if (avg == null || avg <= 0) return { passed: false, value: '데이터 부족' }
       const r = b.v / avg
-      return { passed: r >= c.ratio, value: `${r.toFixed(1)}배` }
+      return { passed: r >= c.ratio, value: lite ? null : `${r.toFixed(1)}배` }
     }
     case 'disparity': {
       const m = sma(bars, i, c.period)
       if (m == null || m <= 0) return { passed: false, value: '데이터 부족' }
       const d = (b.c / m) * 100
       const ok = (c.min == null || d >= c.min) && (c.max == null || d <= c.max)
-      return { passed: ok, value: `${d.toFixed(1)}%` }
+      return { passed: ok, value: lite ? null : `${d.toFixed(1)}%` }
     }
     case 'rsi': {
       const v = rsi(bars, i, c.period)
       if (v == null) return { passed: false, value: '데이터 부족' }
       const ok = (c.min == null || v >= c.min) && (c.max == null || v <= c.max)
-      return { passed: ok, value: v.toFixed(1) }
+      return { passed: ok, value: lite ? null : v.toFixed(1) }
     }
     case 'highBreak': {
       const h = priorHigh(bars, i, c.days)
       if (h == null) return { passed: false, value: '데이터 부족' }
-      return { passed: b.c > h, value: `종가 ${Math.round(b.c).toLocaleString('ko-KR')} vs 직전고 ${Math.round(h).toLocaleString('ko-KR')}` }
+      return { passed: b.c > h, value: lite ? null : `종가 ${Math.round(b.c).toLocaleString('ko-KR')} vs 직전고 ${Math.round(h).toLocaleString('ko-KR')}` }
     }
     case 'lowBreak': {
       const l = priorLow(bars, i, c.days)
       if (l == null) return { passed: false, value: '데이터 부족' }
-      return { passed: b.c < l, value: `종가 ${Math.round(b.c).toLocaleString('ko-KR')} vs 직전저 ${Math.round(l).toLocaleString('ko-KR')}` }
+      return { passed: b.c < l, value: lite ? null : `종가 ${Math.round(b.c).toLocaleString('ko-KR')} vs 직전저 ${Math.round(l).toLocaleString('ko-KR')}` }
     }
     case 'streak': {
       const n = streakLen(bars, i, c.dir)
-      return { passed: n >= c.days, value: `${n}일` }
+      return { passed: n >= c.days, value: lite ? null : `${n}일` }
     }
   }
 }
@@ -393,21 +451,30 @@ export function evaluateEntry(
   i: number,
   symbol: string,
   cs: CrossSection | null,
+  collectDetail = true, // false = 핫루프 모드: 상세·문자열 생략 + 단축 평가 (passed 결과는 동일 — 조건은 전부 순수 함수)
 ): EvalResult {
   const detail: EvalResult['detail'] = []
 
   const walk = (n: ConditionNode): boolean => {
     switch (n.op) {
-      case 'and':
-        // 전부 평가한다(단축 평가 안 함) — 화면에 모든 조건의 통과 여부를 보여야 하므로
-        return n.nodes.map(walk).every(Boolean) && n.nodes.length > 0
-      case 'or':
-        return n.nodes.map(walk).some(Boolean)
+      case 'and': {
+        if (collectDetail)
+          // 전부 평가한다(단축 평가 안 함) — 화면에 모든 조건의 통과 여부를 보여야 하므로
+          return n.nodes.map(walk).every(Boolean) && n.nodes.length > 0
+        if (n.nodes.length === 0) return false
+        for (const child of n.nodes) if (!walk(child)) return false
+        return true
+      }
+      case 'or': {
+        if (collectDetail) return n.nodes.map(walk).some(Boolean)
+        for (const child of n.nodes) if (walk(child)) return true
+        return false
+      }
       case 'not':
         return !walk(n.node)
       case 'cond': {
-        const r = evaluateCondition(n.cond, bars, i, symbol, cs)
-        detail.push({ label: conditionLabel(n.cond), passed: r.passed, value: r.value })
+        const r = evaluateCondition(n.cond, bars, i, symbol, cs, !collectDetail)
+        if (collectDetail) detail.push({ label: conditionLabel(n.cond), passed: r.passed, value: r.value })
         return r.passed
       }
     }

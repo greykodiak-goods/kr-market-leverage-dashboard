@@ -23,7 +23,7 @@
 
 import type { DailyBar, EquityPoint, SimEvent, Trade } from './types'
 import type { CrossSection, ExitKind, ExitRule, StrategySpec } from './strategySpec'
-import { SPEC_VERSION, changePctAt, evaluateEntry, evaluatePersistence } from './strategySpec'
+import { SPEC_VERSION, changePctAt, evaluateEntry, evaluatePersistence, sma } from './strategySpec'
 
 // ---- 매도 규칙 ------------------------------------------------------------
 //
@@ -101,12 +101,9 @@ export interface CostSettings {
 
 // ---- 조건 판정 ------------------------------------------------------------
 
-/** i 시점까지만 사용하는 단순이동평균. i < period-1 이면 null. */
+/** i 시점까지만 사용하는 단순이동평균. i < period-1 이면 null. (캐시된 sma에 위임 — 값 동일) */
 export function smaAt(bars: DailyBar[], i: number, period: number): number | null {
-  if (i < period - 1) return null
-  let s = 0
-  for (let k = i - period + 1; k <= i; k++) s += bars[k].c
-  return s / period
+  return sma(bars, i, period)
 }
 
 export interface CondCheck {
@@ -410,7 +407,7 @@ export function runStrategySpec(
       : (() => {
           const ri = regimeIdx.get(date)
           if (regimeBars == null || ri == null) return false
-          return evaluateEntry(spec.regime.entry, regimeBars, ri, spec.regime.symbol, null).passed
+          return evaluateEntry(spec.regime.entry, regimeBars, ri, spec.regime.symbol, null, false).passed
         })()
     if (!isLast && regimeOn && positions.size < maxPositions) {
       // 횡단면 — 그날 봉이 있는 종목의 등락률·거래대금 (changeRank 조건이 쓴다)
@@ -427,13 +424,15 @@ export function runStrategySpec(
       }
       const rows: ConditionScreenRow[] = []
       for (const [sym, bi] of todayIdx) {
-        const r = evaluateEntry(spec.entry, histories[sym], bi, sym, cs)
+        // 핫루프 — 상세 사유는 만들지 않는다(표시되는 건 마지막 스크리닝뿐이라 루프 뒤에
+        // screenOnDate 로 그날만 다시 만든다). passed 판정은 동일하다.
+        const r = evaluateEntry(spec.entry, histories[sym], bi, sym, cs, false)
         rows.push({
           symbol: sym,
           changePct: cs.changePct.get(sym) ?? null,
           rank: null,
           passed: r.passed,
-          reasons: r.detail.filter((x) => !x.passed).map((x) => `${x.label} 미충족${x.value ? ` (${x.value})` : ''}`),
+          reasons: [],
         })
       }
       // 랭킹 — 후보가 슬롯보다 많을 때의 우선순위 (rank는 표시용)
@@ -571,6 +570,14 @@ export function runStrategySpec(
     count: v.n,
     avgPnlPct: v.n > 0 ? v.sum / v.n : null,
   }))
+
+  // 마지막 스크리닝만 상세 사유를 다시 만든다 — 루프는 lite 평가라 reasons가 비어 있고,
+  // 화면에 실제로 표시되는 날은 이 하루뿐이다. screenOnDate 는 같은 evaluateEntry·랭킹
+  // 규칙을 쓰므로 passed·rank 가 루프 결과와 동일하다(결정적).
+  if (lastScreenDate) {
+    const detailed = screenOnDate(histories, spec, lastScreenDate)
+    if (detailed.rows.length) lastScreen = detailed.rows
+  }
 
   return {
     equity,
