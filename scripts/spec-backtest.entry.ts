@@ -1735,9 +1735,120 @@ async function mine() {
   log('⚠️ 유니버스가 "오늘의 시총 상위"라 수치는 부풀려질 수 있다(선택편향). 조건 간 상대 비교 중심으로 볼 것.')
 }
 
+/**
+ * MODE=mar — "2011~2021 구간에서 수익률÷|MDD| 최대 조건식 찾기" (2026-07-31 대표 지시).
+ *
+ * 우리 조건 계열(MA돌파 × 신고가 × 이평이탈 청산) 안에서 격자 탐색한다:
+ *   진입 이평 {5,10,15,20,25,30} × 신고가 {없음,20,40,60} × 청산 이평 {20,40,60}
+ *   × 이탈버퍼 {0,2%} × 손절 {없음,−7%} × 지수레짐 {없음,20일선} = 576조합
+ * 목적함수 = 총수익률(%) ÷ |MDD(%)| (대표 요청식 "수익률/(mdd×100)"). MAR(CAGR÷|MDD|) 병기.
+ * 매매 30건 미만 조합은 제외(표본 없는 우연 조합이 비율 지표에서 1등 하는 것을 막는다).
+ *
+ * ⚠️ 과최적화 경고(규칙 5): 한 구간에서 1등을 "찾는" 행위 자체가 곡선맞춤이다.
+ * 그래서 상위 조합을 2022~현재(탐색에 안 쓴 구간)에 그대로 대입한 OOS 성적을 병기하고,
+ * 판정은 "최적화 구간 1등"이 아니라 "OOS까지 버티는 조합"으로 읽는다.
+ */
+async function mar() {
+  const { histories, bench, tradable } = await loadAll('since:2009-01-01')
+  const uni = { ...baseSpec({}).universe, symbols: tradable }
+  const REGIME20: StrategySpec['regime'] = {
+    symbol: KOSPI_INDEX,
+    entry: { op: 'and', nodes: [c('지수20일선위', { kind: 'maPosition', period: 20, dir: 'above' })] },
+  }
+  type Combo = { ma: number; hb: number; xm: number; buf: number; sl: number; rg: boolean }
+  const combos: Combo[] = []
+  for (const ma of [5, 10, 15, 20, 25, 30])
+    for (const hb of [0, 20, 40, 60])
+      for (const xm of [20, 40, 60])
+        for (const buf of [0, 2])
+          for (const sl of [0, 7])
+            for (const rg of [false, true]) combos.push({ ma, hb, xm, buf, sl, rg })
+
+  const specOf = (k: Combo): StrategySpec => {
+    const nodes = [c(`${k.ma}일선돌파`, { kind: 'maCross', period: k.ma, dir: 'above' })]
+    if (k.hb) nodes.push(c(`${k.hb}일신고가`, { kind: 'highBreak', days: k.hb }))
+    const exits: StrategySpec['exits'] = []
+    if (k.sl) exits.push({ kind: 'stopLoss', pct: k.sl })
+    exits.push({ kind: 'maBreak', maPeriod: k.xm, pct: k.buf })
+    return baseSpec({ entry: { op: 'and', nodes }, exits, universe: uni, regime: k.rg ? REGIME20 : null })
+  }
+  const nameOf = (k: Combo) =>
+    `MA${k.ma}${k.hb ? `×신고${k.hb}` : ''}→${k.xm}선${k.buf ? `·버퍼${k.buf}%` : ''}${k.sl ? `·손절${k.sl}%` : ''}${k.rg ? '·레짐' : ''}`
+
+  // 최적화 구간: 2011-01-01 ~ 2021-12-31 (2009년부터 로드해 워밍업 확보)
+  const OPT_END = '2021-12-31'
+  const histOpt: Record<string, DailyBar[]> = {}
+  for (const [s, bars] of Object.entries(histories)) histOpt[s] = bars.filter((b) => b.date <= OPT_END)
+  const benchOpt = bench.filter((b) => b.date <= OPT_END)
+
+  log('')
+  log(`격자 ${combos.length}조합 — 최적화 구간 2011-01-01~${OPT_END}, 목적함수 = 총수익% ÷ |MDD%| (매매≥30 필터)`)
+  type Row = { k: Combo; s: RunStats; obj: number | null; mar: number | null }
+  const rows: Row[] = []
+  let done = 0
+  for (const k of combos) {
+    const r = runStrategySpec(histOpt, '2011-01-01', specOf(k), COST)
+    const s = stats(nameOf(k), '2011-2021', r, benchOpt, COST.initialCapital)
+    const mddAbs = Math.abs(s.mddPct ?? 0)
+    const obj = mddAbs > 0.01 ? (s.totalPct ?? 0) / mddAbs : null
+    const marRatio = mddAbs > 0.01 && s.cagrPct != null ? s.cagrPct / mddAbs : null
+    rows.push({ k, s, obj, mar: marRatio })
+    if (++done % 96 === 0) log(`… ${done}/${combos.length}`)
+  }
+  const eligible = rows.filter((r) => r.obj != null && (r.s.trades ?? 0) >= 30)
+  eligible.sort((a, b) => (b.obj ?? 0) - (a.obj ?? 0))
+  const excluded = rows.length - eligible.length
+
+  log('')
+  log(`적격 ${eligible.length}조합 (매매<30 또는 MDD≈0 제외 ${excluded})`)
+  log('')
+  log('상위 15 (최적화 구간 2011~2021):')
+  log('| # | 조건식 | **수익÷MDD** | MAR(CAGR÷MDD) | 총수익 | CAGR | MDD | 알파(연) | 매매 | 승률 |')
+  log('|---|---|---|---|---|---|---|---|---|---|')
+  eligible.slice(0, 15).forEach((r, i) => {
+    log(
+      `| ${i + 1} | ${nameOf(r.k)} | **${r.obj!.toFixed(2)}** | ${r.mar?.toFixed(2) ?? '—'} | ${f1(r.s.totalPct)}% | ${f1(
+        r.s.cagrPct,
+      )}% | ${f1(r.s.mddPct)}% | ${f1(r.s.alphaPct)}%p | ${r.s.trades} | ${r.s.winRatePct?.toFixed(0) ?? '—'}% |`,
+    )
+  })
+
+  // 현행 표준(MA20×신고20→40선·버퍼2%)의 순위도 함께
+  const curIdx = eligible.findIndex((r) => r.k.ma === 20 && r.k.hb === 20 && r.k.xm === 40 && r.k.buf === 2 && !r.k.sl && !r.k.rg)
+  if (curIdx >= 0) {
+    const cur = eligible[curIdx]
+    log('')
+    log(`현행 표준(MA20×신고20→40선·버퍼2%)의 위치: ${curIdx + 1}위 / ${eligible.length} — 수익÷MDD ${cur.obj!.toFixed(2)}, 총수익 ${f1(cur.s.totalPct)}%, MDD ${f1(cur.s.mddPct)}%`)
+  }
+
+  // OOS: 탐색에 쓰지 않은 2022-01-01~현재 — 상위 10 + 현행 표준
+  log('')
+  log('OOS 검증 (2022-01-01~현재 — 탐색에 쓰지 않은 구간):')
+  log('| # | 조건식 | 수익÷MDD | 총수익 | CAGR | MDD | 알파(연) | 매매 |')
+  log('|---|---|---|---|---|---|---|---|')
+  const oosTargets = eligible.slice(0, 10)
+  if (curIdx >= 10) oosTargets.push(eligible[curIdx])
+  oosTargets.forEach((r, i) => {
+    const ro = runStrategySpec(histories, '2022-01-01', specOf(r.k), COST)
+    const so = stats(nameOf(r.k), 'OOS', ro, bench, COST.initialCapital)
+    const mddAbs = Math.abs(so.mddPct ?? 0)
+    const objO = mddAbs > 0.01 ? (so.totalPct ?? 0) / mddAbs : null
+    log(
+      `| ${i < 10 ? i + 1 : '현행'} | ${nameOf(r.k)} | ${objO?.toFixed(2) ?? '—'} | ${f1(so.totalPct)}% | ${f1(so.cagrPct)}% | ${f1(
+        so.mddPct,
+      )}% | ${f1(so.alphaPct)}%p | ${so.trades} |`,
+    )
+  })
+  log('')
+  log('읽는 법: 1열 순위는 "과거 구간 곡선맞춤 순위"다. 채택 판단은 OOS에서도 수익÷MDD·알파가 살아있는 조합으로 —')
+  log('최적화 구간 1등이 OOS에서 무너지면 그 조합이 아니라 그 근처의 완만한 조합(파라미터 고원)을 고른다.')
+  log('⚠️ 유니버스는 오늘의 시총 상위(사후 선택·생존편향) — 절대 수치는 상한선이며, 시뮬레이션일 뿐 투자자문이 아니다.')
+}
+
 const MODES: Record<string, () => Promise<void>> = {
   sweep,
   mine,
+  mar,
   payoff,
   era,
   tqqq,
