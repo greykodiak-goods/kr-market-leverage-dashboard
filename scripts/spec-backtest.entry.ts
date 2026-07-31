@@ -1190,6 +1190,82 @@ async function challenger() {
 }
 
 /**
+ * 초장기(2000~) 결과 전수검사 (MODE=longcheck) — "+8,986%가 가능하냐" (2026-07-31 대표).
+ *
+ * UI에서 2000-01~2026-07 승자 조합이 총수익 +8,985.8%(연환산 +18.6%)를 냈다.
+ * 검사 항목:
+ *   A. 연대별 분해 — 수익이 특정 연대 몰빵인지, 연환산 알파가 기존 실측(7차 +9.7%p)과 정합인지
+ *   B. 연도별 유니버스 커버리지 — 2000년대 초 표본이 몇 종목뿐인지(집중 리스크·선택편향 극대 구간)
+ *   C. 이상 트레이드 검출 — 단일 매매 수익 상위 10개(저유동성·데이터 오류 의심 구간 식별)
+ */
+async function longcheck() {
+  const { histories, bench, tradable } = await loadAll('since:1999-06-01')
+  const spec = baseSpec({
+    entry: {
+      op: 'and',
+      nodes: [c('돌파', { kind: 'maCross', period: 20, dir: 'above' }), c('신고가', { kind: 'highBreak', days: 20 })],
+    },
+    exits: [{ kind: 'maBreak', maPeriod: 40, pct: 2 }],
+    universe: { ...baseSpec({}).universe, symbols: tradable },
+  })
+
+  // ---- B. 연도별 커버리지 ----------------------------------------------------
+  log('')
+  log('### B. 연도별 유니버스 커버리지 (그 해 1월에 시세가 존재한 종목 수 / 78)')
+  const years: number[] = []
+  for (let y = 2000; y <= new Date().getFullYear(); y += 2) years.push(y)
+  const cov = years
+    .map((y) => {
+      const n = tradable.filter((s) => (histories[s]?.[0]?.date ?? '9999') <= `${y}-01-31`).length
+      return `${y}: ${n}`
+    })
+    .join(' · ')
+  log(cov)
+
+  // ---- A. 연대별 분해 --------------------------------------------------------
+  log('')
+  log('### A. 연대별 분해 (같은 스펙 · 종료일 절단)')
+  log('| 구간 | 총수익 | CAGR | 벤치CAGR | 알파(연) | MDD | 매매 | 승률 |')
+  log('|---|---|---|---|---|---|---|---|')
+  const spans: [string, string, string][] = [
+    ['전체 2000~', '2000-01-01', '9999-12-31'],
+    ['2000–2004', '2000-01-01', '2004-12-31'],
+    ['2005–2009', '2005-01-01', '2009-12-31'],
+    ['2010–2015', '2010-01-01', '2015-12-31'],
+    ['2016–2023', '2016-01-01', '2023-12-31'],
+    ['2024~현재', '2024-01-01', '9999-12-31'],
+  ]
+  let fullTrades: ConditionResult['trades'] = []
+  for (const [label, start, end] of spans) {
+    const hist: Record<string, DailyBar[]> = {}
+    for (const [s, bars] of Object.entries(histories)) hist[s] = bars.filter((b) => b.date <= end)
+    const benchCut = bench.filter((b) => b.date <= end)
+    const r = runStrategySpec(hist, start, spec, COST)
+    if (label.startsWith('전체')) fullTrades = r.trades
+    const s = stats(label, label, r, benchCut, COST.initialCapital)
+    log(
+      `| ${label} | ${f1(s.totalPct)}% | **${f1(s.cagrPct)}%** | ${f1(s.benchCagrPct)}% | ${f1(s.alphaPct)}%p | ${f1(
+        s.mddPct,
+      )}% | ${s.trades} | ${s.winRatePct?.toFixed(0) ?? '—'}% |`,
+    )
+  }
+
+  // ---- C. 이상 트레이드 검출 -------------------------------------------------
+  log('')
+  log('### C. 단일 매매 수익 상위 10 (저유동성·데이터 오류 의심 구간 수동 확인용)')
+  const closed = fullTrades.filter((t) => t.exitDate != null && t.pnlPct != null)
+  const top = [...closed].sort((a, b) => (b.pnlPct ?? 0) - (a.pnlPct ?? 0)).slice(0, 10)
+  for (const t of top) log(`- ${t.symbol} ${t.entryDate} → ${t.exitDate} : ${f2(t.pnlPct ?? 0)}%`)
+  const over100 = closed.filter((t) => (t.pnlPct ?? 0) > 100).length
+  const totalWinPnl = closed.filter((t) => (t.pnlPct ?? 0) > 0).reduce((s2, t) => s2 + (t.pnlPct ?? 0), 0)
+  const top10Share = totalWinPnl > 0 ? (top.reduce((s2, t) => s2 + (t.pnlPct ?? 0), 0) / totalWinPnl) * 100 : 0
+  log(`+100% 초과 매매: ${over100}건 / ${closed.length} · 상위 10개가 전체 이익 합의 ${top10Share.toFixed(1)}% 기여`)
+  log('')
+  log('⚠️ 2000년대 초는 표본이 얇고(커버리지 참조) 오늘의 시총 상위라는 선택편향이 극대인 구간 — 절대 수치는 상한선.')
+  log('⚠️ 시뮬레이션이며 투자자문이 아니다.')
+}
+
+/**
  * 코스피 상승추세 레짐 기준 탐색 (MODE=regime) — 2026-07-30 대표 지시.
  *
  * "코스피 지수가 상승추세일 때만 진입"을 전제로, '상승추세'의 판단 기준 후보 7종을
@@ -1671,6 +1747,7 @@ const MODES: Record<string, () => Promise<void>> = {
   robust,
   challenger,
   regime,
+  longcheck,
   backtest: main,
 }
 const entry = MODES[process.env.MODE ?? 'backtest'] ?? main
