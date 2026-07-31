@@ -34,6 +34,12 @@ export function createKiwoomClient({ appKey, appSecret, baseUrl, fetchImpl = fet
     lastCallAt = Date.now()
   }
 
+  // return_code/return_msg 는 시크릿이 아니라 API 상태 진단 필드 — 이 둘만 값을 노출한다.
+  const apiStatus = (json) =>
+    json && (json.return_code != null || json.return_msg)
+      ? ` · return_code=${json.return_code} return_msg="${json.return_msg ?? ''}"`
+      : ''
+
   /** 접근 토큰 발급 — 토큰 값은 반환하지 않는다(길이만). */
   async function issueToken() {
     await throttle()
@@ -43,9 +49,11 @@ export function createKiwoomClient({ appKey, appSecret, baseUrl, fetchImpl = fet
       body: JSON.stringify({ grant_type: 'client_credentials', appkey: appKey, secretkey: appSecret }),
     })
     const json = await res.json().catch(() => ({}))
-    if (!res.ok) throw new Error(`토큰 발급 실패 HTTP ${res.status} — 응답 키: [${Object.keys(json).join(', ')}]`)
+    if (!res.ok)
+      throw new Error(`토큰 발급 실패 HTTP ${res.status} — 응답 키: [${Object.keys(json).join(', ')}]${apiStatus(json)}`)
     token = json.token ?? json.access_token ?? null
-    if (!token) throw new Error(`토큰 필드를 못 찾음 — 응답 키: [${Object.keys(json).join(', ')}] (문서 대조 필요)`)
+    if (!token)
+      throw new Error(`토큰 필드를 못 찾음 — 응답 키: [${Object.keys(json).join(', ')}]${apiStatus(json)} (문서 대조 필요)`)
     // 만료 필드 형식이 확정될 때까지 보수적으로 23시간 캐시 [미검증]
     tokenExpiresAt = Date.now() + 23 * 3600e3
     return { ok: true, tokenLength: String(token).length }
@@ -74,7 +82,7 @@ export function createKiwoomClient({ appKey, appSecret, baseUrl, fetchImpl = fet
       body: JSON.stringify(body),
     })
     const json = await res.json().catch(() => ({}))
-    if (!res.ok) throw new Error(`${apiId} HTTP ${res.status} — 응답 키: [${Object.keys(json).join(', ')}]`)
+    if (!res.ok) throw new Error(`${apiId} HTTP ${res.status} — 응답 키: [${Object.keys(json).join(', ')}]${apiStatus(json)}`)
     return { json, cont: { contYn: res.headers.get('cont-yn'), nextKey: res.headers.get('next-key') } }
   }
 
