@@ -546,6 +546,7 @@ export function SpecSimulator() {
       const effective: StrategySpec = { ...spec, universe: { ...spec.universe, symbols: tradable } }
       const res = runStrategySpec(histories, startDate || '0000-00-00', effective, cost)
       setResult(res)
+      setTradesShown(12) // 새 실행마다 접힌 상태로 시작 — '전체 보기'로 전 기간 이력 열람
 
       // 벤치마크 — 같은 구간 KODEX 200 단순보유 (규칙 5: 판정은 알파 기준)
       setProgress('벤치마크 로딩…')
@@ -620,7 +621,10 @@ export function SpecSimulator() {
     }
   }
 
-  const recentTrades = result ? [...result.trades].slice(-12).reverse() : []
+  // 매매 이력 — 최신순 전체를 들고, 화면엔 조금씩 펼친다(전량 즉시 렌더는 수천 행에서 버벅임)
+  const [tradesShown, setTradesShown] = useState(12)
+  const allTrades = result ? [...result.trades].reverse() : []
+  const recentTrades = allTrades.slice(0, tradesShown)
   const screenRows = result ? result.lastScreen.slice(0, 12) : []
 
   return (
@@ -986,9 +990,12 @@ export function SpecSimulator() {
             </div>
           )}
 
-          {/* 최근 매매 */}
+          {/* 매매 이력 (최신순 · 전체 열람 가능) */}
           {recentTrades.length > 0 && (
             <div className="bt-table-wrap bt-trades-table">
+              <div className="bt-chart-caption">
+                매매 이력 {recentTrades.length.toLocaleString()} / {allTrades.length.toLocaleString()}건 (최신순)
+              </div>
               <table>
                 <thead>
                   <tr>
@@ -1011,6 +1018,16 @@ export function SpecSimulator() {
                   ))}
                 </tbody>
               </table>
+              {allTrades.length > tradesShown && (
+                <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                  <button type="button" className="bt-btn-mini" onClick={() => setTradesShown((n) => n + 200)}>
+                    더 보기 +200
+                  </button>
+                  <button type="button" className="bt-btn-mini" onClick={() => setTradesShown(allTrades.length)}>
+                    전체 보기 ({allTrades.length.toLocaleString()}건)
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
