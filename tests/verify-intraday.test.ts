@@ -85,6 +85,14 @@ section('2-1) 구조 위반 각각 검출')
   eq('장외 시각 히스토그램(08:50=530분)', s.outOfSessionTimes.get(530), 1)
 }
 {
+  // 장후 시간외 종가매매 봉(15:35 시작 — 2026-07-31 실측: 하루 ~1개, 체결가=당일 종가)
+  // 은 장외 위반이 아니라 별도 분류다. WARN을 내면 80종목 전부가 영구 오탐이 된다.
+  const withAh = [...cleanDay(D0), { ts: D0 + 78 * FIVE_MIN + FIVE_MIN, o: 100, h: 100, l: 100, c: 100, v: 10 }]
+  const s = checkStructure(withAh)
+  eq('시간외 종가 봉(15:35) 분류', s.afterHours, 1)
+  eq('시간외 봉은 장외 위반 아님', s.outOfSession, 0)
+}
+{
   const thin = cleanDay(D0).slice(0, 40) // 40/78 = 51%
   const s = checkStructure(thin)
   eq('구멍 난 날 검출', s.thinDays.length, 1)
@@ -198,6 +206,14 @@ section('6) 판정 — FAIL/WARN/PASS')
   const yahooSys = verdictOf({ structure, splices: [], kiwoomCmp: { n: 100, badPct: 0, avgAbsDevPct: 0 }, yahooCmp: { n: 100, badPct: 98, avgAbsDevPct: 0.2, medianSignedDevPct: 0.2 }, yahooVol: { n: 100, medianRatio: 0.9 } })
   eq('Yahoo 계통 편차 → WARN(FAIL 아님)', yahooSys.level, 'WARN')
   check('WARN 사유에 보정 기준 명시', yahooSys.warns.some((w: string) => w.includes('보정 기준')))
+
+  // 거래량: 키움(같은 소스)과 맞으면 Yahoo와만 어긋나도 "Yahoo 측 이상"으로 분류 (010120 실측 사례)
+  const volYahooOnly = verdictOf({ structure, splices: [], kiwoomCmp: { n: 100, badPct: 0, avgAbsDevPct: 0 }, kiwoomVol: { n: 100, medianRatio: 1.0 }, yahooCmp: { n: 100, badPct: 0, avgAbsDevPct: 0, medianSignedDevPct: 0 }, yahooVol: { n: 100, medianRatio: 0.2 } })
+  eq('거래량 Yahoo만 불일치 → WARN', volYahooOnly.level, 'WARN')
+  check('사유가 Yahoo 측 이상', volYahooOnly.warns.some((w: string) => w.includes('Yahoo 측 이상')))
+
+  const volKiwoomBad = verdictOf({ structure, splices: [], kiwoomCmp: { n: 100, badPct: 0, avgAbsDevPct: 0 }, kiwoomVol: { n: 100, medianRatio: 0.6 }, yahooCmp: null, yahooVol: null })
+  check('키움 대비 거래량 결측 → WARN(결측 의심)', volKiwoomBad.warns.some((w: string) => w.includes('결측')))
 }
 
 finish()

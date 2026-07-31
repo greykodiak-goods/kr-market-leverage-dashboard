@@ -39,6 +39,7 @@ export function checkStructure(bars) {
     offGrid: 0,
     outOfSession: 0,
     outOfSessionTimes: new Map(),
+    afterHours: 0,
     weekend: 0,
     dup: 0,
     unsorted: 0,
@@ -59,7 +60,13 @@ export function checkStructure(bars) {
     else if (b.l > Math.min(b.o, b.c) + 1e-9 || b.h < Math.max(b.o, b.c) - 1e-9) r.ohlcBad++
     if (b.ts % FIVE_MIN !== 0) r.offGrid++
     const mod = kstMinOfDay(b.ts)
-    if (mod < 540 || mod > 930) {
+    if (mod > 930 && mod <= 965) {
+      // 장후 시간외 종가매매 봉(15:35~16:05 시작시각) — 2026-07-31 실측으로 확정:
+      // 하루 ~1개, 유동성 비례, 체결가는 당일 종가와 동일(키움 일봉 교차 0.00x%로 확인).
+      // 데이터 오류가 아니므로 WARN 대상이 아니다. 단 장중 전략 엔진은 이 봉을 신호에
+      // 쓰면 안 되므로(정규장 밖) 개수를 따로 세어 보고한다.
+      r.afterHours++
+    } else if (mod < 540 || mod > 930) {
       r.outOfSession++
       // 어느 시각의 봉이 장외로 찍히는지 — 원인 진단용(예: 전부 15:35면 종가 동시호가 표기 문제)
       r.outOfSessionTimes.set(mod, (r.outOfSessionTimes.get(mod) ?? 0) + 1)
@@ -172,7 +179,7 @@ export function compareVolume(aggDaily, refDaily, { onlyDates = null } = {}) {
  * 키움 일봉 대조는 같은 소스·같은 보정이라 편차가 사실상 0이어야 정상(엄격),
  * Yahoo 대조는 보정 정책이 달라 계통 편차가 날 수 있다(느슨 — 계통이면 WARN에 사유 표시).
  */
-export function verdictOf({ structure, splices, kiwoomCmp, yahooCmp, yahooVol }) {
+export function verdictOf({ structure, splices, kiwoomCmp, kiwoomVol, yahooCmp, yahooVol }) {
   const fails = []
   const warns = []
   const s = structure
@@ -206,9 +213,18 @@ export function verdictOf({ structure, splices, kiwoomCmp, yahooCmp, yahooVol })
           : `Yahoo 산발 불일치 ${yahooCmp.badPct.toFixed(1)}% (특정일 오류 의심 — worst 확인)`,
       )
   }
+  // 거래량: 키움 일봉(같은 소스) 대조가 1차 기준 — 여기가 어긋나면 우리 데이터 결측·중복.
+  // 키움과는 맞는데 Yahoo와만 어긋나면 Yahoo 측 이상(보정·단위 차이)으로 분류한다.
+  const kiwoomVolOk = kiwoomVol && kiwoomVol.n && kiwoomVol.medianRatio != null && kiwoomVol.medianRatio >= 0.9 && kiwoomVol.medianRatio <= 1.05
+  if (kiwoomVol && kiwoomVol.n && kiwoomVol.medianRatio != null && !kiwoomVolOk)
+    warns.push(`키움 일봉 대비 거래량 비율 ${kiwoomVol.medianRatio.toFixed(2)} (봉 결측·중복 의심)`)
   if (yahooVol && yahooVol.n && yahooVol.medianRatio != null) {
     if (yahooVol.medianRatio < 0.5 || yahooVol.medianRatio > 1.1)
-      warns.push(`거래량 비율 이상 중앙값 ${yahooVol.medianRatio.toFixed(2)} (결측·중복·단위 의심)`)
+      warns.push(
+        kiwoomVolOk
+          ? `거래량 Yahoo와만 불일치(중앙값 ${yahooVol.medianRatio.toFixed(2)}) — 키움 일봉과는 일치, Yahoo 측 이상 [추정]`
+          : `거래량 비율 이상 중앙값 ${yahooVol.medianRatio.toFixed(2)} (결측·중복·단위 의심)`,
+      )
   }
   return { level: fails.length ? 'FAIL' : warns.length ? 'WARN' : 'PASS', fails, warns }
 }

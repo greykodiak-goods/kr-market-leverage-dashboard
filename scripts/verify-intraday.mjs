@@ -134,12 +134,14 @@ for (const sym of targets) {
   const onlyDates = structure.fullDays
 
   let kiwoomCmp = null
+  let kiwoomVol = null
   if (client && structure.firstDate) {
     try {
       const { daily, dropped, diag } = await fetchKiwoomDaily(sym.slice(0, 6), structure.firstDate)
       kiwoomCmp = compareDailySeries(aggDaily, daily, { onlyDates })
       kiwoomCmp.dropped = dropped
       if (!kiwoomCmp.n && diag) kiwoomCmp.error = diag // 겹침 0일이면 첫 응답 진단을 그대로 노출
+      kiwoomVol = compareVolume(aggDaily, daily, { onlyDates })
     } catch (e) {
       kiwoomCmp = { n: 0, error: String(e.message).slice(0, 160) }
     }
@@ -156,8 +158,8 @@ for (const sym of targets) {
     await new Promise((r) => setTimeout(r, 400)) // Yahoo 유량 예의
   }
 
-  const verdict = verdictOf({ structure, splices, kiwoomCmp, yahooCmp, yahooVol })
-  results.push({ sym, structure, splices, kiwoomCmp, yahooCmp, yahooVol, verdict })
+  const verdict = verdictOf({ structure, splices, kiwoomCmp, kiwoomVol, yahooCmp, yahooVol })
+  results.push({ sym, structure, splices, kiwoomCmp, kiwoomVol, yahooCmp, yahooVol, verdict })
 
   const kTxt = kiwoomCmp
     ? kiwoomCmp.n
@@ -170,7 +172,7 @@ for (const sym of targets) {
       : `Yahoo 교차 불가${yahooCmp.error ? `(${yahooCmp.error})` : ''}`
     : 'Yahoo 스킵'
   console.log(
-    `${verdict.level === 'PASS' ? '✅' : verdict.level === 'WARN' ? '⚠️ ' : '❌'} ${sym} · ${structure.days}일/${structure.bars}봉 · ${kTxt} · ${yTxt}${
+    `${verdict.level === 'PASS' ? '✅' : verdict.level === 'WARN' ? '⚠️ ' : '❌'} ${sym} · ${structure.days}일/${structure.bars}봉${structure.afterHours ? `(시간외 ${structure.afterHours})` : ''} · ${kTxt} · ${yTxt}${
       verdict.fails.length || verdict.warns.length ? ` · ${[...verdict.fails, ...verdict.warns].join(' | ')}` : ''
     }`,
   )
