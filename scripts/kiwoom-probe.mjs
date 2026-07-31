@@ -8,7 +8,7 @@
 // TR 명세([미검증] 항목)를 보정한다. 주문·이체 호출은 이 스크립트에 없다(규칙 2).
 
 import { loadSecret, maskerFor } from './lib/loadSecret.mjs'
-import { createKiwoomClient } from './lib/kiwoom.mjs'
+import { createKiwoomClient, parseMinuteChart } from './lib/kiwoom.mjs'
 
 // 키움은 실전용/모의투자용 앱키가 별개다(에러 8030: 투자구분 불일치 — 2026-07-30 실측).
 // 모의서버(기본)에는 모의투자용 키를 우선 쓰고, 없으면 공용 이름으로 폴백한다.
@@ -43,8 +43,17 @@ try {
   console.log(`② 5분봉 조회(005930) OK — 응답 키: [${keys.join(', ')}] · 배열 길이: ${Array.isArray(arr) ? arr.length : '없음'}`)
   if (Array.isArray(arr) && arr.length) {
     console.log(`   첫 행 키: [${Object.keys(arr[0]).join(', ')}]`)
+    console.log(`   첫 행 원본(시세 데이터 — 시크릿 아님): ${JSON.stringify(arr[0])}`)
   }
-  console.log('✅ 1단계 조회 연결 검증 통과 — 이 출력 전체를 총괄 세션에 붙여넣어 주세요(어댑터 필드 매핑에 사용).')
+  // 파서 검증 — 정규화 결과의 처음/끝 봉을 출력해 부호·시간 파싱을 실측으로 확정한다
+  const parsed = parseMinuteChart(json)
+  const fmt = (b) => `${new Date((b.t + 9 * 3600) * 1000).toISOString().slice(0, 16)}KST o${b.o} h${b.h} l${b.l} c${b.c} v${b.v}`
+  console.log(`③ 파서: ${parsed.bars.length}봉 정규화 (탈락 ${parsed.dropped})`)
+  if (parsed.bars.length) {
+    console.log(`   최신 봉: ${fmt(parsed.bars[parsed.bars.length - 1])}`)
+    console.log(`   가장 오래된 봉: ${fmt(parsed.bars[0])}`)
+  }
+  console.log('✅ 1단계 조회 연결 검증 통과 — 이 출력 전체를 총괄 세션에 붙여넣어 주세요(파서 최종 확정에 사용).')
 } catch (e) {
   console.error(`② 분봉 조회 실패: ${mask(e.message)}`)
   console.error('   → TR 명세 [미검증] 보정 필요 — 이 로그를 총괄 세션에 붙여넣어 주세요.')

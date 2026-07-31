@@ -108,3 +108,52 @@ export function createKiwoomClient({ appKey, appSecret, baseUrl, fetchImpl = fet
 
   return { base, issueToken, request, minuteChart, dailyChart }
 }
+
+// ---- 응답 파서 (2026-07-30 실측 구조 기준) ----------------------------------
+// ka10080 응답: { stk_cd, stk_min_pole_chart_qry: [행...], return_code, return_msg }
+// 행 필드: cur_prc(종가), open_pric, high_pric, low_pric, trde_qty(거래량),
+//          cntr_tm(체결시간 YYYYMMDDHHMMSS), acc_trde_qty, pred_pre, pred_pre_sig
+// 키움 차트 가격엔 대비부호(+/-)가 앞에 붙을 수 있어 절대값으로 정규화한다 [실측 표본으로 확인 예정].
+
+/** "+70200"·"-70200"·"70200" → 70200. 숫자 아니면 null. */
+export function numAbs(raw) {
+  if (raw == null) return null
+  const s = String(raw).replace(/^[+-]/, '').trim()
+  if (s === '') return null // Number('')===0 오염 방지
+  const n = Number(s)
+  return Number.isFinite(n) ? n : null
+}
+
+/** "YYYYMMDDHHMMSS" → epoch 초(KST 기준). 형식이 다르면 null. */
+export function parseCntrTm(s) {
+  const m = String(s ?? '').match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/)
+  if (!m) return null
+  const [, Y, M, D, h, mi, sec] = m
+  // KST(UTC+9) 고정 — Date.UTC로 만들고 9시간을 뺀다
+  return Math.floor(Date.UTC(+Y, +M - 1, +D, +h, +mi, +sec) / 1000) - 9 * 3600
+}
+
+/**
+ * ka10080 분봉 응답 → 정규화 봉 배열 (오름차순).
+ * @returns {{ symbol: string, bars: { t:number, o:number, h:number, l:number, c:number, v:number }[], dropped: number }}
+ */
+export function parseMinuteChart(json) {
+  const rows = Array.isArray(json?.stk_min_pole_chart_qry) ? json.stk_min_pole_chart_qry : []
+  const bars = []
+  let dropped = 0
+  for (const r of rows) {
+    const t = parseCntrTm(r.cntr_tm)
+    const o = numAbs(r.open_pric)
+    const h = numAbs(r.high_pric)
+    const l = numAbs(r.low_pric)
+    const c = numAbs(r.cur_prc)
+    const v = numAbs(r.trde_qty)
+    if (t == null || o == null || h == null || l == null || c == null) {
+      dropped++
+      continue
+    }
+    bars.push({ t, o, h, l, c, v: v ?? 0 })
+  }
+  bars.sort((a, b) => a.t - b.t)
+  return { symbol: String(json?.stk_cd ?? ''), bars, dropped }
+}
