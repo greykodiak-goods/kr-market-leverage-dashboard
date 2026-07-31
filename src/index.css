@@ -164,6 +164,19 @@ body {
   gap: 6px;
 }
 
+/* 카드 주의 배지 — 예: 벤치마크가 실행 구간을 다 덮지 못함 */
+.kpi-card .kpi-badge {
+  margin-top: 8px;
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--danger);
+  background: var(--danger-bg);
+  border-radius: 999px;
+  padding: 2px 8px;
+  line-height: 1.5;
+}
+
 .change .up {
   color: var(--up);
 }
@@ -1997,6 +2010,25 @@ body {
 .bt-settings input[type='number'] {
   width: 90px;
 }
+/* 숫자 입력 공용(Num) — type=text + inputMode이므로 폭 규칙을 따로 준다.
+   순서 주의: 뒤에 오는 규칙이 이긴다 (bt-controls → bt-settings → bt-cond-row). */
+.bt-controls input.bt-num {
+  width: 110px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.bt-settings input.bt-num {
+  width: 96px;
+}
+.bt-cond-row input.bt-num {
+  width: 78px;
+}
+/* label 안에서 인풋과 단위 텍스트를 한 줄로 묶을 때 */
+.bt-inline-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
 .bt-data-info {
   font-size: 12px;
   color: var(--text-dim);
@@ -2050,6 +2082,56 @@ body {
 }
 .bt-cond-row input[type='number'] {
   width: 70px;
+}
+/* 조건·매도 규칙 카드 — 지금 조건식에 **들어 있는** 항목임을 눈으로 구분한다 */
+.bt-cond-card {
+  flex: 1 0 100%;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  background: var(--panel);
+}
+.bt-cond-card.is-active {
+  border-left-color: var(--accent);
+  background: var(--panel-2);
+}
+.bt-cond-flag {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 1px 7px;
+  white-space: nowrap;
+}
+.bt-cond-del {
+  margin-left: auto;
+}
+.bt-sim .bt-cond-empty {
+  flex: 1 0 100%;
+}
+.bt-add-row {
+  flex: 1 0 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.bt-add-select {
+  font-weight: 600;
+}
+.bt-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+  line-height: 1.5;
+}
+/* 실행 안내(경고 아님) — 예전엔 성공 안내까지 빨간 경고색으로 나왔다 */
+.bt-note {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-weight: 600;
 }
 .bt-operand {
   display: inline-flex;
@@ -2754,6 +2836,50 @@ body {
 }
 .bt-bench-note strong { color: var(--text); }
 .bt-trades-table { max-height: 320px; overflow-y: auto; }
+
+/* 조건식 시뮬레이터 — 좁은 화면 대응.
+   .bt-sim으로 스코프해 다른 백테스트 패널의 레이아웃을 건드리지 않는다. */
+@media (max-width: 560px) {
+  .bt-sim .bt-settings label {
+    flex: 1 1 100%;
+  }
+  /* 설정 칸(동시보유·비용·기간)은 한 줄을 다 쓴다. 조건 카드 안의 인라인 셀렉트
+     (양봉/음봉·상향/하향 등)는 문장 흐름이라 늘리지 않는다. */
+  .bt-sim .bt-settings input.bt-num,
+  .bt-sim .bt-settings > label select,
+  .bt-sim .bt-settings input[type='date'] {
+    width: 100%;
+    max-width: 100%;
+  }
+  .bt-sim .bt-cond-row input.bt-num {
+    width: 72px;
+  }
+  .bt-sim .bt-cond-card {
+    padding: 8px;
+  }
+  /* 조건 종류 선택은 이름이 길어 좁은 화면에서 잘린다 — 한 줄을 다 준다 */
+  .bt-sim .bt-cond-kind {
+    flex: 1 0 100%;
+    width: 100%;
+  }
+  .bt-sim .bt-cond-del {
+    margin-left: auto;
+  }
+  .bt-sim .bt-btn-run {
+    width: 100%;
+  }
+  .bt-sim .kpi-card .value {
+    font-size: 19px;
+  }
+  .bt-sim .kpi-card .value .unit {
+    display: block;
+    margin-top: 2px;
+    margin-left: 0;
+  }
+  .bt-sim .bt-add-select {
+    width: 100%;
+  }
+}
 .bt-robust-summary {
   font-size: 12px;
   color: var(--text-dim);
