@@ -58,10 +58,11 @@ export const DATA_SOURCE_LABEL = 'Yahoo Finance chart API v8 (비공식·무료�
 
 export const CACHE_PREFIX = 'history-cache:'
 // v1 = 배당 미조정, v2 = 객체 배열(용량 초과 유발), v3 = 컬럼형 압축.
+// v4 = range=max 월봉 오염 수정 — v3의 max 캐시에 월봉이 저장됐을 수 있어 무효화.
 // 모델·종목이 늘면 봉당 객체 직렬화가 localStorage 5MB 한도를 넘겨
 // QuotaExceededError로 캐시가 통째로 깨졌다. 열 단위로 저장해 크기를 줄이고,
 // 그래도 넘치면 오래된 항목부터 자동으로 비운다.
-const CACHE_VERSION = 'v3'
+const CACHE_VERSION = 'v4'
 const CACHE_TTL_MS = 12 * 60 * 60 * 1000 // 12h — daily bars don't change intraday for sim purposes
 
 function cacheKeyOf(symbol: string, range: HistoryRange): string {
@@ -189,6 +190,10 @@ export function parseYahooDaily(symbol: string, json: any, proxyUsed: string): H
   const result = json?.chart?.result?.[0]
   if (!result?.meta) throw new Error('malformed chart response')
   const meta = result.meta
+  // 오염 방지 게이트 — Yahoo는 요청 interval을 못 주면 조용히 다른 간격(월봉 등)을 준다.
+  // 월봉 위에서 백테스트가 돌면 결과 전체가 무효이므로 일봉이 아니면 거부한다.
+  if (meta.dataGranularity && meta.dataGranularity !== '1d')
+    throw new Error(`Yahoo가 일봉 대신 ${meta.dataGranularity} 반환 — 기간을 줄이거나 다시 시도하세요`)
   const gmtoffset: number = meta.gmtoffset ?? 0
   const timestamps: number[] = result.timestamp ?? []
   const quote = result.indicators?.quote?.[0] ?? {}
@@ -254,9 +259,15 @@ export async function getDailyHistory(symbol: string, range: HistoryRange = '10y
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return cached
 
   // events=div,split → adjclose 동반 제공(배당 조정 계수 산출용)
+  // ⚠️ range=max 는 Yahoo가 interval=1d 를 무시하고 **월봉**을 돌려준다(2026-07-30 실측 —
+  // 월봉 위에서 백테스트가 돌면 결과 전체가 무효다). max 는 period1/period2 명시로 우회한다.
+  const qs =
+    range === 'max'
+      ? `period1=${Math.floor(Date.parse('2000-01-01') / 1000)}&period2=${Math.floor(Date.now() / 1000)}`
+      : `range=${range}`
   const target = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
     symbol,
-  )}?range=${range}&interval=1d&events=div%2Csplit`
+  )}?${qs}&interval=1d&events=div%2Csplit`
 
   let lastErr: unknown = null
   for (const proxy of PROXIES) {
