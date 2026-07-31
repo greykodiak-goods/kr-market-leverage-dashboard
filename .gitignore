@@ -12,3 +12,9 @@ yarn-error.log*
 
 # TS build info
 *.tsbuildinfo
+
+# 모의투자 킬 스위치 — 로컬 운용 상태이지 리포 상태가 아니다 (docs/mock-trading.md)
+/HALT
+# 실행 PC의 일일 주문 카운터 (게이트용 로컬 상태)
+/public/data/mock-live/order-count.json
+/logs

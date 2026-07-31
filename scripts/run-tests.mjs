@@ -44,7 +44,9 @@ for (const f of files) {
     continue
   }
   try {
-    execFileSync(process.execPath, [out], { stdio: 'inherit' })
+    // REPO_ROOT를 넘긴다 — 번들 산출물은 node_modules/.test-build 아래에서 돌기 때문에
+    // 테스트가 __dirname으로 리포 루트를 잡으면 node_modules를 스캔하게 된다(실제로 그랬다).
+    execFileSync(process.execPath, [out], { stdio: 'inherit', env: { ...process.env, REPO_ROOT: root } })
   } catch {
     failed++
   }
