@@ -80,7 +80,9 @@ section('2-1) 구조 위반 각각 검출')
 {
   const bad = cleanDay(D0)
   bad[0] = { ...bad[0], ts: D0 - 2 * FIVE_MIN } // 08:50 — 장전
-  eq('장외 시간 검출', checkStructure(bad).outOfSession, 1)
+  const s = checkStructure(bad)
+  eq('장외 시간 검출', s.outOfSession, 1)
+  eq('장외 시각 히스토그램(08:50=530분)', s.outOfSessionTimes.get(530), 1)
 }
 {
   const thin = cleanDay(D0).slice(0, 40) // 40/78 = 51%

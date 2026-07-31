@@ -58,9 +58,14 @@ async function fetchKiwoomDaily(code, firstDate) {
   let contYn = 'N'
   let nextKey = ''
   let dropped = 0
+  let diag = null // 첫 응답 진단 — 겹침 0일의 원인 추적용 (키 이름·상태 코드만, 값 미출력 원칙)
   for (let req = 0; req < KIWOOM_REQ_CAP; req++) {
     const { json, cont } = await client.dailyChart(code, { adjusted: true, contYn, nextKey })
     const parsed = parseDailyChart(json)
+    if (!diag)
+      diag = `return_code=${json?.return_code ?? '?'} msg="${json?.return_msg ?? ''}" 키=[${Object.keys(json ?? {}).join(',')}] 행=${parsed.totalRows} 탈락=${parsed.dropped}${
+        parsed.daily.length ? ` 날짜=${parsed.daily[0].date}~${parsed.daily[parsed.daily.length - 1].date}` : ''
+      }`
     dropped += parsed.dropped
     if (!parsed.daily.length) break
     daily.push(...parsed.daily)
@@ -71,7 +76,7 @@ async function fetchKiwoomDaily(code, firstDate) {
     nextKey = cont.nextKey
   }
   daily.sort((a, b) => (a.date < b.date ? -1 : 1))
-  return { daily, dropped }
+  return { daily, dropped, diag }
 }
 
 // ---- 층③ 조회: Yahoo 일봉 (quote OHLC = 분할만 보정 — 키움 수정주가와 기준 근접) --
@@ -131,11 +136,12 @@ for (const sym of targets) {
   let kiwoomCmp = null
   if (client && structure.firstDate) {
     try {
-      const { daily, dropped } = await fetchKiwoomDaily(sym.slice(0, 6), structure.firstDate)
+      const { daily, dropped, diag } = await fetchKiwoomDaily(sym.slice(0, 6), structure.firstDate)
       kiwoomCmp = compareDailySeries(aggDaily, daily, { onlyDates })
       kiwoomCmp.dropped = dropped
+      if (!kiwoomCmp.n && diag) kiwoomCmp.error = diag // 겹침 0일이면 첫 응답 진단을 그대로 노출
     } catch (e) {
-      kiwoomCmp = { n: 0, error: String(e.message).slice(0, 80) }
+      kiwoomCmp = { n: 0, error: String(e.message).slice(0, 160) }
     }
   }
 

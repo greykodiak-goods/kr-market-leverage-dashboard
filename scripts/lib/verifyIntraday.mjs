@@ -38,6 +38,7 @@ export function checkStructure(bars) {
     ohlcBad: 0,
     offGrid: 0,
     outOfSession: 0,
+    outOfSessionTimes: new Map(),
     weekend: 0,
     dup: 0,
     unsorted: 0,
@@ -58,7 +59,11 @@ export function checkStructure(bars) {
     else if (b.l > Math.min(b.o, b.c) + 1e-9 || b.h < Math.max(b.o, b.c) - 1e-9) r.ohlcBad++
     if (b.ts % FIVE_MIN !== 0) r.offGrid++
     const mod = kstMinOfDay(b.ts)
-    if (mod < 540 || mod > 930) r.outOfSession++
+    if (mod < 540 || mod > 930) {
+      r.outOfSession++
+      // 어느 시각의 봉이 장외로 찍히는지 — 원인 진단용(예: 전부 15:35면 종가 동시호가 표기 문제)
+      r.outOfSessionTimes.set(mod, (r.outOfSessionTimes.get(mod) ?? 0) + 1)
+    }
     const dow = kstDow(b.ts)
     if (dow === 0 || dow === 6) r.weekend++
     if (b.ts === prevTs) r.dup++
@@ -176,7 +181,15 @@ export function verdictOf({ structure, splices, kiwoomCmp, yahooCmp, yahooVol })
       `구조 위반 ohlc=${s.ohlcBad} 격자=${s.offGrid} 주말=${s.weekend} 중복=${s.dup} 역순=${s.unsorted} 비양수=${s.nonPositive}`,
     )
   if (s.excessDays.length) fails.push(`봉 초과일 ${s.excessDays.length}일(${s.excessDays.slice(0, 2).join(',')})`)
-  if (s.outOfSession) warns.push(`장외 시간 봉 ${s.outOfSession}개`)
+  if (s.outOfSession) {
+    const fmt = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
+    const times = [...(s.outOfSessionTimes ?? new Map()).entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([m, n]) => `${fmt(m)}×${n}`)
+      .join(' ')
+    warns.push(`장외 시간 봉 ${s.outOfSession}개(${times})`)
+  }
   if (splices.length)
     fails.push(`수정주가 스플라이스 의심 ${splices.length}건(${splices.map((x) => `${x.date} ${x.gapPct}%`).slice(0, 2).join(', ')}) → 파일 삭제 후 전체 재수집`)
   if (s.days && s.thinDays.length > s.days * 0.05) warns.push(`구멍 난 날 ${s.thinDays.length}/${s.days}일`)

@@ -138,12 +138,15 @@ export function createKiwoomClient({ appKey, appSecret, baseUrl, fetchImpl = fet
     )
   }
 
-  /** 주식 일봉차트 조회 (api-id ka10081 [미검증]) — 조회 전용 */
+  /** 주식 일봉차트 조회 (api-id ka10081 [미검증]) — 조회 전용.
+   * base_dt를 비우면 빈 응답이 오는 것으로 관측됨(2026-07-31 verify 실행: 전 종목 행 0)
+   * → 기본값을 오늘(KST YYYYMMDD)로 채운다. */
   async function dailyChart(stockCode, { baseDate = '', adjusted = true, contYn = 'N', nextKey = '' } = {}) {
+    const base_dt = baseDate || new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10).replace(/-/g, '')
     return request(
       '/api/dostk/chart',
       'ka10081',
-      { stk_cd: stockCode, base_dt: baseDate, upd_stkpc_tp: adjusted ? '1' : '0' },
+      { stk_cd: stockCode, base_dt, upd_stkpc_tp: adjusted ? '1' : '0' },
       { contYn, nextKey },
     )
   }
