@@ -12,6 +12,8 @@
 // 엔드포인트·TR 명세는 공식 문서 실측 전 [미검증] — kiwoom-probe.mjs 실행 결과로
 // 보정한다. (인증 POST /oauth2/token · 분봉차트 api-id ka10080 · 경로 /api/dostk/chart)
 
+import { readFileSync, writeFileSync } from 'node:fs'
+
 export const MOCK_BASE = 'https://mockapi.kiwoom.com'
 
 /**
@@ -28,6 +30,29 @@ export function createKiwoomClient({ appKey, appSecret, baseUrl, fetchImpl = fet
   let tokenExpiresAt = 0
   let lastCallAt = 0
 
+  // ── 토큰 디스크 캐시 ─────────────────────────────────────────────────────
+  // 키움은 토큰 발급(au10001) 자체에 유량 제한이 있다(2026-07-30 실측: HTTP 429/1700).
+  // 발급 토큰은 ~24h 유효하므로 로컬 파일에 캐시해 스크립트 실행마다 재발급하지 않는다.
+  // 토큰은 단기 자격증명 — .gitignore 등록 필수, 값은 로그에 남기지 않는다.
+  const cachePath = process.env.KIWOOM_TOKEN_CACHE ?? '.kiwoom-token-cache.json'
+  const loadTokenCache = () => {
+    try {
+      const c = JSON.parse(readFileSync(cachePath, 'utf8'))
+      // 서버(모의/실전)가 다르면 절대 재사용하지 않는다
+      if (c.base === base && c.token && c.expiresAt - 60_000 > Date.now()) return c
+    } catch {
+      /* 캐시 없음/손상 — 새로 발급 */
+    }
+    return null
+  }
+  const saveTokenCache = () => {
+    try {
+      writeFileSync(cachePath, JSON.stringify({ base, token, expiresAt: tokenExpiresAt }))
+    } catch {
+      /* 캐시 저장 실패는 치명적이지 않다 */
+    }
+  }
+
   const throttle = async () => {
     const wait = lastCallAt + minIntervalMs - Date.now()
     if (wait > 0) await new Promise((r) => setTimeout(r, wait))
@@ -40,8 +65,14 @@ export function createKiwoomClient({ appKey, appSecret, baseUrl, fetchImpl = fet
       ? ` · return_code=${json.return_code} return_msg="${json.return_msg ?? ''}"`
       : ''
 
-  /** 접근 토큰 발급 — 토큰 값은 반환하지 않는다(길이만). */
+  /** 접근 토큰 발급 — 캐시 우선, 토큰 값은 반환하지 않는다(길이만). */
   async function issueToken() {
+    const cached = loadTokenCache()
+    if (cached) {
+      token = cached.token
+      tokenExpiresAt = cached.expiresAt
+      return { ok: true, tokenLength: String(token).length, cached: true }
+    }
     await throttle()
     const res = await fetchImpl(`${base}/oauth2/token`, {
       method: 'POST',
@@ -54,9 +85,11 @@ export function createKiwoomClient({ appKey, appSecret, baseUrl, fetchImpl = fet
     token = json.token ?? json.access_token ?? null
     if (!token)
       throw new Error(`토큰 필드를 못 찾음 — 응답 키: [${Object.keys(json).join(', ')}]${apiStatus(json)} (문서 대조 필요)`)
-    // 만료 필드 형식이 확정될 때까지 보수적으로 23시간 캐시 [미검증]
-    tokenExpiresAt = Date.now() + 23 * 3600e3
-    return { ok: true, tokenLength: String(token).length }
+    // 만료: 응답 expires_dt(KST YYYYMMDDHHMMSS [미검증])가 있으면 그것−1h, 없으면 23시간
+    const exp = parseCntrTm(json.expires_dt)
+    tokenExpiresAt = exp != null ? exp * 1000 - 3600e3 : Date.now() + 23 * 3600e3
+    saveTokenCache()
+    return { ok: true, tokenLength: String(token).length, cached: false }
   }
 
   async function ensureToken() {

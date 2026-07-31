@@ -18,3 +18,6 @@ yarn-error.log*
 # 실행 PC의 일일 주문 카운터 (게이트용 로컬 상태)
 /public/data/mock-live/order-count.json
 /logs
+
+# 키움 토큰 캐시 — 단기 자격증명, 커밋 절대 금지
+/.kiwoom-token-cache.json
