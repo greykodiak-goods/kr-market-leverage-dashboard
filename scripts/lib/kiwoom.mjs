@@ -176,6 +176,49 @@ export function parseCntrTm(s) {
 }
 
 /**
+ * ka10081 일봉 응답 → 정규화 일봉 배열 (날짜 오름차순).
+ * 배열 키·행 필드명은 공식 문서 미확정 [미검증] — 분봉(ka10080)의 실측 명명 규칙
+ * (stk_min_pole_chart_qry / cur_prc / open_pric …)에서 유추하되, 키 이름을 단정하지
+ * 않고 "객체 배열인 첫 값"을 차트 행으로 잡는다. 행에서 날짜(YYYYMMDD)를 못 찾으면
+ * 그 행은 dropped로 세므로, 러너가 dropped 비율로 파싱 실패를 감지할 수 있다.
+ */
+export function parseDailyChart(json) {
+  let rows = []
+  for (const v of Object.values(json ?? {})) {
+    if (Array.isArray(v) && v.length && typeof v[0] === 'object' && v[0] !== null) {
+      rows = v
+      break
+    }
+  }
+  const daily = []
+  let dropped = 0
+  for (const r of rows) {
+    // 날짜 필드 후보: dt / date / stk_dt … — 값이 YYYYMMDD 형태인 첫 필드를 쓴다
+    let date = null
+    for (const [k, val] of Object.entries(r)) {
+      if (!/dt|date/i.test(k)) continue
+      const m = String(val ?? '').match(/^(\d{4})(\d{2})(\d{2})$/)
+      if (m) {
+        date = `${m[1]}-${m[2]}-${m[3]}`
+        break
+      }
+    }
+    const o = numAbs(r.open_pric)
+    const h = numAbs(r.high_pric)
+    const l = numAbs(r.low_pric)
+    const c = numAbs(r.cur_prc)
+    const v = numAbs(r.trde_qty)
+    if (date == null || c == null) {
+      dropped++
+      continue
+    }
+    daily.push({ date, o, h, l, c, v: v ?? 0 })
+  }
+  daily.sort((a, b) => (a.date < b.date ? -1 : 1))
+  return { symbol: String(json?.stk_cd ?? ''), daily, dropped, totalRows: rows.length }
+}
+
+/**
  * ka10080 분봉 응답 → 정규화 봉 배열 (오름차순).
  * @returns {{ symbol: string, bars: { t:number, o:number, h:number, l:number, c:number, v:number }[], dropped: number }}
  */

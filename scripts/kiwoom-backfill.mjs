@@ -198,5 +198,5 @@ if (withDays.length) {
   if (cmps.length) console.log(`Yahoo 대조 가능 ${cmps.length}종목 — 위 종목별 라인의 불일치율을 확인하세요 (0%대 = 두 소스 일치)`)
 }
 console.log('')
-console.log(DRY_RUN ? 'dry-run — 저장 안 함. 결과가 좋으면 --dry-run 없이 재실행하세요.' : '병합 저장 완료 — git status 로 변경 확인 후 커밋·푸시하면 백테스트에서 사용됩니다.')
+console.log(DRY_RUN ? 'dry-run — 저장 안 함. 결과가 좋으면 --dry-run 없이 재실행하세요.' : '병합 저장 완료 — 커밋 전에 verify-intraday.mjs 로 정확성 검증(구조·키움 일봉·Yahoo 교차)을 돌리세요.')
 console.log('이 출력 전체를 총괄 세션에 붙여넣어 주세요 (소급 한도·정확성 실측 기록용).')
