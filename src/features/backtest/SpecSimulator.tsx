@@ -142,6 +142,17 @@ const PRESET_MA15_CHALLENGER: StrategySpec = {
   },
 }
 
+// 17차 수익÷MDD 격자 탐색(2011~21 최적화 + 2022~ OOS)의 고원 후보 — 도전자에서 청산만 60일선으로 늦춘 변형.
+const PRESET_MA15_MAR: StrategySpec = {
+  ...PRESET_MA20_WINNER,
+  id: 'ma15-high20-slow60',
+  name: 'MA15×신고가→60일선·버퍼2% (수익÷MDD 후보)',
+  source:
+    '2026-07-31 백테스트 17차 — 2011~21 수익÷MDD 최적화 2위·OOS(2022~) 1위. 곡선맞춤 위험 상존, 페이퍼 ma15x60 트랙으로 판정 중',
+  entry: PRESET_MA15_CHALLENGER.entry,
+  exits: [{ kind: 'maBreak', maPeriod: 60, pct: 2 }],
+}
+
 // 위 승자에 거래량 급증을 얹은 방어 변형 — 알파는 조금 낮고 MDD가 얕다(−22→−19%), 매매도 감소.
 const PRESET_MA20_DEFENSIVE: StrategySpec = {
   ...PRESET_MA20_WINNER,
@@ -161,6 +172,7 @@ const PRESET_MA20_DEFENSIVE: StrategySpec = {
 const PRESETS: { id: string; label: string; spec: StrategySpec }[] = [
   { id: 'ma20-winner', label: 'MA20×신고가·느린 청산 (백테스트 승자)', spec: PRESET_MA20_WINNER },
   { id: 'ma15-chal', label: 'MA15×신고가·느린 청산 (도전자 — 검증 중)', spec: PRESET_MA15_CHALLENGER },
+  { id: 'ma15-mar', label: 'MA15×신고가→60일선 (수익÷MDD 후보 — 17차)', spec: PRESET_MA15_MAR },
   { id: 'ma20-def', label: 'MA20×급증×신고가 (방어형)', spec: PRESET_MA20_DEFENSIVE },
   { id: 'heromoon', label: '급등주 5일선 돌파 (영웅문 조건식)', spec: HEROMOON_MOMENTUM },
   { id: 'goblin', label: '5일선 기법 — 정배열+코스피 레짐', spec: PRESET_GOBLIN },

@@ -25,7 +25,7 @@ const paperDir = join(root, 'public', 'data', 'paper')
 interface PaperConfig {
   inception: string
   cost: CostSettings
-  tracks: Record<string, { label: string; symbols: string[]; entryMa?: number; inception?: string }>
+  tracks: Record<string, { label: string; symbols: string[]; entryMa?: number; exitMa?: number; inception?: string }>
   benchmark: string
 }
 
@@ -61,11 +61,11 @@ async function fetchDaily(symbol: string, since: string): Promise<DailyBar[]> {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const cond = (id: string, c: unknown): ConditionNode => ({ op: 'cond', id, cond: c as never })
 
-function winnerSpec(symbols: string[], entryMa = 20): StrategySpec {
+function winnerSpec(symbols: string[], entryMa = 20, exitMa = 40): StrategySpec {
   return {
     version: SPEC_VERSION,
-    id: `paper-ma${entryMa}-high20-slow`,
-    name: `MA${entryMa}돌파×20일신고가·느린청산 (페이퍼)`,
+    id: `paper-ma${entryMa}-high20-slow${exitMa}`,
+    name: `MA${entryMa}돌파×20일신고가·느린청산(${exitMa}일선) (페이퍼)`,
     source: '백테스트 5·6차 승자 (MA15 변형은 14차 도전자) — 2026-07-30 페이퍼 트레이딩 개시',
     universe: {
       markets: ['KOSPI', 'KOSDAQ'],
@@ -84,7 +84,7 @@ function winnerSpec(symbols: string[], entryMa = 20): StrategySpec {
       ],
     },
     ranking: { by: 'tradingValue', dir: 'desc' },
-    exits: [{ kind: 'maBreak', maPeriod: 40, pct: 2 }],
+    exits: [{ kind: 'maBreak', maPeriod: exitMa, pct: 2 }],
     sizing: { maxPositions: 10, mode: 'equalSlot' },
     execution: { timing: 'sameClose', orderType: 'market' },
   }
@@ -116,7 +116,7 @@ async function main() {
 
   mkdirSync(paperDir, { recursive: true })
   for (const [trackId, track] of Object.entries(config.tracks)) {
-    const spec = winnerSpec(track.symbols.filter((s) => histories[s]), track.entryMa ?? 20)
+    const spec = winnerSpec(track.symbols.filter((s) => histories[s]), track.entryMa ?? 20, track.exitMa ?? 40)
     const inception = track.inception ?? config.inception
     const r = runStrategySpec(histories, inception, spec, config.cost)
     const finalEq = r.equity.length ? r.equity[r.equity.length - 1].equity : config.cost.initialCapital

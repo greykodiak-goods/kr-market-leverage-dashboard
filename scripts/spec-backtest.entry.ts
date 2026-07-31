@@ -1845,10 +1845,91 @@ async function mar() {
   log('⚠️ 유니버스는 오늘의 시총 상위(사후 선택·생존편향) — 절대 수치는 상한선이며, 시뮬레이션일 뿐 투자자문이 아니다.')
 }
 
+/**
+ * MODE=decade — 주요 모델별 최근 10년 성적 + 연도별 수익률 분해 (2026-07-31 대표 질문).
+ * 같은 데이터·같은 비용으로 나란히 돌려 10y 요약(총수익·CAGR·MDD·수익÷MDD·알파)과
+ * 연도별 수익률 매트릭스를 출력한다. 연도별 값은 자산곡선의 연말 경계로 계산.
+ */
+async function decade() {
+  const { histories, bench, tradable } = await loadAll('10y')
+  const uni = { ...baseSpec({}).universe, symbols: tradable }
+  const mk = (ma: number, hb: number, xm: number, buf: number): StrategySpec =>
+    baseSpec({
+      entry: {
+        op: 'and',
+        nodes: [c(`${ma}일선돌파`, { kind: 'maCross', period: ma, dir: 'above' }), c(`${hb}일신고가`, { kind: 'highBreak', days: hb })],
+      },
+      exits: [{ kind: 'maBreak', maPeriod: xm, pct: buf }],
+      universe: uni,
+    })
+  const models: { label: string; spec: StrategySpec }[] = [
+    { label: '현행 MA20×신고20→40선·버퍼2%', spec: mk(20, 20, 40, 2) },
+    { label: '도전자 MA15×신고20→40선·버퍼2%', spec: mk(15, 20, 40, 2) },
+    { label: '17차 후보 MA15×신고20→60선·버퍼2%', spec: mk(15, 20, 60, 2) },
+    { label: 'MA25×신고20→20선 (17차 최적화 1위)', spec: mk(25, 20, 20, 0) },
+    { label: '방어형 MA30×신고60→40선', spec: mk(30, 60, 40, 0) },
+  ]
+
+  const yearOf = (d: string) => d.slice(0, 4)
+  const yearlyFromEquity = (eq: { date: string; equity: number }[]) => {
+    const byYear = new Map<string, { first: number; last: number }>()
+    for (const p of eq) {
+      const y = yearOf(p.date)
+      const cur = byYear.get(y)
+      if (!cur) byYear.set(y, { first: p.equity, last: p.equity })
+      else cur.last = p.equity
+    }
+    // 연 수익률 = 그 해 마지막 자산 ÷ 직전 해 마지막 자산 (첫 해는 첫 관측 대비)
+    const years = [...byYear.keys()].sort()
+    const out = new Map<string, number>()
+    let prevLast: number | null = null
+    for (const y of years) {
+      const v = byYear.get(y)!
+      out.set(y, (v.last / (prevLast ?? v.first) - 1) * 100)
+      prevLast = v.last
+    }
+    return out
+  }
+
+  log('')
+  log('10년 요약 (같은 유니버스·비용, 사후 선택 유니버스 = 상한선):')
+  log('| 모델 | 총수익 | **CAGR** | MDD | 수익÷MDD | 알파(연) | 매매 | 승률 |')
+  log('|---|---|---|---|---|---|---|---|')
+  const yearlyRows: { label: string; yearly: Map<string, number> }[] = []
+  for (const m of models) {
+    const r = runStrategySpec(histories, '0000-01-01', m.spec, COST)
+    const s = stats(m.label, '10y', r, bench, COST.initialCapital)
+    const mddAbs = Math.abs(s.mddPct ?? 0)
+    const obj = mddAbs > 0.01 ? (s.totalPct ?? 0) / mddAbs : null
+    log(
+      `| ${m.label} | ${f1(s.totalPct)}% | **${f1(s.cagrPct)}%** | ${f1(s.mddPct)}% | ${obj?.toFixed(2) ?? '—'} | ${f1(
+        s.alphaPct,
+      )}%p | ${s.trades} | ${s.winRatePct?.toFixed(0) ?? '—'}% |`,
+    )
+    yearlyRows.push({ label: m.label, yearly: yearlyFromEquity(r.equity) })
+  }
+  const benchYearly = yearlyFromEquity(bench.map((b) => ({ date: b.date, equity: b.c })))
+  const allYears = [...new Set(yearlyRows.flatMap((r) => [...r.yearly.keys()]))].sort()
+  log('')
+  log('연도별 수익률 (%):')
+  log(`| 연도 | ${models.map((m) => m.label.split(' ')[0] + ' ' + m.label.split(' ')[1]).join(' | ')} | 벤치(KODEX200) |`)
+  log(`|---|${models.map(() => '---').join('|')}|---|`)
+  for (const y of allYears) {
+    log(
+      `| ${y} | ${yearlyRows.map((r) => (r.yearly.has(y) ? f1(r.yearly.get(y)!) + '%' : '—')).join(' | ')} | ${
+        benchYearly.has(y) ? f1(benchYearly.get(y)!) + '%' : '—'
+      } |`,
+    )
+  }
+  log('')
+  log('⚠️ 첫 해·올해는 부분 연도. 유니버스 사후 선택·생존편향으로 절대 수치는 상한선 — 시뮬레이션이며 투자자문이 아니다.')
+}
+
 const MODES: Record<string, () => Promise<void>> = {
   sweep,
   mine,
   mar,
+  decade,
   payoff,
   era,
   tqqq,
