@@ -570,4 +570,26 @@ section('11) 레짐 게이트 — 지수 조건이 꺼지면 신규 진입 금�
   check('레짐 꺼진 뒤에도 청산은 실행', flip.events.some((e) => e.action === '매도'))
 }
 
+section('12) 평가 이월 — 봉이 없는 날은 진입가가 아니라 마지막 종가로 평가한다')
+{
+  // AAA: 돌파 후 15000까지 오른 뒤 d(20)에 봉이 빠짐(거래정지/캘린더 불일치 재현).
+  // BBB: 전 기간 봉 존재 — 캘린더 축에 d(20)이 포함되게 한다.
+  const aaa = flatThenBreakout(30, 10, { close: 15000 }).filter((b) => b.date !== d(20))
+  const bbb = flatThenBreakout(30, 99) // 돌파 없음 — 캘린더 제공용
+  const spec: StrategySpec = {
+    ...paramsToSpec({ ...DEFAULT_CONDITION, maxPositions: 1, exits: [{ kind: 'timeExit', days: 25 }] }),
+  }
+  spec.universe = { ...spec.universe, symbols: ['AAA', 'BBB'] }
+  const r = runStrategySpec({ AAA: aaa, BBB: bbb }, d(0), spec, NOCOST)
+  const eqAt = (date: string) => r.equity.find((e) => e.date === date)?.equity
+  const before = eqAt(d(19))
+  const gap = eqAt(d(20))
+  const after = eqAt(d(21))
+  check('갭 이전 평가 존재', before != null)
+  check('갭 날짜도 평가 존재', gap != null)
+  // 핵심: 봉이 빠진 d(20)의 평가가 앞뒤(15000 시세)와 연속 — 진입가(11000대)로 떨어지면 버그
+  check('갭 날짜 평가 = 직전 종가 이월 (톱니 없음)', gap === before)
+  check('갭 이후 정상 복귀', after === before)
+}
+
 finish()
