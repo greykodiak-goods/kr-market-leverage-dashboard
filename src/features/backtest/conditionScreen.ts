@@ -574,6 +574,99 @@ export function runStrategySpec(
   }
 }
 
+// ---- 실시간(오늘) 스크리닝 -------------------------------------------------
+
+export interface DateScreen {
+  date: string
+  /** 랭킹 순 전 종목 (통과·탈락 모두 — 왜 걸렸나/떨어졌나 근거 포함) */
+  rows: ConditionScreenRow[]
+  /** 통과 종목만 랭킹 순으로 */
+  passed: string[]
+  /** 레짐 게이트가 꺼져 있어 후보를 뽑지 않은 날인가 */
+  regimeOff: boolean
+}
+
+/**
+ * **지정한 날짜 하루치 진입 스크리닝** — 백테스트가 아니라 "오늘 무엇을 살까"에 답한다.
+ *
+ * 왜 별도 함수가 필요한가:
+ *   runStrategySpec 은 규칙 1-6에 따라 **데이터 마지막 봉에서 신규 진입을 만들지 않는다**
+ *   (백테스트에서는 체결할 다음 봉이 없으므로 옳다). 그래서 오늘까지의 데이터를 넣고
+ *   돌리면 오늘의 진입 신호는 **구조적으로 항상 비어 있다.** 실전 러너가 그 결과에서
+ *   오늘 진입을 뽑으려 하면 영원히 아무것도 사지 않는다.
+ *   실제 운용에서는 오늘 종가(LOC) 체결이 가능하므로, 오늘 신호는 여기서 따로 판정한다.
+ *
+ * 미래참조 금지(규칙 1): 판정은 strategySpec.evaluateEntry **하나만** 쓰고 bars[0..i]만
+ *   본다(i = 그 날짜의 인덱스). 그래서 date 이후의 봉이 있든 없든 결과가 같다 —
+ *   tests/mock-ledger.test.ts 의 절단 불변성 케이스가 이를 강제한다.
+ *   횡단면(등락률·거래대금)도 그날 값만 쓴다.
+ *
+ * 이 함수는 **후보만** 돌려준다. 슬롯·현금·보유 중복 판정은 호출자(장부)의 몫이다.
+ */
+export function screenOnDate(
+  histories: Record<string, DailyBar[]>,
+  spec: StrategySpec,
+  date: string,
+): DateScreen {
+  const wanted = spec.universe.symbols?.length ? new Set(spec.universe.symbols) : null
+  const universe = Object.keys(histories)
+    .filter((s) => (!wanted || wanted.has(s)) && s !== spec.regime?.symbol)
+    .sort()
+
+  // 레짐 게이트 — 지수 조건이 꺼진 날(또는 지수 봉이 없는 날)은 신규 후보를 뽑지 않는다.
+  let regimeOff = false
+  if (spec.regime) {
+    const rb = histories[spec.regime.symbol]
+    const ri = rb?.findIndex((b) => b.date === date) ?? -1
+    regimeOff = ri < 0 || !evaluateEntry(spec.regime.entry, rb, ri, spec.regime.symbol, null).passed
+  }
+  if (regimeOff) return { date, rows: [], passed: [], regimeOff: true }
+
+  const todayIdx = new Map<string, number>()
+  const cs: CrossSection = { changePct: new Map(), tradingValue: new Map() }
+  for (const sym of universe) {
+    const bars = histories[sym]
+    const bi = bars.findIndex((b) => b.date === date)
+    if (bi < 0) continue // 그날 봉이 없는 종목(휴장·정지)은 판정하지 않는다
+    todayIdx.set(sym, bi)
+    const ch = changePctAt(bars, bi)
+    if (ch != null) cs.changePct.set(sym, ch)
+    cs.tradingValue!.set(sym, bars[bi].c * bars[bi].v)
+  }
+
+  const rows: ConditionScreenRow[] = []
+  for (const [sym, bi] of todayIdx) {
+    const r = evaluateEntry(spec.entry, histories[sym], bi, sym, cs)
+    rows.push({
+      symbol: sym,
+      changePct: cs.changePct.get(sym) ?? null,
+      rank: null,
+      passed: r.passed,
+      reasons: r.detail.filter((x) => !x.passed).map((x) => `${x.label} 미충족${x.value ? ` (${x.value})` : ''}`),
+    })
+  }
+
+  // 랭킹 — runStrategySpec 의 후보 정렬과 **같은 규칙**(그래야 시뮬과 실전이 갈라지지 않는다)
+  const rankKey = (row: ConditionScreenRow): number => {
+    if (!spec.ranking || spec.ranking.by === 'none') return 0
+    if (spec.ranking.by === 'changePct') return row.changePct ?? -Infinity
+    const b = histories[row.symbol][todayIdx.get(row.symbol)!]
+    return spec.ranking.by === 'tradingValue' ? b.c * b.v : b.v
+  }
+  const dir = spec.ranking?.dir === 'asc' ? 1 : -1
+  const ranked =
+    spec.ranking && spec.ranking.by !== 'none'
+      ? [...rows].sort((a, b) => {
+          const ka = rankKey(a)
+          const kb = rankKey(b)
+          return ka === kb ? 0 : (ka - kb) * dir
+        })
+      : rows
+  ranked.forEach((r, i) => (r.rank = i + 1))
+
+  return { date, rows: ranked, passed: ranked.filter((r) => r.passed).map((r) => r.symbol), regimeOff: false }
+}
+
 // ---- 매도 규칙 비교 -------------------------------------------------------
 
 export interface ExitComparisonRow {

@@ -1,0 +1,13 @@
+{
+ "inception": "2026-07-31",
+ "perStrategyCapitalKrw": 20000000,
+ "slotsPerStrategy": 10,
+ "note": "모의계좌 1억을 5기법 × 2,000만원 가상 서브포트폴리오로 분리 운용한다. 유니버스 심볼 목록은 public/data/paper/config.json 의 동결 트랙(universe 필드가 그 트랙 id)을 참조한다 — 여기에 중복 저장하지 않는다. 전략은 교체 가능하며, config 에서 빠진 전략의 장부는 지우지 않고 retired 로 남는다.",
+ "strategies": [
+  { "id": "ma20-all80", "label": "MA20×신고20·느린청산 (승자)", "entryMa": 20, "universe": "all80" },
+  { "id": "ma15-all80", "label": "MA15×신고20·느린청산 (도전자)", "entryMa": 15, "universe": "all80" },
+  { "id": "ma20-kosdaq", "label": "MA20×신고20 (코스닥40·저MDD)", "entryMa": 20, "universe": "kosdaq40" },
+  { "id": "ma20-surge", "label": "MA20×급증×신고20 (방어형)", "entryMa": 20, "universe": "all80", "volumeSurge": true },
+  { "id": "bench-hold", "label": "KODEX200 보유 (대조군)", "type": "benchHold", "symbol": "069500.KS" }
+ ]
+}
