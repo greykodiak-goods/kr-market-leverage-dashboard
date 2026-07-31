@@ -1951,11 +1951,11 @@ async function slots() {
     { label: '방어형 MA30×신고60→40선', make: (n) => mk(30, 60, 40, 0, n) },
   ]
   log('')
-  log('슬롯(동시 보유 종목 수) 1~10 × 5모델 — 최근 10y, 셀 = CAGR% (MDD%) [수익÷MDD]:')
+  log('슬롯(동시 보유 종목 수) 1~20 × 5모델 — 최근 10y, 셀 = CAGR% (MDD%) [수익÷MDD]:')
   log(`| 슬롯 | ${models.map((m) => m.label).join(' | ')} |`)
   log(`|---|${models.map(() => '---').join('|')}|`)
   const best: Record<string, { n: number; obj: number }> = {}
-  for (let n = 1; n <= 10; n++) {
+  for (let n = 1; n <= 20; n++) {
     const cells: string[] = []
     for (const m of models) {
       const r = runStrategySpec(histories, '0000-01-01', m.make(n), COST)
