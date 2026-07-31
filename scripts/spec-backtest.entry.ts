@@ -1972,12 +1972,138 @@ async function slots() {
   log('⚠️ 슬롯이 적을수록 집중 — 수익·변동 모두 커지고 종목 선택 우연에 민감해진다. 사후 선택 유니버스 상한선, 투자자문 아님.')
 }
 
+/**
+ * MODE=tune — MA15·MA20 고정(슬롯 10)에서 나머지 조건 최적화 (2026-07-31 대표 지시).
+ * 1단계: 핵심 격자 — 신고가{0,10,20,40,60} × 청산이평{20,30,40,60,80} × 버퍼{0,2,4} × 손절{0,7,10} = MA당 225조합.
+ * 2단계: 각 MA의 1단계 최적 조합 위에 부가 조건(양봉·거래량급증·이격도·RSI·랭킹·체결·익절류)을 하나씩 얹어 증분 효과 측정.
+ * 목적함수·구간은 17차와 동일: 총수익%÷|MDD%|, 2011~2021 최적화 + 2022~현재 OOS. 매매≥30 필터.
+ */
+async function tune() {
+  const { histories, bench, tradable } = await loadAll('since:2009-01-01')
+  const uni = { ...baseSpec({}).universe, symbols: tradable }
+  const OPT_END = '2021-12-31'
+  const histOpt: Record<string, DailyBar[]> = {}
+  for (const [s, bars] of Object.entries(histories)) histOpt[s] = bars.filter((b) => b.date <= OPT_END)
+  const benchOpt = bench.filter((b) => b.date <= OPT_END)
+
+  type Core = { ma: number; hb: number; xm: number; buf: number; sl: number }
+  const coreSpec = (k: Core, extraEntry: ConditionNode[] = [], over: Partial<StrategySpec> = {}): StrategySpec => {
+    const nodes = [c(`${k.ma}일선돌파`, { kind: 'maCross', period: k.ma, dir: 'above' }), ...extraEntry]
+    if (k.hb) nodes.splice(1, 0, c(`${k.hb}일신고가`, { kind: 'highBreak', days: k.hb }))
+    const exits: StrategySpec['exits'] = []
+    if (k.sl) exits.push({ kind: 'stopLoss', pct: k.sl })
+    exits.push({ kind: 'maBreak', maPeriod: k.xm, pct: k.buf })
+    return { ...baseSpec({ entry: { op: 'and', nodes }, exits, universe: uni }), ...over }
+  }
+  const nameOf = (k: Core) =>
+    `MA${k.ma}${k.hb ? `×신고${k.hb}` : ''}→${k.xm}선${k.buf ? `·버퍼${k.buf}%` : ''}${k.sl ? `·손절${k.sl}%` : ''}`
+
+  const evalSpec = (spec: StrategySpec, label: string, hist = histOpt, start = '2011-01-01', bn = benchOpt) => {
+    const r = runStrategySpec(hist, start, spec, COST)
+    const s = stats(label, 'opt', r, bn, COST.initialCapital)
+    const mddAbs = Math.abs(s.mddPct ?? 0)
+    const obj = mddAbs > 0.01 ? (s.totalPct ?? 0) / mddAbs : null
+    return { s, obj }
+  }
+
+  // ── 1단계: 핵심 격자 ────────────────────────────────────────────────────
+  const rows: { k: Core; s: RunStats; obj: number | null }[] = []
+  let done = 0
+  for (const ma of [15, 20])
+    for (const hb of [0, 10, 20, 40, 60])
+      for (const xm of [20, 30, 40, 60, 80])
+        for (const buf of [0, 2, 4])
+          for (const sl of [0, 7, 10]) {
+            const k = { ma, hb, xm, buf, sl }
+            const { s, obj } = evalSpec(coreSpec(k), nameOf(k))
+            rows.push({ k, s, obj })
+            if (++done % 90 === 0) log(`… ${done}/450`)
+          }
+  const eligible = rows.filter((r) => r.obj != null && (r.s.trades ?? 0) >= 30).sort((a, b) => (b.obj ?? 0) - (a.obj ?? 0))
+  log('')
+  log('1단계 — 핵심 격자 상위 12 (2011~2021, 슬롯 10 고정):')
+  log('| # | 조건식 | 수익÷MDD | 총수익 | CAGR | MDD | 알파(연) | 매매 |')
+  log('|---|---|---|---|---|---|---|---|')
+  eligible.slice(0, 12).forEach((r, i) =>
+    log(
+      `| ${i + 1} | ${nameOf(r.k)} | **${r.obj!.toFixed(2)}** | ${f1(r.s.totalPct)}% | ${f1(r.s.cagrPct)}% | ${f1(r.s.mddPct)}% | ${f1(
+        r.s.alphaPct,
+      )}%p | ${r.s.trades} |`,
+    ),
+  )
+  const bestByMa: Record<number, { k: Core; obj: number }> = {}
+  for (const r of eligible) if (!bestByMa[r.k.ma]) bestByMa[r.k.ma] = { k: r.k, obj: r.obj! }
+  log('')
+  log(`MA별 1단계 최적: MA15 = ${nameOf(bestByMa[15].k)} (${bestByMa[15].obj.toFixed(2)}) · MA20 = ${nameOf(bestByMa[20].k)} (${bestByMa[20].obj.toFixed(2)})`)
+
+  // ── 2단계: 부가 조건 증분 ───────────────────────────────────────────────
+  const addons: { label: string; entry?: ConditionNode[]; over?: Partial<StrategySpec>; exitAdd?: StrategySpec['exits'] }[] = [
+    { label: '+양봉만 진입', entry: [c('양봉', { kind: 'candle', bull: true })] },
+    { label: '+거래량급증(20일 1.5배)', entry: [c('급증1.5', { kind: 'volumeSurge', days: 20, ratio: 1.5 })] },
+    { label: '+거래량급증(20일 2배)', entry: [c('급증2', { kind: 'volumeSurge', days: 20, ratio: 2 })] },
+    { label: '+이격도(20)≤110', entry: [c('이격110', { kind: 'disparity', period: 20, max: 110 })] },
+    { label: '+이격도(20)≤115', entry: [c('이격115', { kind: 'disparity', period: 20, max: 115 })] },
+    { label: '+RSI(14)≤70', entry: [c('RSI70', { kind: 'rsi', period: 14, max: 70 })] },
+    { label: '랭킹=등락률 내림', over: { ranking: { by: 'changePct', dir: 'desc' } } },
+    { label: '랭킹=거래대금 오름(한산 우선)', over: { ranking: { by: 'tradingValue', dir: 'asc' } } },
+    { label: '체결=익일 시가', over: { execution: { timing: 'nextOpen', orderType: 'market' } } },
+    { label: '+트레일링 −10%', exitAdd: [{ kind: 'trailing', pct: 10 }] },
+    { label: '+익절 +20%', exitAdd: [{ kind: 'takeProfit', pct: 20 }] },
+    { label: '+보유 60일 상한', exitAdd: [{ kind: 'timeExit', days: 60 }] },
+  ]
+  log('')
+  log('2단계 — 부가 조건 증분 (각 MA의 1단계 최적 조합 기준, Δ = 수익÷MDD 변화):')
+  log('| 부가 조건 | MA15 기준 수익÷MDD (Δ) | MA20 기준 수익÷MDD (Δ) |')
+  log('|---|---|---|')
+  const stage2Best: Record<number, { label: string; obj: number; spec: StrategySpec }> = {}
+  for (const ma of [15, 20]) {
+    const base = bestByMa[ma].k
+    stage2Best[ma] = { label: '(부가 없음)', obj: bestByMa[ma].obj, spec: coreSpec(base) }
+  }
+  for (const a of addons) {
+    const cells: string[] = []
+    for (const ma of [15, 20]) {
+      const base = bestByMa[ma].k
+      let spec = coreSpec(base, a.entry ?? [], a.over ?? {})
+      if (a.exitAdd) spec = { ...spec, exits: [...a.exitAdd, ...spec.exits] }
+      const { s, obj } = evalSpec(spec, a.label)
+      const d = obj != null ? obj - bestByMa[ma].obj : null
+      cells.push(obj != null && (s.trades ?? 0) >= 30 ? `${obj.toFixed(2)} (${d! >= 0 ? '+' : ''}${d!.toFixed(2)})` : '표본<30')
+      if (obj != null && (s.trades ?? 0) >= 30 && obj > stage2Best[ma].obj) stage2Best[ma] = { label: a.label, obj, spec }
+    }
+    log(`| ${a.label} | ${cells[0]} | ${cells[1]} |`)
+  }
+  log('')
+  log(`2단계 최적: MA15 = ${stage2Best[15].label} (${stage2Best[15].obj.toFixed(2)}) · MA20 = ${stage2Best[20].label} (${stage2Best[20].obj.toFixed(2)})`)
+
+  // ── OOS: 최종 후보들 2022~현재 ─────────────────────────────────────────
+  log('')
+  log('OOS (2022-01-01~현재):')
+  log('| 후보 | 수익÷MDD | 총수익 | CAGR | MDD | 알파(연) | 매매 |')
+  log('|---|---|---|---|---|---|---|')
+  const finals: { label: string; spec: StrategySpec }[] = [
+    { label: `MA15 1단계 최적 ${nameOf(bestByMa[15].k)}`, spec: coreSpec(bestByMa[15].k) },
+    { label: `MA20 1단계 최적 ${nameOf(bestByMa[20].k)}`, spec: coreSpec(bestByMa[20].k) },
+    { label: `MA15 2단계 최적 (${stage2Best[15].label})`, spec: stage2Best[15].spec },
+    { label: `MA20 2단계 최적 (${stage2Best[20].label})`, spec: stage2Best[20].spec },
+    { label: '기준: 17차 후보 MA15×신고20→60선·버퍼2%', spec: coreSpec({ ma: 15, hb: 20, xm: 60, buf: 2, sl: 0 }) },
+    { label: '기준: 현행 MA20×신고20→40선·버퍼2%', spec: coreSpec({ ma: 20, hb: 20, xm: 40, buf: 2, sl: 0 }) },
+  ]
+  for (const fset of finals) {
+    const { s, obj } = evalSpec(fset.spec, fset.label, histories, '2022-01-01', bench)
+    log(`| ${fset.label} | ${obj?.toFixed(2) ?? '—'} | ${f1(s.totalPct)}% | ${f1(s.cagrPct)}% | ${f1(s.mddPct)}% | ${f1(s.alphaPct)}%p | ${s.trades} |`)
+  }
+  log('')
+  log('⚠️ 한 구간 최적화는 곡선맞춤 — 채택 판단은 OOS 생존 + 파라미터 고원 기준. 사후 선택 유니버스 상한선, 투자자문 아님.')
+}
+
 const MODES: Record<string, () => Promise<void>> = {
   sweep,
   mine,
   mar,
   decade,
   slots,
+  tune,
   payoff,
   era,
   tqqq,
