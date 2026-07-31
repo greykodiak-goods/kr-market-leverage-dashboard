@@ -10,8 +10,14 @@
 import { loadSecret, maskerFor } from './lib/loadSecret.mjs'
 import { createKiwoomClient } from './lib/kiwoom.mjs'
 
-const key = loadSecret('KIWOOM_APP_KEY')
-const secret = loadSecret('KIWOOM_APP_SECRET')
+// 키움은 실전용/모의투자용 앱키가 별개다(에러 8030: 투자구분 불일치 — 2026-07-30 실측).
+// 모의서버(기본)에는 모의투자용 키를 우선 쓰고, 없으면 공용 이름으로 폴백한다.
+// 실전용 키(KIWOOM_APP_KEY)는 1단계 실서버 조회를 여는 시점(가드 테스트 개정 필요)까지 보관만.
+const mockKey = loadSecret('KIWOOM_MOCK_APP_KEY')
+const mockSecret = loadSecret('KIWOOM_MOCK_APP_SECRET')
+const key = mockKey.value ? mockKey : loadSecret('KIWOOM_APP_KEY')
+const secret = mockSecret.value ? mockSecret : loadSecret('KIWOOM_APP_SECRET')
+if (!mockKey.value) console.error('ℹ️ KIWOOM_MOCK_APP_KEY 없음 — 공용 키로 폴백 (모의서버는 모의투자용 키 필요)')
 if (!key.value || !secret.value) {
   console.error(key.help ?? secret.help)
   process.exit(1)
