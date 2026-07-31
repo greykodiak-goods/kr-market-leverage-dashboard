@@ -194,6 +194,7 @@ interface Position {
   qty: number
   entryIdx: number // 진입 시점의 캘린더 인덱스
   peak: number // 트레일링용 최고가
+  lastClose: number // 마지막으로 관측된 종가 — 봉이 없는 날(정지·캘린더 불일치) 평가에 이월
 }
 
 function buildCalendar(histories: Record<string, DailyBar[]>): string[] {
@@ -470,11 +471,13 @@ export function runStrategySpec(
     }
 
     // ---- 자산 평가 --------------------------------------------------------
+    // 봉이 없는 날(거래정지·데이터 캘린더 불일치)은 **마지막 관측 종가를 이월**한다.
+    // 진입가로 되돌리면 평가액이 "시가평가 ↔ 원가" 사이를 오가며 톱니가 생긴다(2026-07-31 수정).
     let holdings = 0
     for (const [sym, pos] of positions) {
       const bi = idxOf[sym].get(date)
-      const px = bi != null ? histories[sym][bi].c : pos.entryPrice
-      holdings += pos.qty * px
+      if (bi != null) pos.lastClose = histories[sym][bi].c
+      holdings += pos.qty * pos.lastClose
     }
     const eq = cash + holdings
     if (eq > peakEquity) peakEquity = eq
@@ -494,7 +497,7 @@ export function runStrategySpec(
     const gross = qty * fill
     const fee = gross * (cost.feePct / 100)
     cash -= gross + fee
-    positions.set(sym, { symbol: sym, entryDate: date, entryPrice: fill, qty, entryIdx: dayIdx, peak: peakInit })
+    positions.set(sym, { symbol: sym, entryDate: date, entryPrice: fill, qty, entryIdx: dayIdx, peak: peakInit, lastClose: rawPx })
     events.push({
       date,
       action: '매수',

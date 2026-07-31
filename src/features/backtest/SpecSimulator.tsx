@@ -546,7 +546,7 @@ export function SpecSimulator() {
       const effective: StrategySpec = { ...spec, universe: { ...spec.universe, symbols: tradable } }
       const res = runStrategySpec(histories, startDate || '0000-00-00', effective, cost)
       setResult(res)
-      setTradesShown(12) // 새 실행마다 접힌 상태로 시작 — '전체 보기'로 전 기간 이력 열람
+      setTradesPage(0) // 새 실행마다 1페이지부터
 
       // 벤치마크 — 같은 구간 KODEX 200 단순보유 (규칙 5: 판정은 알파 기준)
       setProgress('벤치마크 로딩…')
@@ -621,10 +621,13 @@ export function SpecSimulator() {
     }
   }
 
-  // 매매 이력 — 최신순 전체를 들고, 화면엔 조금씩 펼친다(전량 즉시 렌더는 수천 행에서 버벅임)
-  const [tradesShown, setTradesShown] = useState(12)
+  // 매매 이력 — 최신순 전체를 페이지로 나눠 전량 열람 (전량 즉시 렌더는 수천 행에서 버벅임)
+  const TRADES_PER_PAGE = 50
+  const [tradesPage, setTradesPage] = useState(0)
   const allTrades = result ? [...result.trades].reverse() : []
-  const recentTrades = allTrades.slice(0, tradesShown)
+  const tradePages = Math.max(1, Math.ceil(allTrades.length / TRADES_PER_PAGE))
+  const pageClamped = Math.min(tradesPage, tradePages - 1)
+  const recentTrades = allTrades.slice(pageClamped * TRADES_PER_PAGE, (pageClamped + 1) * TRADES_PER_PAGE)
   const screenRows = result ? result.lastScreen.slice(0, 12) : []
 
   return (
@@ -990,12 +993,31 @@ export function SpecSimulator() {
             </div>
           )}
 
-          {/* 매매 이력 (최신순 · 전체 열람 가능) */}
-          {recentTrades.length > 0 && (
+          {/* 매매 이력 (최신순 · 페이지 전체 열람) — 페이지 컨트롤은 스크롤 영역 밖에 둔다 */}
+          {allTrades.length > 0 && (
+            <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span className="bt-chart-caption" style={{ margin: 0 }}>
+                매매 이력 전체 {allTrades.length.toLocaleString()}건 (최신순) — {pageClamped + 1} / {tradePages} 페이지
+              </span>
+              {tradePages > 1 && (
+                <>
+                  <button type="button" className="bt-btn-mini" disabled={pageClamped === 0} onClick={() => setTradesPage(0)}>
+                    ⏮ 처음
+                  </button>
+                  <button type="button" className="bt-btn-mini" disabled={pageClamped === 0} onClick={() => setTradesPage((p) => Math.max(0, p - 1))}>
+                    ◀ 이전
+                  </button>
+                  <button type="button" className="bt-btn-mini" disabled={pageClamped >= tradePages - 1} onClick={() => setTradesPage((p) => Math.min(tradePages - 1, p + 1))}>
+                    다음 ▶
+                  </button>
+                  <button type="button" className="bt-btn-mini" disabled={pageClamped >= tradePages - 1} onClick={() => setTradesPage(tradePages - 1)}>
+                    끝 ⏭
+                  </button>
+                </>
+              )}
+            </div>
             <div className="bt-table-wrap bt-trades-table">
-              <div className="bt-chart-caption">
-                매매 이력 {recentTrades.length.toLocaleString()} / {allTrades.length.toLocaleString()}건 (최신순)
-              </div>
               <table>
                 <thead>
                   <tr>
@@ -1018,17 +1040,8 @@ export function SpecSimulator() {
                   ))}
                 </tbody>
               </table>
-              {allTrades.length > tradesShown && (
-                <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-                  <button type="button" className="bt-btn-mini" onClick={() => setTradesShown((n) => n + 200)}>
-                    더 보기 +200
-                  </button>
-                  <button type="button" className="bt-btn-mini" onClick={() => setTradesShown(allTrades.length)}>
-                    전체 보기 ({allTrades.length.toLocaleString()}건)
-                  </button>
-                </div>
-              )}
             </div>
+            </>
           )}
 
           {/* 마지막 스크리닝 — 왜 걸렸나/왜 떨어졌나 */}

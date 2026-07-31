@@ -1190,6 +1190,71 @@ async function challenger() {
 }
 
 /**
+ * 코스피 상승추세 레짐 기준 탐색 (MODE=regime) — 2026-07-30 대표 지시.
+ *
+ * "코스피 지수가 상승추세일 때만 진입"을 전제로, '상승추세'의 판단 기준 후보 7종을
+ * 승자 조합(MA20×신고20·느린청산·전체80)에 레짐 게이트로 끼워 전수 비교한다.
+ * 레짐 의미: 지수 조건이 참인 날만 **신규 진입** 허용(당일 종가 판정→익일 반영),
+ * 청산은 항상 동작 — 추세 이탈 시 강제 전량 청산은 하지 않는다(별도 설계 사안).
+ * 판정: 알파 유지력 + MDD 개선 + fit/val 일관성 (알파만도, MDD만도 아닌 균형).
+ */
+async function regime() {
+  const { histories, bench, tradable } = await loadAll()
+  const uni = { ...baseSpec({}).universe, symbols: tradable }
+  const entry20 = {
+    op: 'and',
+    nodes: [c('돌파', { kind: 'maCross', period: 20, dir: 'above' }), c('신고가', { kind: 'highBreak', days: 20 })],
+  } as ConditionNode
+  const gate = (nodes: ConditionNode[]): StrategySpec['regime'] => ({
+    symbol: KOSPI_INDEX,
+    entry: { op: 'and', nodes },
+  })
+  const R: { label: string; regime: StrategySpec['regime'] | null }[] = [
+    { label: 'R0 레짐 없음 (기준)', regime: null },
+    { label: 'R1 지수>20일선', regime: gate([c('r', { kind: 'maPosition', period: 20, dir: 'above' })]) },
+    { label: 'R2 지수>60일선', regime: gate([c('r', { kind: 'maPosition', period: 60, dir: 'above' })]) },
+    { label: 'R3 지수>120일선', regime: gate([c('r', { kind: 'maPosition', period: 120, dir: 'above' })]) },
+    { label: 'R4 정배열 5>10', regime: gate([c('r', { kind: 'maAlign', fast: 5, slow: 10 })]) },
+    { label: 'R5 정배열 20>60', regime: gate([c('r', { kind: 'maAlign', fast: 20, slow: 60 })]) },
+    {
+      label: 'R6 20>60 그리고 지수>20일선',
+      regime: gate([c('r1', { kind: 'maAlign', fast: 20, slow: 60 }), c('r2', { kind: 'maPosition', period: 20, dir: 'above' })]),
+    },
+    { label: 'R7 지수 RSI14≥50', regime: gate([c('r', { kind: 'rsi', period: 14, min: 50 })]) },
+  ]
+  const CUT = '2023-12-31'
+  const histFit: Record<string, DailyBar[]> = {}
+  for (const [s, bars] of Object.entries(histories)) histFit[s] = bars.filter((b) => b.date <= CUT)
+  const benchFit = bench.filter((b) => b.date <= CUT)
+  const y3 = new Date(Date.now() - 3 * 365.25 * 86400e3).toISOString().slice(0, 10)
+
+  log('')
+  log('| 상승추세 기준 | 전반(~23) 알파/MDD | **후반(24~) 알파/MDD** | 3y 알파/MDD | 3y CAGR | 매매(3y) | MAR(3y) |')
+  log('|---|---|---|---|---|---|---|')
+  for (const r of R) {
+    const spec = baseSpec({
+      entry: entry20,
+      exits: [{ kind: 'maBreak', maPeriod: 40, pct: 2 }],
+      universe: uni,
+      ...(r.regime ? { regime: r.regime } : {}),
+    })
+    const fit = stats(r.label, 'fit', runStrategySpec(histFit, '0000-00-00', spec, COST), benchFit, COST.initialCapital)
+    const val = stats(r.label, 'val', runStrategySpec(histories, '2024-01-01', spec, COST), bench, COST.initialCapital)
+    const w3 = stats(r.label, '3y', runStrategySpec(histories, y3, spec, COST), bench, COST.initialCapital)
+    const mar = w3.mddPct !== 0 ? (w3.cagrPct / Math.abs(w3.mddPct)).toFixed(2) : '—'
+    log(
+      `| ${r.label} | ${f1(fit.alphaPct)}%p/${f1(fit.mddPct)}% | **${f1(val.alphaPct)}%p/${f1(val.mddPct)}%** | ${f1(
+        w3.alphaPct,
+      )}%p/${f1(w3.mddPct)}% | ${f1(w3.cagrPct)}% | ${w3.trades} | ${mar} |`,
+    )
+  }
+  log('')
+  log('MAR = 3y CAGR ÷ |3y MDD| — 낙폭 한 단위당 수익. 레짐의 가치는 알파가 아니라 MAR·MDD로 본다.')
+  log('⚠️ 오늘 목록 상한선 동일. 8차 실측(2010~23)에서 지수>20일선 레짐은 MDD −30→−21 개선·CAGR 14.8→8.6 훼손이었다 — 장기 구간 교차 확인 필요 시 era 변형으로.')
+  log('⚠️ 시뮬레이션이며 투자자문이 아니다.')
+}
+
+/**
  * 시점 고정 코스닥 상위 검증 (MODE=pitkq) — 2026-07-30 대표 지시.
  *
  * "그 시점 코스닥 상위 40으로" — 단 과거 코스닥 랭킹 40개 전체의 신뢰 가능한
@@ -1594,7 +1659,20 @@ async function mine() {
   log('⚠️ 유니버스가 "오늘의 시총 상위"라 수치는 부풀려질 수 있다(선택편향). 조건 간 상대 비교 중심으로 볼 것.')
 }
 
-const MODES: Record<string, () => Promise<void>> = { sweep, mine, payoff, era, tqqq, pit, pitkq, band, robust, challenger, backtest: main }
+const MODES: Record<string, () => Promise<void>> = {
+  sweep,
+  mine,
+  payoff,
+  era,
+  tqqq,
+  pit,
+  pitkq,
+  band,
+  robust,
+  challenger,
+  regime,
+  backtest: main,
+}
 const entry = MODES[process.env.MODE ?? 'backtest'] ?? main
 entry().catch((e) => {
   console.error('실행 실패:', e)
