@@ -640,15 +640,29 @@ export function SpecSimulator() {
       if (symbols.length === 0) throw new Error('표본 종목이 비어 있습니다')
       const histories: Record<string, DailyBar[]> = {}
       const failed: string[] = []
-      for (const sym of symbols) {
-        setProgress(`${sym} 시세 로딩…`)
-        try {
-          const h = await getDailyHistory(sym, range)
-          if (h.bars.length > 0) histories[sym] = h.bars
-          else failed.push(sym)
-        } catch {
-          failed.push(sym)
+      // 병렬 로딩 — 순차(80회 왕복 직렬)가 시뮬 체감 지연의 주범이었다. 동시 6개:
+      // 공용 CORS 프록시의 유량 제한을 넘지 않는 선에서 벽시계 시간을 ~1/6로 줄인다.
+      {
+        let done = 0
+        setProgress(`시세 로딩 0/${symbols.length}…`)
+        const queue = [...symbols]
+        const CONCURRENCY = 6
+        const worker = async () => {
+          for (;;) {
+            const sym = queue.shift()
+            if (!sym) return
+            try {
+              const h = await getDailyHistory(sym, range)
+              if (h.bars.length > 0) histories[sym] = h.bars
+              else failed.push(sym)
+            } catch {
+              failed.push(sym)
+            }
+            done++
+            setProgress(`시세 로딩 ${done}/${symbols.length}…`)
+          }
         }
+        await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker))
       }
       const okCount = Object.keys(histories).length
       if (okCount === 0) throw new Error('시세를 하나도 받지 못했습니다 — 네트워크/프록시 상태를 확인하세요')

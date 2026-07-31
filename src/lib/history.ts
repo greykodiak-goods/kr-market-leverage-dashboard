@@ -181,6 +181,85 @@ export function writeHistoryCache(key: string, h: HistoryResult) {
   }
 }
 
+// ---- IndexedDB 캐시 계층 ----------------------------------------------------
+// localStorage 5MB 한도에는 80종목 × 16년 컬럼형(~12MB)이 다 들어가지 못해
+// LRU가 서로를 밀어내며 **매 실행 상당수를 다시 받았다**(시뮬 체감 지연의 주범).
+// IndexedDB는 수백 MB까지 허용되므로 시세 캐시를 여기로 옮긴다. 키·값(PackedHistory)·
+// TTL 의미는 동일하고, 기존 localStorage 항목은 읽힐 때 IDB로 이관된다.
+// indexedDB가 없는 환경(node 테스트·구형 브라우저)은 기존 localStorage 경로로 폴백.
+let idbPromise: Promise<IDBDatabase | null> | null = null
+function openIdb(): Promise<IDBDatabase | null> {
+  if (typeof indexedDB === 'undefined') return Promise.resolve(null)
+  if (!idbPromise) {
+    idbPromise = new Promise((resolve) => {
+      try {
+        const req = indexedDB.open('history-cache-db', 1)
+        req.onupgradeneeded = () => req.result.createObjectStore('history')
+        req.onsuccess = () => resolve(req.result)
+        req.onerror = () => resolve(null)
+        req.onblocked = () => resolve(null)
+      } catch {
+        resolve(null)
+      }
+    })
+  }
+  return idbPromise
+}
+
+function idbGet(key: string): Promise<PackedHistory | null> {
+  return openIdb().then(
+    (db) =>
+      new Promise<PackedHistory | null>((resolve) => {
+        if (!db) return resolve(null)
+        try {
+          const req = db.transaction('history').objectStore('history').get(key)
+          req.onsuccess = () => resolve((req.result as PackedHistory | undefined) ?? null)
+          req.onerror = () => resolve(null)
+        } catch {
+          resolve(null)
+        }
+      }),
+  )
+}
+
+function idbSet(key: string, value: PackedHistory): Promise<boolean> {
+  return openIdb().then(
+    (db) =>
+      new Promise<boolean>((resolve) => {
+        if (!db) return resolve(false)
+        try {
+          const tx = db.transaction('history', 'readwrite')
+          tx.objectStore('history').put(value, key)
+          tx.oncomplete = () => resolve(true)
+          tx.onerror = () => resolve(false)
+          tx.onabort = () => resolve(false)
+        } catch {
+          resolve(false)
+        }
+      }),
+  )
+}
+
+async function readHistoryCacheAsync(key: string): Promise<HistoryResult | null> {
+  const packed = await idbGet(key)
+  if (packed) {
+    try {
+      return unpackHistory(packed)
+    } catch {
+      /* 손상 항목 — 새로 받는다 */
+    }
+  }
+  // 레거시 localStorage 항목 — 읽히면 IDB로 이관해 다음부터 그쪽에서 나온다
+  const legacy = readHistoryCache(key)
+  if (legacy) void idbSet(key, packHistory(legacy))
+  return legacy
+}
+
+async function writeHistoryCacheAsync(key: string, h: HistoryResult): Promise<void> {
+  const ok = await idbSet(key, packHistory(h))
+  if (!ok) writeHistoryCache(key, h) // IDB 불가 환경 — 기존 localStorage(LRU 정리 포함)로
+}
+
 function toLocalDate(epochSec: number, gmtoffset: number): string {
   const d = new Date((epochSec + gmtoffset) * 1000)
   return d.toISOString().slice(0, 10)
@@ -255,7 +334,7 @@ export function parseYahooDaily(symbol: string, json: any, proxyUsed: string): H
 
 export async function getDailyHistory(symbol: string, range: HistoryRange = '10y'): Promise<HistoryResult> {
   const cacheKey = cacheKeyOf(symbol, range)
-  const cached = readHistoryCache(cacheKey)
+  const cached = await readHistoryCacheAsync(cacheKey)
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return cached
 
   // events=div,split → adjclose 동반 제공(배당 조정 계수 산출용)
@@ -278,7 +357,7 @@ export async function getDailyHistory(symbol: string, range: HistoryRange = '10y
       if (!res.ok) throw new Error(`${proxy.name} HTTP ${res.status}`)
       const json = await res.json()
       const hist = parseYahooDaily(symbol, json, proxy.name)
-      writeHistoryCache(cacheKey, hist)
+      void writeHistoryCacheAsync(cacheKey, hist) // 캐시 기록은 응답을 막지 않는다
       return hist
     } catch (err) {
       lastErr = err
