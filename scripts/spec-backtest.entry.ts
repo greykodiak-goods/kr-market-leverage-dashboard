@@ -2440,8 +2440,8 @@ async function krxprobe() {
       body: form({ name: 'fileDown', url: 'dbms/MDC/STAT/standard/MDCSTAT01501' }),
     })
     const otp = (await otpRes.text()).trim()
-    log(`[C OTP] HTTP ${otpRes.status} otp길이=${otp.length}`)
-    if (otpRes.ok && otp.length > 10 && otp.length < 500) {
+    log(`[C OTP] HTTP ${otpRes.status} otp길이=${otp.length} head="${otp.slice(0, 60)}"`)
+    if (otpRes.ok && otp.length > 10 && otp.length < 1000 && otp !== 'LOGOUT') {
       const dl = await fetch('http://data.krx.co.kr/comm/fileDn/download_csv/download.cmd', {
         method: 'POST',
         headers: {
