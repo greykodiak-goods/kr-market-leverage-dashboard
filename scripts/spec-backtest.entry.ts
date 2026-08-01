@@ -2217,16 +2217,23 @@ async function fetchKrxTop(trdDd: string, mktId: 'STK' | 'KSQ', topN: number): P
     money: '1',
     csvxls_isNo: 'false',
   })
-  const res = await fetch('http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd', {
+  const res = await fetch('https://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-      Referer: 'http://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd?menuId=MDC0201020101',
-      'User-Agent': 'Mozilla/5.0',
+      Referer: 'https://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd?menuId=MDC0201020101',
+      Origin: 'https://data.krx.co.kr',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      Accept: 'application/json, text/javascript, */*; q=0.01',
+      'X-Requested-With': 'XMLHttpRequest',
     },
     body: body.toString(),
   })
-  if (!res.ok) throw new Error(`KRX HTTP ${res.status}`)
+  if (!res.ok) {
+    // 진단: KRX 오류 본문 앞부분(시세 요청이라 시크릿 무관)을 그대로 노출
+    const txt = await res.text().catch(() => '')
+    throw new Error(`KRX HTTP ${res.status} — ${txt.slice(0, 140).replace(/\s+/g, ' ')}`)
+  }
   const json = (await res.json()) as { OutBlock_1?: Record<string, string>[] }
   const rows = json.OutBlock_1 ?? []
   const parsed = rows
@@ -2258,17 +2265,20 @@ async function pityear() {
         got = { ks, kq }
         log(`  ${y} (${trdDd}): 코스피 ${ks.length} · 코스닥 ${kq.length} — 1위 ${ks[0]?.name} / ${kq[0]?.name}`)
       } catch (e) {
-        if (day === 10) log(`  ⚠️ ${y}: KRX 조회 실패 — ${(e as Error).message.slice(0, 60)}`)
+        if (day >= 9) log(`  ⚠️ ${y}: KRX 조회 실패 — ${(e as Error).message.slice(0, 160)}`)
       }
       await sleep(400)
     }
-    if (!got) throw new Error(`${y}년 랭킹 수집 실패 — KRX 엔드포인트 확인 필요`)
-    lists[y] = got
+    if (got) lists[y] = got
   }
+  const okYears = years.filter((y) => lists[y])
+  if (okYears.length < 15)
+    throw new Error(`랭킹 수집 ${okYears.length}/${years.length}년뿐 — KRX 엔드포인트 진단 로그 확인 (해외 IP 차단이면 EC2 실행으로 전환)`)
+  if (okYears.length < years.length) log(`⚠️ 일부 연도 누락: ${years.filter((y) => !lists[y]).join(', ')} — 있는 연도만 연쇄`)
 
   // 전체 연도 합집합 시세 로드 (.KS/.KQ 자동 판별 — 이전상장 대응)
   const union = new Set<string>()
-  for (const y of years) {
+  for (const y of okYears) {
     for (const r of lists[y].ks) union.add(r.code)
     for (const r of lists[y].kq) union.add(r.code)
   }
@@ -2305,7 +2315,7 @@ async function pityear() {
     let factor = 1
     let benchFactor = 1
     let yearsWin = 0
-    for (const y of years) {
+    for (const y of okYears) {
       const codes = [...lists[y].ks, ...lists[y].kq].map((r) => r.code)
       const syms = codes.filter((cd) => histories[cd] && (histories[cd][0]?.date ?? '9999') <= `${y}-06-30`)
       const end = `${y}-12-31`
@@ -2323,13 +2333,13 @@ async function pityear() {
         `| ${y} | ${syms.length}/80 | ${f1((ret - 1) * 100)}% | ${f1((bret - 1) * 100)}% | ${f1((ret - bret) * 100)}%p | ${r.trades.length} |`,
       )
     }
-    const yrs = years.length - 1 + 7 / 12
+    const yrs = okYears.length - 1 + 7 / 12
     const cagr = (Math.pow(factor, 1 / yrs) - 1) * 100
     const bcagr = (Math.pow(benchFactor, 1 / yrs) - 1) * 100
     log(
-      `**${years[0]}~현재 연쇄: 총 ${f1((factor - 1) * 100)}% · CAGR ${f1(cagr)}% · 벤치 CAGR ${f1(bcagr)}% · 알파 ${f1(
+      `**${okYears[0]}~현재 연쇄: 총 ${f1((factor - 1) * 100)}% · CAGR ${f1(cagr)}% · 벤치 CAGR ${f1(bcagr)}% · 알파 ${f1(
         cagr - bcagr,
-      )}%p · 벤치 초과 ${yearsWin}/${years.length}년**`,
+      )}%p · 벤치 초과 ${yearsWin}/${okYears.length}년**`,
     )
   }
   log('')
