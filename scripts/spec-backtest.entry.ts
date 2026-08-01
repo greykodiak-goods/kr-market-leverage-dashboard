@@ -2362,9 +2362,119 @@ async function pityear() {
   log('연 단위 연쇄라 연말 보유분은 연말 종가 청산·새해 빈손 시작 근사. 시뮬레이션이며 투자자문 아님.')
 }
 
+/** MODE=krxprobe — KRX 랭킹 조회 "LOGOUT" 거부의 원인 격리 (요청 변형 4종 × 상태/본문 출력) */
+async function krxprobe() {
+  const trdDd = '20240104'
+  const form = (extra: Record<string, string> = {}) =>
+    new URLSearchParams({
+      bld: 'dbms/MDC/STAT/standard/MDCSTAT01501',
+      locale: 'ko_KR',
+      mktId: 'STK',
+      trdDd,
+      share: '1',
+      money: '1',
+      csvxls_isNo: 'false',
+      ...extra,
+    }).toString()
+  const show = async (label: string, res: Response) => {
+    const txt = await res.text().catch(() => '')
+    const head = txt.slice(0, 160).replace(/\s+/g, ' ')
+    let rows = -1
+    try {
+      rows = (JSON.parse(txt).OutBlock_1 ?? []).length
+    } catch {
+      /* JSON 아님 */
+    }
+    log(`[${label}] HTTP ${res.status} rows=${rows} body="${head}"`)
+  }
+  // A. http + 최소 헤더 (pykrx 스타일)
+  try {
+    const r = await fetch('http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'Mozilla/5.0',
+        Referer: 'http://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd',
+      },
+      body: form(),
+      redirect: 'follow',
+    })
+    await show('A http+min', r)
+  } catch (e) {
+    log(`[A] 예외: ${(e as Error).message.slice(0, 100)}`)
+  }
+  await sleep(700)
+  // B. https + 쿠키 프리플라이트 + 풀 헤더
+  try {
+    const pre = await fetch('https://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd?menuId=MDC0201020101', {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+    })
+    const cookie = (pre.headers.getSetCookie?.() ?? []).map((x) => x.split(';')[0]).join('; ')
+    log(`[B 쿠키] pre HTTP ${pre.status} cookie=${cookie ? cookie.split('=')[0] + '=…' : '(없음)'}`)
+    const r = await fetch('https://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        Referer: 'https://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd?menuId=MDC0201020101',
+        Origin: 'https://data.krx.co.kr',
+        'X-Requested-With': 'XMLHttpRequest',
+        ...(cookie ? { Cookie: cookie } : {}),
+      },
+      body: form(),
+    })
+    await show('B https+cookie', r)
+  } catch (e) {
+    log(`[B] 예외: ${(e as Error).message.slice(0, 100)}`)
+  }
+  await sleep(700)
+  // C. OTP 2단계 (CSV 다운로드 플로우 — getJsonData가 막혀도 열려 있는 경우가 많다)
+  try {
+    const otpRes = await fetch('http://data.krx.co.kr/comm/fileDn/GenerateOTP/generate.cmd', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'Mozilla/5.0',
+        Referer: 'http://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd',
+      },
+      body: form({ name: 'fileDown', url: 'dbms/MDC/STAT/standard/MDCSTAT01501' }),
+    })
+    const otp = (await otpRes.text()).trim()
+    log(`[C OTP] HTTP ${otpRes.status} otp길이=${otp.length}`)
+    if (otpRes.ok && otp.length > 10 && otp.length < 500) {
+      const dl = await fetch('http://data.krx.co.kr/comm/fileDn/download_csv/download.cmd', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent': 'Mozilla/5.0',
+          Referer: 'http://data.krx.co.kr/comm/fileDn/GenerateOTP/generate.cmd',
+        },
+        body: new URLSearchParams({ code: otp }).toString(),
+      })
+      const csv = await dl.text()
+      log(`[C CSV] HTTP ${dl.status} 길이=${csv.length} 첫줄="${csv.split('\n')[0]?.slice(0, 120)}"`)
+    }
+  } catch (e) {
+    log(`[C] 예외: ${(e as Error).message.slice(0, 100)}`)
+  }
+  await sleep(700)
+  // D. mktId=ALL + getJsonData http
+  try {
+    const r = await fetch('http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'Mozilla/5.0', Referer: 'http://data.krx.co.kr/' },
+      body: form({ mktId: 'ALL' }),
+    })
+    await show('D http ALL', r)
+  } catch (e) {
+    log(`[D] 예외: ${(e as Error).message.slice(0, 100)}`)
+  }
+}
+
 const MODES: Record<string, () => Promise<void>> = {
   vintage,
   pityear,
+  krxprobe,
   sweep,
   mine,
   mar,
