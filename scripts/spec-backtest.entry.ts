@@ -2196,8 +2196,150 @@ async function vintage() {
   log('그래도 "오늘의 상위 80"(지난 10년 승자 사후 선택)보다는 훨씬 보수적인 추정치다. 시뮬레이션이며 투자자문 아님.')
 }
 
+/**
+ * MODE=pityear — KRX 정보데이터시스템 실측 랭킹으로 **매년 갱신되는** 시점 고정 유니버스 (2026-08-01 대표 지시).
+ *
+ * 19차(2006 동결)의 "목록 노화" 문제를 제거한 결정판: 매년 연초 첫 거래일의 실측 시가총액
+ * 상위 코스피40+코스닥40을 KRX 공개 데이터에서 직접 받아 그 해의 유니버스로 쓴다.
+ * [추정] 목록이 아니라 실데이터 랭킹 — 선택 편향이 구조적으로 없다.
+ *
+ * 잔존 한계(정직성): 당시 상위였다가 이후 상장폐지된 종목은 Yahoo에 **가격 데이터가 없어**
+ * 그 해 유니버스에서 빠진다(가격 생존편향 잔존 — 연도별 매핑률을 함께 보고). KRX 엔드포인트는
+ * 포털 백엔드라 형식 변경 가능 [미검증 — 첫 실행에서 확정].
+ */
+async function fetchKrxTop(trdDd: string, mktId: 'STK' | 'KSQ', topN: number): Promise<{ code: string; name: string }[]> {
+  const body = new URLSearchParams({
+    bld: 'dbms/MDC/STAT/standard/MDCSTAT01501',
+    locale: 'ko_KR',
+    mktId,
+    trdDd,
+    share: '1',
+    money: '1',
+    csvxls_isNo: 'false',
+  })
+  const res = await fetch('http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+      Referer: 'http://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd?menuId=MDC0201020101',
+      'User-Agent': 'Mozilla/5.0',
+    },
+    body: body.toString(),
+  })
+  if (!res.ok) throw new Error(`KRX HTTP ${res.status}`)
+  const json = (await res.json()) as { OutBlock_1?: Record<string, string>[] }
+  const rows = json.OutBlock_1 ?? []
+  const parsed = rows
+    .map((r) => ({
+      code: r.ISU_SRT_CD ?? '',
+      name: r.ISU_ABBRV ?? '',
+      cap: Number(String(r.MKTCAP ?? '0').replace(/,/g, '')),
+    }))
+    // 보통주만: 코드 끝 '0' (우선주 5/7/9 등 제외), 스팩 제외
+    .filter((r) => /^\d{6}$/.test(r.code) && r.code.endsWith('0') && !/스팩/.test(r.name) && r.cap > 0)
+    .sort((a, b) => b.cap - a.cap)
+  return parsed.slice(0, topN)
+}
+
+async function pityear() {
+  const years: number[] = []
+  for (let y = 2006; y <= 2026; y++) years.push(y)
+  const lists: Record<number, { ks: { code: string; name: string }[]; kq: { code: string; name: string }[] }> = {}
+  log('KRX 실측 랭킹 수집 (연초 첫 거래일 기준, 보통주만·스팩 제외):')
+  for (const y of years) {
+    let got: { ks: { code: string; name: string }[]; kq: { code: string; name: string }[] } | null = null
+    for (let day = 4; day <= 10 && !got; day++) {
+      const trdDd = `${y}01${String(day).padStart(2, '0')}`
+      try {
+        const ks = await fetchKrxTop(trdDd, 'STK', 40)
+        if (ks.length < 10) continue // 휴장일 — 다음 날짜 시도
+        await sleep(400)
+        const kq = await fetchKrxTop(trdDd, 'KSQ', 40)
+        got = { ks, kq }
+        log(`  ${y} (${trdDd}): 코스피 ${ks.length} · 코스닥 ${kq.length} — 1위 ${ks[0]?.name} / ${kq[0]?.name}`)
+      } catch (e) {
+        if (day === 10) log(`  ⚠️ ${y}: KRX 조회 실패 — ${(e as Error).message.slice(0, 60)}`)
+      }
+      await sleep(400)
+    }
+    if (!got) throw new Error(`${y}년 랭킹 수집 실패 — KRX 엔드포인트 확인 필요`)
+    lists[y] = got
+  }
+
+  // 전체 연도 합집합 시세 로드 (.KS/.KQ 자동 판별 — 이전상장 대응)
+  const union = new Set<string>()
+  for (const y of years) {
+    for (const r of lists[y].ks) union.add(r.code)
+    for (const r of lists[y].kq) union.add(r.code)
+  }
+  log(`고유 종목 ${union.size}개 시세 로드 시작 (상폐 종목은 실패 — 연도별 매핑률로 보고)`)
+  const histories: Record<string, DailyBar[]> = {}
+  let loadFail = 0
+  for (const code of union) {
+    const bars = await fetchKrDual(code, 'since:2005-01-01')
+    if (bars) histories[code] = bars
+    else loadFail++
+    await sleep(100)
+  }
+  log(`로드 ${Object.keys(histories).length} · 실패(상폐 등) ${loadFail}`)
+  const bench = await fetchDaily(BENCH, 'since:2005-01-01')
+
+  const mk = (ma: number, hb: number, xm: number, buf: number, symbols: string[]): StrategySpec =>
+    baseSpec({
+      entry: {
+        op: 'and',
+        nodes: [c(`${ma}일선돌파`, { kind: 'maCross', period: ma, dir: 'above' }), c(`${hb}일신고가`, { kind: 'highBreak', days: hb })],
+      },
+      exits: [{ kind: 'maBreak', maPeriod: xm, pct: buf }],
+      universe: { ...baseSpec({}).universe, symbols },
+    })
+  const models = [
+    { label: '현행 MA20×신고20→40선·버퍼2%', make: (syms: string[]) => mk(20, 20, 40, 2, syms) },
+    { label: '17차 후보 MA15×신고20→60선·버퍼2%', make: (syms: string[]) => mk(15, 20, 60, 2, syms) },
+  ]
+  for (const m of models) {
+    log('')
+    log(`### ${m.label} — 매년 실측 상위 80으로 유니버스 갱신 (연쇄·연말 청산 근사)`)
+    log('| 연도 | 매핑 | 전략 수익 | 벤치 | 초과 | 매매 |')
+    log('|---|---|---|---|---|---|')
+    let factor = 1
+    let benchFactor = 1
+    let yearsWin = 0
+    for (const y of years) {
+      const codes = [...lists[y].ks, ...lists[y].kq].map((r) => r.code)
+      const syms = codes.filter((cd) => histories[cd] && (histories[cd][0]?.date ?? '9999') <= `${y}-06-30`)
+      const end = `${y}-12-31`
+      const hist: Record<string, DailyBar[]> = {}
+      for (const s of syms) hist[s] = histories[s].filter((b) => b.date <= end)
+      const r = runStrategySpec(hist, `${y}-01-01`, m.make(syms), COST)
+      const finalEq = r.equity.length ? r.equity[r.equity.length - 1].equity : COST.initialCapital
+      const ret = finalEq / COST.initialCapital
+      const inYear = bench.filter((b) => b.date >= `${y}-01-01` && b.date <= end)
+      const bret = inYear.length >= 2 ? inYear[inYear.length - 1].c / inYear[0].c : 1
+      factor *= ret
+      benchFactor *= bret
+      if (ret > bret) yearsWin++
+      log(
+        `| ${y} | ${syms.length}/80 | ${f1((ret - 1) * 100)}% | ${f1((bret - 1) * 100)}% | ${f1((ret - bret) * 100)}%p | ${r.trades.length} |`,
+      )
+    }
+    const yrs = years.length - 1 + 7 / 12
+    const cagr = (Math.pow(factor, 1 / yrs) - 1) * 100
+    const bcagr = (Math.pow(benchFactor, 1 / yrs) - 1) * 100
+    log(
+      `**${years[0]}~현재 연쇄: 총 ${f1((factor - 1) * 100)}% · CAGR ${f1(cagr)}% · 벤치 CAGR ${f1(bcagr)}% · 알파 ${f1(
+        cagr - bcagr,
+      )}%p · 벤치 초과 ${yearsWin}/${years.length}년**`,
+    )
+  }
+  log('')
+  log('⚠️ 랭킹은 KRX 실측(선택편향 없음). 상폐 종목의 가격 데이터 부재로 매핑률만큼 가격 생존편향 잔존.')
+  log('연 단위 연쇄라 연말 보유분은 연말 종가 청산·새해 빈손 시작 근사. 시뮬레이션이며 투자자문 아님.')
+}
+
 const MODES: Record<string, () => Promise<void>> = {
   vintage,
+  pityear,
   sweep,
   mine,
   mar,
