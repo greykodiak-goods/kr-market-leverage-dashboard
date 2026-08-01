@@ -843,7 +843,11 @@ function commitData(message: string): string {
     git(['add', 'public/data/mock-live'])
     const clean = spawnSync('git', ['diff', '--cached', '--quiet'], { cwd: root }).status === 0
     if (clean) return '변경분 없음'
-    git(['-c', 'user.name=investing-daemon', '-c', 'user.email=investing-daemon@ec2.local', 'commit', '-m', message])
+    const ident = ['-c', 'user.name=investing-daemon', '-c', 'user.email=investing-daemon@ec2.local']
+    git([...ident, 'commit', '-m', message])
+    // 상주 프로세스라 로컬이 remote보다 뒤처진다(페이퍼 트래킹 GHA가 매일 main에 커밋).
+    // rebase 없이 push하면 둘째 날부터 항상 거부되므로 push 직전에 당겨 얹는다.
+    git([...ident, 'pull', '--rebase', 'origin', 'main'])
     git(['push', 'origin', 'main'])
     return '커밋·푸시 완료'
   } catch (e) {
