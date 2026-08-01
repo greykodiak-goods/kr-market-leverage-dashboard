@@ -2207,7 +2207,21 @@ async function vintage() {
  * 그 해 유니버스에서 빠진다(가격 생존편향 잔존 — 연도별 매핑률을 함께 보고). KRX 엔드포인트는
  * 포털 백엔드라 형식 변경 가능 [미검증 — 첫 실행에서 확정].
  */
+// KRX는 세션 쿠키 없는 POST를 "LOGOUT"으로 거부한다(2026-08-01 실측) — 포털 페이지를
+// 한 번 GET해 JSESSIONID를 받아 재사용한다. 해외 IP 차단이면 이걸로도 안 되며 EC2(국내)로 전환.
+let krxCookie: string | null = null
+async function krxSession(): Promise<string> {
+  if (krxCookie) return krxCookie
+  const res = await fetch('https://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd?menuId=MDC0201020101', {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+  })
+  const setCookie = res.headers.getSetCookie?.() ?? []
+  krxCookie = setCookie.map((c) => c.split(';')[0]).join('; ')
+  return krxCookie
+}
+
 async function fetchKrxTop(trdDd: string, mktId: 'STK' | 'KSQ', topN: number): Promise<{ code: string; name: string }[]> {
+  const cookie = await krxSession()
   const body = new URLSearchParams({
     bld: 'dbms/MDC/STAT/standard/MDCSTAT01501',
     locale: 'ko_KR',
@@ -2226,6 +2240,7 @@ async function fetchKrxTop(trdDd: string, mktId: 'STK' | 'KSQ', topN: number): P
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       Accept: 'application/json, text/javascript, */*; q=0.01',
       'X-Requested-With': 'XMLHttpRequest',
+      ...(cookie ? { Cookie: cookie } : {}),
     },
     body: body.toString(),
   })
