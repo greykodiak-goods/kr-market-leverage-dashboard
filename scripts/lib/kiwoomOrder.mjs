@@ -349,18 +349,19 @@ const n = (raw) => {
   return Number.isFinite(v) ? v : null
 }
 
+const pick = (obj, keys) => {
+  for (const k of keys) {
+    const v = n(obj?.[k])
+    if (v != null) return v
+  }
+  return null
+}
+
 /**
  * kt00018 응답 → 총평가·현금·보유목록. [미검증] 필드명은 probe 로 확정한다.
  * 후보 키를 순서대로 훑어 처음 잡히는 값을 쓴다(문서·실측 불일치 대비).
  */
 export function parseBalance(json) {
-  const pick = (obj, keys) => {
-    for (const k of keys) {
-      const v = n(obj?.[k])
-      if (v != null) return v
-    }
-    return null
-  }
   const totalAssetKrw = pick(json, ['tot_evlt_amt', 'tot_est_amt', 'prsm_dpst_aset_amt', 'tot_evltv'])
   const cashKrw = pick(json, ['entr', 'dpst', 'prsm_dpst_aset_amt', 'd2_entra'])
   const rows = Array.isArray(json?.acnt_evlt_remn_indv_tot)
@@ -374,4 +375,42 @@ export function parseBalance(json) {
     holdings.push({ symbol: code, qty, avgPrice: pick(r, ['pur_pric', 'avg_prc', 'pchs_avg_pric']) })
   }
   return { totalAssetKrw, cashKrw, holdings }
+}
+
+/**
+ * kt00007 응답 → 종목별 **체결 수량·체결가·미체결 수량**. 상주 데몬의 09:01 체결 확인이 쓴다.
+ *
+ * ⚠️ [미검증] 필드명은 전부 문서상 추정이다(probe 로 확정 대상). 못 읽으면 값이 null 로
+ * 나오고, 호출자는 그때 "체결 확인 불가"로 처리한다 — **모르는 것을 체결로 단정하지 않는다.**
+ * 같은 종목이 여러 줄로 나뉘면 수량 가중 평균가로 합친다.
+ *
+ * @returns {{ symbol: string, filledQty: number|null, avgPrice: number|null, openQty: number|null }[]}
+ */
+export function parseExecutions(json) {
+  const rows = Array.isArray(json?.acnt_ord_cntr_prps_dtl)
+    ? json.acnt_ord_cntr_prps_dtl
+    : Object.values(json ?? {}).find((v) => Array.isArray(v)) ?? []
+  /** @type {Map<string, {qty:number, amount:number, openQty:number|null, seen:boolean}>} */
+  const agg = new Map()
+  for (const r of rows) {
+    const code = String(r?.stk_cd ?? '').replace(/[^0-9]/g, '').slice(-6)
+    if (!code) continue
+    const filled = pick(r, ['cntr_qty', 'tot_cntr_qty', 'cntr_tot_qty'])
+    const price = pick(r, ['cntr_uv', 'cntr_pric', 'cntr_avg_uv', 'avg_cntr_uv'])
+    const open = pick(r, ['oso_qty', 'rmn_qty', 'ord_rmnq', 'unsett_qty'])
+    const cur = agg.get(code) ?? { qty: 0, amount: 0, openQty: null, seen: false }
+    if (filled != null && filled > 0) {
+      cur.qty += filled
+      if (price != null && price > 0) cur.amount += filled * price
+    }
+    if (open != null) cur.openQty = (cur.openQty ?? 0) + open
+    cur.seen = true
+    agg.set(code, cur)
+  }
+  return [...agg.entries()].map(([symbol, v]) => ({
+    symbol,
+    filledQty: v.qty > 0 ? v.qty : v.seen ? 0 : null,
+    avgPrice: v.qty > 0 && v.amount > 0 ? v.amount / v.qty : null,
+    openQty: v.openQty,
+  }))
 }

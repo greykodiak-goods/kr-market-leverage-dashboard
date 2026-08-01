@@ -16,13 +16,17 @@
 | --- | --- |
 | `scripts/lib/kiwoomOrder.mjs` | 모의서버 주문 어댑터. `placeOrder` / `cancelOrder` / `getBalance` / `getExecutions`. **모든 게이트가 여기 안에 있다.** |
 | `scripts/kiwoom-order-probe.mjs` | 연결·TR 검증 스크립트(대표 PC에서 실행). 잔고 조회 → dryRun 계획 → (플래그 2개 시) 1주 매수·취소 왕복. |
-| `scripts/mock-trade-daily.mjs` | 일일 운용 러너 런처(esbuild). 실제 로직은 `scripts/mock-trade-daily.entry.ts`. |
+| `scripts/investing-daemon.mjs` | **24시간 상주 데몬 런처(표준)**. 실제 로직은 `scripts/investing-daemon.entry.ts`. §5 참조. |
+| `scripts/lib/daemonSchedule.ts` | 데몬 스케줄 **순수 로직**(슬롯 시각·만회·재시도·정밀 알람). 네트워크 없음. |
+| `scripts/lib/mockTradeCore.ts` | 데몬과 일일 러너가 **공유**하는 코어 — 시세 로딩·신호 산출·주문 계획·절단(`truncateHistories`). |
+| `scripts/mock-trade-daily.mjs` | 일일 운용 러너 런처(esbuild) — **폐기 예정 폴백**. 실제 로직은 `scripts/mock-trade-daily.entry.ts`. |
 | `src/features/backtest/mockLedger.ts` | **전략별 장부(ledger) 순수 로직** — 초기화·체결 반영·평가·계좌 제약·요약. 네트워크 없음. |
 | `public/data/mock-live/config.json` | **5기법 정의**(전략 목록·전략별 자본·슬롯). 여기만 고치면 전략이 바뀐다. |
 | `public/data/mock-live/ledger.json` | 전략별 현금·포지션·매매기록·자산곡선. **러너가 갱신하는 단일 원본.** |
 | `public/data/mock-live/summary.json` | 전략별 성과 + 벤치 대비 알파(일일 리포트). |
 | `public/data/mock-live/journal.json` | 매 실행의 신호·주문·응답 저널(append). 주문마다 전략 id 태그. |
 | `public/data/mock-live/order-count.json` | 일일 주문 건수 카운터(하드 게이트용). 날짜가 바뀌면 자동 리셋. |
+| `public/data/mock-live/daemon-state.json` | 데몬의 당일 상태(프리로드 결과·접수 목록·단계 진행). **재시작 대비 캐시**이며 멱등의 정본은 `ledger.phases` 다. |
 
 ---
 
@@ -206,23 +210,74 @@ doppler run --project investing-ops --config prd -- node scripts/verify-intraday
 
 ---
 
-## 5. Windows 작업 스케줄러 등록
+## 5. 상시 운용 — EC2 pm2 상주 데몬 (표준)
 
-> **2026-07-31 이후 표준은 EC2 크론이다** — 기존 쿠팡 프록시 EC2(고정 IP 54.116.72.9)에
-> `awning-ops`의 `deploy-investing.yml` 워크플로가 크론을 설치한다(러너 정본:
-> `scripts/server/investing-cron.sh` — 평일 15:20 모의운용 · 토 09:30 백필+검증+커밋).
-> 아래 schtasks는 EC2 크론이 살아 있는 동안 등록하지 않는다(이중 실행 방지).
+> **2026-08-01 이후 표준은 상주 데몬 `investing-daemon` 이다.**
+> 크론(평일 15:20 `mock-trade`)은 **폐기 예정** — 데몬이 안정화되면 크론에서 뺀다.
+> 둘을 동시에 돌리지 않는다(같은 장부를 두 프로세스가 갱신하면 갈라진다).
 
-평일 15:20 실행(장 마감 15:30 직전). 리포 경로는 실제 경로로 바꿔 넣는다.
+**왜 바꿨나** — ① 크론은 실행마다 git pull·npm install·시세 80종목 로딩으로 수 분의
+콜드스타트를 먹는다. ② 백테스트 가정은 "매도 = 익일 시가"인데 15:20에 팔면 하루치 종가
+변동을 통째로 더 먹거나 잃어, 2단계 게이트가 재려는 슬리피지 대조 자체가 오염된다.
 
-```powershell
-schtasks /create /tn "KiwoomMockTradeDaily" /sc weekly /d MON,TUE,WED,THU,FRI /st 15:20 /f /tr "cmd /c cd /d C:\path\to\kr-market-leverage-dashboard && doppler run --project investing-ops --config prd -- node scripts/mock-trade-daily.mjs --live >> logs\mock-trade.log 2>&1"
+### 하루 스케줄 (KST · 정본은 `scripts/lib/daemonSchedule.ts`)
+
+| 시각 | 단계 | 하는 일 |
+| --- | --- | --- |
+| 08:30 | `preload` | 일봉 80종목 재로딩 · **전일 종가 기준** 청산 대상 확정 · 키움 토큰 워밍업 |
+| 08:59:30 | `sells` | 확정된 청산 대상을 **시장가로 접수**(개장 동시호가 참여 → 09:00 개장가 체결 = "익일 시가 매도" 가정과 일치) |
+| 09:01 | `confirm` | 체결내역·잔고 조회 → 미체결이면 **1회 재주문** → 체결가로 장부 반영 · 슬리피지 기록 |
+| 15:20 | `buys` | 당일 근실시간 시세로 진입 후보 산출 → 매수 주문 → 장부 반영 |
+| 16:10 | `close` | 평가·요약·저널 갱신 + `public/data/mock-live` 커밋·푸시(identity `investing-daemon`) |
+
+- 토·일은 아무것도 하지 않는다. **공휴일은 "당일 봉이 없다"는 사실로** 각 단계가 판정한다
+  (오프라인 휴장 달력이 없어 개장 전 접수는 공휴일에도 나가지만, 브로커가 거부하고 장부는
+  건드리지 않는다. dryRun 에서는 아무것도 전송되지 않는다).
+- 타이머는 **다음 슬롯까지 자는 정밀 알람 + 30초 보조 tick**(놓친 슬롯 만회 전용)이다.
+  데몬이 09:30에 재시작해도 그날의 프리로드·매도·체결확인을 한 번은 만회한다. 단 주문 단계의
+  만회 마감선(매도·체결확인 15:00 / 매수 15:29)이 지나면 **영구히 건너뛴다** — 장 끝난 뒤에
+  주문이 나가는 것이 더 나쁘기 때문이다.
+- **멱등**: 단계 반영 기록이 `ledger.phases[날짜][단계]` 에 남는다. 재시작하거나 같은 단계를
+  손으로 다시 돌려도 장부가 이중 반영되지 않는다.
+- **HALT**: 리포 루트에 `HALT` 파일이 있으면 데몬 루프가 주문 단계를 보류하고(로그 남김),
+  어댑터 게이트가 한 번 더 막는다. 파일을 지우면 마감선 전까지 만회 실행된다.
+
+### 실행
+
+```bash
+# 상주 (기본 dryRun — 아무것도 전송하지 않는다)
+doppler run --project investing-ops --config prd -- node scripts/investing-daemon.mjs
+
+# 실제 모의서버 주문
+doppler run --project investing-ops --config prd -- node scripts/investing-daemon.mjs --live
+
+# 단계 1회 실행 (디버깅·검증)
+node scripts/investing-daemon.mjs --once=preload|sells|confirm|buys|close [--live] [--no-git]
 ```
 
-- **처음 최소 1주일은 `--live` 를 빼고** 등록해 계획만 쌓고, 저널을 눈으로 검토한 뒤 `--live` 를 붙인다.
-- 휴장일에는 오늘 봉이 없으므로 러너가 스스로 주문 없이 종료하고 저널에 `skipped` 를 남긴다.
-- 로그 폴더(`logs\`)는 미리 만들어 둔다. 로그에는 시크릿·계좌번호가 남지 않는다.
-- 등록 확인/삭제: `schtasks /query /tn "KiwoomMockTradeDaily"` · `schtasks /delete /tn "KiwoomMockTradeDaily" /f`
+pm2 등록(EC2):
+
+```bash
+pm2 start "doppler run --project investing-ops --config prd -- node scripts/investing-daemon.mjs" \
+  --name investing-daemon --cwd ~/investing/kr-market --time
+pm2 save && pm2 startup     # 재부팅 후 자동 기동
+pm2 logs investing-daemon   # 로그(시크릿·계좌번호는 남지 않는다)
+```
+
+- **처음 최소 1주일은 `--live` 없이** 돌려 계획만 쌓고, 저널을 눈으로 검토한 뒤 `--live` 를 붙인다.
+- 데몬을 켜면 크론의 `mock-trade` 항목을 **반드시 뺀다**(`scripts/server/investing-cron.sh`
+  의 `weekly-backfill` 은 그대로 둔다). 이중 실행 시 같은 날 장부가 두 경로로 갱신된다.
+- 커밋은 **main 브랜치에서만** 한다(다른 브랜치면 생략하고 로그만 남긴다). `--no-git` 으로 끌 수 있다.
+
+### 폴백 — 일회성 러너 `mock-trade-daily`
+
+데몬을 못 띄우는 환경(대표 PC 수동 실행 등)에서만 쓴다. 판단 로직은 `scripts/lib/mockTradeCore.ts`
+를 데몬과 **공유**하므로 신호가 갈리지 않지만, **매도도 15:20에 낸다** — 체결 시점이 백테스트
+가정과 어긋나므로 슬리피지 실측 근거로는 쓰지 않는다.
+
+```powershell
+doppler run --project investing-ops --config prd -- node scripts/mock-trade-daily.mjs [--live] [--again]
+```
 
 ---
 

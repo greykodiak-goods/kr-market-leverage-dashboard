@@ -95,14 +95,29 @@ export interface StrategyLedger {
   equityHistory: LedgerEquityPoint[]
 }
 
+/**
+ * 상주 데몬이 하루를 쪼개 도는 단계 — 각 단계는 하루에 한 번만 장부에 반영된다.
+ * 매도는 08:59:30에 **접수**(sells)하고 09:01에 **체결 확인 후 장부 반영**(confirm)한다.
+ */
+export type LedgerPhase = 'preload' | 'sells' | 'confirm' | 'buys' | 'close'
+
 export interface MockLedger {
   version: typeof MOCK_LEDGER_VERSION
   inception: string
   updatedAt: string | null
   /** 같은 날 두 번 돌려 장부가 이중 반영되는 사고를 막는 표식 */
   lastRunDate: string | null
+  /**
+   * 날짜별 단계 반영 기록 — 상주 데몬(investing-daemon)의 멱등 가드.
+   * 재시작·수동 재실행으로 같은 단계를 다시 돌려도 장부가 이중 반영되지 않는다.
+   * 무한히 늘어나면 안 되므로 최근 PHASE_HISTORY_DAYS 일치만 남긴다(ops 규칙 2 — 데이터는 늘어난다).
+   */
+  phases?: Record<string, Partial<Record<LedgerPhase, boolean>>>
   strategies: Record<string, StrategyLedger>
 }
+
+/** phases 에 보관할 날짜 수 — 장부 파일이 무한히 커지지 않게 자른다. */
+export const PHASE_HISTORY_DAYS = 40
 
 function newStrategyLedger(c: MockStrategyConfig, capital: number, inception: string): StrategyLedger {
   return {
@@ -239,6 +254,74 @@ export function applyLedgerFill(
       trades: [...s.trades, trade],
     },
   }
+}
+
+// ---- 단계 멱등 가드 (상주 데몬) ---------------------------------------------
+
+/** 그 날짜의 그 단계가 이미 장부에 반영됐나. */
+export function phaseDone(ledger: MockLedger, date: string, phase: LedgerPhase): boolean {
+  return ledger.phases?.[date]?.[phase] === true
+}
+
+/** 단계 완료를 기록한다(순수 함수). 오래된 날짜는 잘라 파일이 무한히 커지지 않게 한다. */
+export function markPhase(ledger: MockLedger, date: string, phase: LedgerPhase): MockLedger {
+  const merged: Record<string, Partial<Record<LedgerPhase, boolean>>> = {
+    ...(ledger.phases ?? {}),
+    [date]: { ...(ledger.phases?.[date] ?? {}), [phase]: true },
+  }
+  const kept = Object.keys(merged)
+    .sort()
+    .slice(-PHASE_HISTORY_DAYS)
+  const phases: Record<string, Partial<Record<LedgerPhase, boolean>>> = {}
+  for (const d of kept) phases[d] = merged[d]
+  return { ...ledger, phases }
+}
+
+export interface PhaseFill extends LedgerFill {
+  strategyId: string
+}
+
+export interface PhaseResult {
+  ledger: MockLedger
+  /** 이미 반영된 단계라 아무것도 하지 않았나 */
+  skipped: boolean
+  applied: PhaseFill[]
+  rejected: { fill: PhaseFill; reason: string }[]
+}
+
+/**
+ * **단계 단위 장부 반영 — 하루 한 번만.** 데몬이 재시작하거나 같은 단계를 수동으로 다시 돌려도
+ * 이중 반영되지 않는다(`ledger.phases[date][phase]` 가 가드). 게이트를 통과해 실제로 나간
+ * 주문만 넘겨야 한다 — 이 함수는 주문 게이트를 대신하지 않는다.
+ *
+ * 순수 함수(네트워크·IO 없음)라 tests/investing-daemon.test.ts 가 멱등성을 직접 검증한다.
+ */
+export function runLedgerPhase(
+  ledger: MockLedger,
+  date: string,
+  phase: LedgerPhase,
+  fills: PhaseFill[],
+  cost: PaperCost,
+): PhaseResult {
+  if (phaseDone(ledger, date, phase)) return { ledger, skipped: true, applied: [], rejected: [] }
+  let next = ledger
+  const applied: PhaseFill[] = []
+  const rejected: { fill: PhaseFill; reason: string }[] = []
+  for (const f of fills) {
+    const s = next.strategies[f.strategyId]
+    if (!s) {
+      rejected.push({ fill: f, reason: `장부에 없는 전략(${f.strategyId})` })
+      continue
+    }
+    const r = applyLedgerFill(s, f, cost)
+    if (r.rejected) {
+      rejected.push({ fill: f, reason: r.rejected })
+      continue
+    }
+    next = { ...next, strategies: { ...next.strategies, [f.strategyId]: r.ledger } }
+    applied.push(f)
+  }
+  return { ledger: markPhase(next, date, phase), skipped: false, applied, rejected }
 }
 
 // ---- 평가 -------------------------------------------------------------------
