@@ -1846,6 +1846,291 @@ async function mar() {
 }
 
 /**
+ * MODE=pit1010 — 연도별 시점 고정 유니버스: **그 해 코스피 상위10 + 코스닥 상위10** (2026-08-02 대표 지시
+ * "표본 고정하지 말고 승자편향 제거 — 해당 년도 코스피 상위10 + 코스닥 상위10 구체 종목으로").
+ *
+ * 목록은 각 해 연초(전년 말) 시총 기준 [추정] — KRX 실측이 봇 차단으로 막혀 있어(20차)
+ * KRX Open API 키 발급 전까지의 차선책이다. 당시 실제 상위였다가 몰락한 종목(한전·포스코·
+ * 신라젠·셀트리온헬스케어 등)이 그 시절 목록에 들어가므로 "오늘의 승자만 고르는" 선택편향이
+ * 크게 줄어든다. 다만 **상장폐지 종목은 Yahoo에 가격이 없어 빠진다**(가격 생존편향 잔존 —
+ * 연도별 매핑률로 정직하게 보고. 특히 2000년대 초 코스닥은 절반 이상이 상폐라 매핑률이 낮다).
+ *
+ * 연쇄 방식: 매년 1/1 유니버스 교체 → 그 해를 독립 실행 → 연말 평가액으로 자본 이월(연말 청산 근사).
+ * 자산곡선을 이어붙여 전체 MDD·수익÷MDD 를 계산한다. 기준선(MA15×신고20→60선·버퍼2%) +
+ * 36조합 격자로 수익÷MDD 최적 조합을 같은 유니버스에서 탐색한다.
+ */
+const PIT1010: Record<number, { ks: string[]; kq: string[] }> = {
+  // 코드만 기록(이름은 로그로 확인). 전부 [추정] 연초 시총 상위 — KRX 실측 아님.
+  2000: { ks: ['005930', '017670', '030200', '015760', '005490', '000660', '005380', '009150', '006400', '033780'], kq: ['035720', '035610', '030520', '036930', '053800'] },
+  2001: { ks: ['005930', '017670', '030200', '015760', '005490', '000660', '005380', '033780', '006400', '009150'], kq: ['035720', '036570', '035610', '030520', '036930', '053800'] },
+  2002: { ks: ['005930', '017670', '030200', '015760', '005490', '055550', '005380', '033780', '006400', '000660'], kq: ['036570', '035720', '030520', '035610', '036930', '053800', '046890'] },
+  2003: { ks: ['005930', '017670', '030200', '015760', '005490', '055550', '005380', '066570', '033780', '012330'], kq: ['035250', '036570', '035760', '035720', '053800', '046890', '030520', '036930'] },
+  2004: { ks: ['005930', '017670', '030200', '015760', '005490', '055550', '005380', '066570', '012330', '033780'], kq: ['035420', '032640', '035760', '035720', '034230', '046890', '053800', '036930', '030520', '041510'] },
+  2005: { ks: ['005930', '005490', '015760', '017670', '030200', '055550', '005380', '033780', '012330', '009540'], kq: ['035420', '032640', '035760', '035720', '034230', '046890', '053800', '036930', '056190', '041510'] },
+  2006: { ks: ['005930', '005490', '015760', '017670', '055550', '030200', '005380', '033780', '012330', '009540'], kq: ['035420', '032640', '035760', '035720', '046890', '034230', '053800', '056190', '041510', '036930'] },
+  2007: { ks: ['005930', '005490', '009540', '015760', '055550', '017670', '005380', '034020', '010140', '030200'], kq: ['035420', '032640', '035760', '072870', '041510', '046890', '053800', '056190', '035720', '036930'] },
+  2008: { ks: ['005930', '005490', '009540', '015760', '055550', '017670', '005380', '096770', '034020', '030200'], kq: ['035420', '032640', '035760', '072870', '041510', '046890', '056190', '053800', '035720', '036930'] },
+  2009: { ks: ['005930', '005490', '015760', '055550', '105560', '017670', '005380', '009540', '051910', '030200'], kq: ['068270', '046890', '072870', '035720', '044490', '056190', '022100', '026960', '053800', '036930'] },
+  2010: { ks: ['005930', '005490', '005380', '015760', '055550', '105560', '051910', '017670', '000270', '012330'], kq: ['068270', '046890', '035720', '072870', '022100', '026960', '044490', '056190', '041510', '053800'] },
+  2011: { ks: ['005930', '005490', '005380', '012330', '051910', '055550', '105560', '032830', '000270', '015760'], kq: ['068270', '035720', '046890', '026960', '022100', '072870', '096530', '041510', '056190', '035600'] },
+  2012: { ks: ['005930', '005380', '005490', '012330', '051910', '032830', '055550', '105560', '000270', '017670'], kq: ['068270', '035720', '046890', '026960', '096530', '041510', '022100', '072870', '056190', '053800'] },
+  2013: { ks: ['005930', '005380', '005490', '012330', '051910', '032830', '055550', '105560', '000270', '035420'], kq: ['068270', '035720', '130960', '096530', '046890', '026960', '041510', '022100', '072870', '056190'] },
+  2014: { ks: ['005930', '005380', '005490', '012330', '051910', '055550', '105560', '032830', '015760', '035420'], kq: ['068270', '035720', '130960', '046890', '026960', '096530', '041510', '078340', '022100', '072870'] },
+  2015: { ks: ['005930', '005380', '015760', '012330', '055550', '032830', '051910', '105560', '005490', '035420'], kq: ['035720', '068270', '130960', '096530', '046890', '041510', '078340', '026960', '072870', '056190'] },
+  2016: { ks: ['005930', '005380', '015760', '012330', '032830', '055550', '051910', '105560', '035420', '005490'], kq: ['035720', '068270', '130960', '084990', '041960', '096530', '046890', '041510', '078340', '026960'] },
+  2017: { ks: ['005930', '000660', '005380', '015760', '035420', '012330', '051910', '055550', '105560', '032830'], kq: ['035720', '068270', '130960', '084990', '041960', '096530', '078340', '046890', '215600', '041510'] },
+  2018: { ks: ['005930', '000660', '005380', '207940', '051910', '055550', '035420', '105560', '012330', '032830'], kq: ['068270', '091990', '215600', '130960', '084990', '263750', '253450', '086900', '096530', '035760'] },
+  2019: { ks: ['005930', '000660', '207940', '051910', '068270', '005380', '012330', '055550', '105560', '035420'], kq: ['091990', '215600', '084990', '028300', '086900', '263750', '253450', '068760', '096530', '078340'] },
+  2020: { ks: ['005930', '000660', '207940', '035420', '051910', '068270', '005380', '012330', '055550', '105560'], kq: ['091990', '028300', '084990', '263750', '253450', '086900', '068760', '096530', '196170', '278280'] },
+  2021: { ks: ['005930', '000660', '051910', '207940', '035420', '005380', '035720', '068270', '006400', '012330'], kq: ['091990', '247540', '196170', '293490', '263750', '068760', '028300', '253450', '112040', '035900'] },
+  2022: { ks: ['005930', '000660', '207940', '035420', '051910', '035720', '005380', '006400', '068270', '105560'], kq: ['091990', '247540', '086520', '196170', '293490', '263750', '035900', '112040', '253450', '068760'] },
+  2023: { ks: ['005930', '373220', '000660', '207940', '005490', '005380', '051910', '035420', '000270', '012330'], kq: ['247540', '086520', '091990', '066970', '196170', '293490', '022100', '035900', '112040', '263750'] },
+  2024: { ks: ['005930', '000660', '373220', '207940', '005380', '000270', '051910', '005490', '105560', '035420'], kq: ['086520', '247540', '066970', '022100', '196170', '028300', '293490', '058470', '348370', '263750'] },
+  2025: { ks: ['005930', '000660', '373220', '207940', '005380', '068270', '000270', '105560', '035420', '051910'], kq: ['196170', '086520', '247540', '028300', '066970', '058470', '293490', '348370', '263750', '277810'] },
+  2026: { ks: ['005930', '000660', '373220', '207940', '012450', '005380', '105560', '068270', '000270', '035420'], kq: ['196170', '086520', '247540', '277810', '028300', '058470', '066970', '293490', '263750', '348370'] },
+}
+
+async function pit1010() {
+  const years = Object.keys(PIT1010).map(Number).sort()
+  const union = new Set<string>()
+  for (const y of years) for (const cd of [...PIT1010[y].ks, ...PIT1010[y].kq]) union.add(cd)
+  log(`연도별 [추정] 상위 10+10 유니버스 — ${years[0]}~${years[years.length - 1]} · 고유 종목 ${union.size}`)
+  log('⚠️ 목록은 연초 시총 [추정](KRX 실측 아님) · 상폐 종목은 가격 부재로 빠짐(연도별 매핑률 참조)')
+
+  const histories: Record<string, DailyBar[]> = {}
+  let loadFail = 0
+  for (const code of union) {
+    const bars = await fetchKrDual(code, 'since:1999-01-01')
+    if (bars) histories[code] = bars
+    else loadFail++
+    await sleep(100)
+  }
+  log(`시세 로드 ${Object.keys(histories).length} · 실패(상폐 등) ${loadFail}`)
+  const bench = await fetchDaily(BENCH, 'since:1999-01-01')
+
+  type Combo = { ma: number; hb: number; xm: number; buf: number }
+  const combos: Combo[] = []
+  for (const ma of [10, 15, 20])
+    for (const hb of [20, 60])
+      for (const xm of [40, 60, 80])
+        for (const buf of [0, 2]) combos.push({ ma, hb, xm, buf })
+  const nameOf = (k: Combo) => `MA${k.ma}×신고${k.hb}→${k.xm}선${k.buf ? `·버퍼${k.buf}%` : ''}`
+  const specOf = (k: Combo, symbols: string[]): StrategySpec =>
+    baseSpec({
+      entry: {
+        op: 'and',
+        nodes: [c(`${k.ma}일선돌파`, { kind: 'maCross', period: k.ma, dir: 'above' }), c(`${k.hb}일신고가`, { kind: 'highBreak', days: k.hb })],
+      },
+      exits: [{ kind: 'maBreak', maPeriod: k.xm, pct: k.buf }],
+      universe: { ...baseSpec({}).universe, symbols },
+    })
+
+  // 연도별 유니버스·시계열을 한 번만 준비 (모든 조합이 공유)
+  const yearly = years.map((y) => {
+    const codes = [...PIT1010[y].ks, ...PIT1010[y].kq]
+    const syms = codes.filter((cd) => histories[cd] && (histories[cd][0]?.date ?? '9999') <= `${y}-06-30`)
+    const end = `${y}-12-31`
+    const hist: Record<string, DailyBar[]> = {}
+    for (const s of syms) hist[s] = histories[s].filter((b) => b.date <= end)
+    return { y, syms, hist, mapped: `${syms.length}/${codes.length}` }
+  })
+  log('')
+  log(`연도별 매핑률: ${yearly.map((v) => `${v.y} ${v.mapped}`).join(' · ')}`)
+
+  // 벤치 연쇄 (같은 연말 경계)
+  const benchRet = (y: number) => {
+    const inYear = bench.filter((b) => b.date >= `${y}-01-01` && b.date <= `${y}-12-31`)
+    return inYear.length >= 2 ? inYear[inYear.length - 1].c / inYear[0].c : 1
+  }
+
+  type ChainRes = { total: number; cagr: number; mdd: number; obj: number | null; trades: number; perYear: { y: number; ret: number }[] }
+  const chain = (k: Combo): ChainRes => {
+    let factor = 1
+    let peak = 1
+    let mdd = 0
+    let trades = 0
+    const perYear: { y: number; ret: number }[] = []
+    for (const v of yearly) {
+      if (v.syms.length < 5) {
+        perYear.push({ y: v.y, ret: 1 }) // 표본 5 미만 해는 현금 보유로 간주(왜곡 방지)
+        continue
+      }
+      const r = runStrategySpec(v.hist, `${v.y}-01-01`, specOf(k, v.syms), COST)
+      trades += r.trades.length
+      const base = factor
+      for (const e of r.equity) {
+        const eq = base * (e.equity / COST.initialCapital)
+        if (eq > peak) peak = eq
+        else mdd = Math.min(mdd, (eq / peak - 1) * 100)
+      }
+      const finalEq = r.equity.length ? r.equity[r.equity.length - 1].equity : COST.initialCapital
+      factor *= finalEq / COST.initialCapital
+      perYear.push({ y: v.y, ret: finalEq / COST.initialCapital })
+    }
+    const yrs = years.length - 1 + 7 / 12
+    const total = (factor - 1) * 100
+    const cagr = (Math.pow(factor, 1 / yrs) - 1) * 100
+    const mddAbs = Math.abs(mdd)
+    return { total, cagr, mdd, obj: mddAbs > 0.01 ? total / mddAbs : null, trades, perYear }
+  }
+
+  const BASE: Combo = { ma: 15, hb: 20, xm: 60, buf: 2 }
+  log('')
+  log(`격자 ${combos.length}조합 + 기준선 — 연쇄 실행 중`)
+  const rows = combos.map((k, i) => {
+    const r = chain(k)
+    if ((i + 1) % 12 === 0) log(`… ${i + 1}/${combos.length}`)
+    return { k, r }
+  })
+  const baseRow = rows.find((x) => x.k.ma === BASE.ma && x.k.hb === BASE.hb && x.k.xm === BASE.xm && x.k.buf === BASE.buf)!
+  rows.sort((a, b) => (b.r.obj ?? -1) - (a.r.obj ?? -1))
+
+  // 벤치 연쇄 요약
+  let bf = 1
+  for (const y of years) bf *= benchRet(y)
+  const yrs = years.length - 1 + 7 / 12
+  const bcagr = (Math.pow(bf, 1 / yrs) - 1) * 100
+
+  log('')
+  log(`벤치(${BENCH}) 연쇄: 총 ${f1((bf - 1) * 100)}% · CAGR ${f1(bcagr)}% (벤치 데이터 시작 이후 구간만)`)
+  log(`기준선(MA15×신고20→60선·버퍼2%): 수익÷MDD ${baseRow.r.obj?.toFixed(1) ?? '—'} · 총 ${f1(baseRow.r.total)}% · CAGR ${f1(baseRow.r.cagr)}% · MDD ${f1(baseRow.r.mdd)}% · 매매 ${baseRow.r.trades}`)
+  log('')
+  log('상위 15 (연도별 상위 10+10 교체 유니버스 · 2000~현재 연쇄):')
+  log('| # | 조건식 | **수익÷MDD** | 총수익 | CAGR | MDD | 알파(연, vs벤치연쇄) | 매매 |')
+  log('|---|---|---|---|---|---|---|---|')
+  for (const [i, x] of rows.slice(0, 15).entries()) {
+    log(
+      `| ${i + 1}${x === baseRow ? ' (기준)' : ''} | ${nameOf(x.k)} | **${x.r.obj?.toFixed(1) ?? '—'}** | ${f1(x.r.total)}% | ${f1(
+        x.r.cagr,
+      )}% | ${f1(x.r.mdd)}% | ${f1(x.r.cagr - bcagr)}%p | ${x.r.trades} |`,
+    )
+  }
+  if (!rows.slice(0, 15).includes(baseRow)) {
+    const rank = rows.indexOf(baseRow) + 1
+    log(`| ${rank} (기준) | ${nameOf(baseRow.k)} | **${baseRow.r.obj?.toFixed(1) ?? '—'}** | ${f1(baseRow.r.total)}% | ${f1(baseRow.r.cagr)}% | ${f1(baseRow.r.mdd)}% | ${f1(baseRow.r.cagr - bcagr)}%p | ${baseRow.r.trades} |`)
+  }
+
+  // 1위 조합의 연도별 분해 (거짓 매끈함 방지 — 몇 해에 몰려 번 것인지 확인)
+  const top = rows[0]
+  log('')
+  log(`1위(${nameOf(top.k)}) 연도별 수익 vs 벤치:`)
+  log('| 연도 | 매핑 | 전략 | 벤치 |')
+  log('|---|---|---|---|')
+  for (const [i, py] of top.r.perYear.entries()) {
+    log(`| ${py.y} | ${yearly[i].mapped} | ${f1((py.ret - 1) * 100)}% | ${f1((benchRet(py.y) - 1) * 100)}% |`)
+  }
+  log('')
+  log('⚠️ 유니버스 목록은 [추정](KRX 실측 아님 — Open API 키 등록 시 실측 대체 예정). 상폐 종목 가격 부재로')
+  log('   특히 2000년대 초 코스닥 매핑률이 낮아 그 구간은 실제보다 후하게 나올 수 있다. 연말 청산 근사 포함.')
+  log('   시뮬레이션이며 투자자문이 아니다. 손실 경로: MDD 열이 그 조합이 견뎌야 했던 최대 하락이다.')
+}
+
+/**
+ * MODE=fullmar — 전체 구간(2000~현재)에서 수익률÷|MDD| 가 현행 승자보다 좋은 조합 찾기
+ * (2026-08-02 대표 지시 "이것보다 수익률/mdd 값 좋은 수치 찾아봐" — 기준 화면:
+ *  MA15×신고20→60선·버퍼2%, 총 +42,103% · MDD −34.0% → 총수익÷MDD ≈ 1,238).
+ *
+ * 격자: 진입 이평 {5,10,15,20,25} × 신고가 {없음,10,20,40,60} × 청산 이평 {20,40,60,80}
+ *      × 이탈버퍼 {0,1,2,3%} = 400조합. 슬롯 10 고정(17차 slots 결론), 손절·레짐 등
+ *      부가 조건은 18차 tune에서 전패라 제외. 비용·유니버스는 시뮬레이터와 동일.
+ *
+ * ⚠️ 과최적화 경고(규칙 5): 전체 구간 1등을 "찾는" 행위 자체가 곡선맞춤이다. 그래서
+ *   반쪽 분할(2000~2013-06 / 2013-07~현재) 수익÷MDD를 병기하고, **두 반쪽 모두에서
+ *   기준선을 이기는 조합만** "패턴"으로 읽는다. 한쪽만 이기면 우연으로 판정한다.
+ */
+async function fullmar() {
+  const { histories, bench, tradable } = await loadAll('since:1999-01-01')
+  const uni = { ...baseSpec({}).universe, symbols: tradable }
+  type Combo = { ma: number; hb: number; xm: number; buf: number }
+  const combos: Combo[] = []
+  for (const ma of [5, 10, 15, 20, 25])
+    for (const hb of [0, 10, 20, 40, 60])
+      for (const xm of [20, 40, 60, 80])
+        for (const buf of [0, 1, 2, 3]) combos.push({ ma, hb, xm, buf })
+
+  const specOf = (k: Combo): StrategySpec => {
+    const nodes = [c(`${k.ma}일선돌파`, { kind: 'maCross', period: k.ma, dir: 'above' })]
+    if (k.hb) nodes.push(c(`${k.hb}일신고가`, { kind: 'highBreak', days: k.hb }))
+    return baseSpec({ entry: { op: 'and', nodes }, exits: [{ kind: 'maBreak', maPeriod: k.xm, pct: k.buf }], universe: uni })
+  }
+  const nameOf = (k: Combo) => `MA${k.ma}${k.hb ? `×신고${k.hb}` : ''}→${k.xm}선${k.buf ? `·버퍼${k.buf}%` : ''}`
+  const START = '2000-01-04'
+  const objOf = (s: RunStats): number | null => {
+    const mddAbs = Math.abs(s.mddPct ?? 0)
+    return mddAbs > 0.01 ? (s.totalPct ?? 0) / mddAbs : null
+  }
+
+  log('')
+  log(`격자 ${combos.length}조합 — 전체 구간 ${START}~현재, 목적함수 = 총수익% ÷ |MDD%| (매매≥100 필터)`)
+  type Row = { k: Combo; s: RunStats; obj: number | null; mar: number | null }
+  const rows: Row[] = []
+  let done = 0
+  for (const k of combos) {
+    const r = runStrategySpec(histories, START, specOf(k), COST)
+    const s = stats(nameOf(k), 'full', r, bench, COST.initialCapital)
+    const mddAbs = Math.abs(s.mddPct ?? 0)
+    rows.push({ k, s, obj: objOf(s), mar: mddAbs > 0.01 && s.cagrPct != null ? s.cagrPct / mddAbs : null })
+    if (++done % 50 === 0) log(`… ${done}/${combos.length}`)
+  }
+  const baseRow = rows.find((r) => r.k.ma === 15 && r.k.hb === 20 && r.k.xm === 60 && r.k.buf === 2)!
+  const eligible = rows.filter((r) => r.obj != null && (r.s.trades ?? 0) >= 100)
+  eligible.sort((a, b) => (b.obj ?? 0) - (a.obj ?? 0))
+
+  log('')
+  log(
+    `기준선(현행 MA15×신고20→60선·버퍼2%): 수익÷MDD ${baseRow.obj?.toFixed(0) ?? '—'} · 총수익 ${f1(baseRow.s.totalPct)}% · CAGR ${f1(
+      baseRow.s.cagrPct,
+    )}% · MDD ${f1(baseRow.s.mddPct)}% · 매매 ${baseRow.s.trades}`,
+  )
+  const better = eligible.filter((r) => (r.obj ?? 0) > (baseRow.obj ?? 0))
+  log(`기준선보다 수익÷MDD 높은 조합: ${better.length} / 적격 ${eligible.length}`)
+  log('')
+  log('상위 15 (전체 구간 2000~현재):')
+  log('| # | 조건식 | **수익÷MDD** | MAR(CAGR÷MDD) | 총수익 | CAGR | MDD | 알파(연) | 매매 | 승률 |')
+  log('|---|---|---|---|---|---|---|---|---|---|')
+  for (const [i, r] of [...eligible.slice(0, 15), baseRow].entries()) {
+    const tag = r === baseRow ? '기준' : String(i + 1)
+    log(
+      `| ${tag} | ${nameOf(r.k)} | **${r.obj!.toFixed(0)}** | ${r.mar?.toFixed(2) ?? '—'} | ${f1(r.s.totalPct)}% | ${f1(
+        r.s.cagrPct,
+      )}% | ${f1(r.s.mddPct)}% | ${f1(r.s.alphaPct)}%p | ${r.s.trades} | ${r.s.winRatePct?.toFixed(0) ?? '—'}% |`,
+    )
+  }
+
+  // 반쪽 분할 일관성 — 상위 12 + 기준선. 두 반쪽 모두 기준선을 이겨야 "패턴"으로 인정.
+  const H_SPLIT = '2013-06-30'
+  const histA: Record<string, DailyBar[]> = {}
+  for (const [s2, bars] of Object.entries(histories)) histA[s2] = bars.filter((b) => b.date <= H_SPLIT)
+  const benchA = bench.filter((b) => b.date <= H_SPLIT)
+  const halfOf = (k: Combo) => {
+    const ra = runStrategySpec(histA, START, specOf(k), COST)
+    const sa = stats(nameOf(k), 'A', ra, benchA, COST.initialCapital)
+    const rb = runStrategySpec(histories, '2013-07-01', specOf(k), COST)
+    const sb = stats(nameOf(k), 'B', rb, bench, COST.initialCapital)
+    return { a: objOf(sa), b: objOf(sb), sa, sb }
+  }
+  log('')
+  log(`반쪽 분할 일관성 (전반 ${START}~${H_SPLIT} / 후반 2013-07-01~현재):`)
+  log('| # | 조건식 | 전반 수익÷MDD | 후반 수익÷MDD | 전반 알파 | 후반 알파 | 판정 |')
+  log('|---|---|---|---|---|---|---|')
+  const baseHalf = halfOf(baseRow.k)
+  const targets = eligible.slice(0, 12)
+  for (const [i, r] of targets.entries()) {
+    const h = halfOf(r.k)
+    const win = (h.a ?? 0) > (baseHalf.a ?? 0) && (h.b ?? 0) > (baseHalf.b ?? 0)
+    log(
+      `| ${i + 1} | ${nameOf(r.k)} | ${h.a?.toFixed(1) ?? '—'} | ${h.b?.toFixed(1) ?? '—'} | ${f1(h.sa.alphaPct)}%p | ${f1(
+        h.sb.alphaPct,
+      )}%p | ${win ? '✅ 두 반쪽 모두 기준선 이김' : '⚠️ 한쪽뿐(우연 가능)'} |`,
+    )
+  }
+  log(`| 기준 | ${nameOf(baseRow.k)} | ${baseHalf.a?.toFixed(1) ?? '—'} | ${baseHalf.b?.toFixed(1) ?? '—'} | ${f1(baseHalf.sa.alphaPct)}%p | ${f1(baseHalf.sb.alphaPct)}%p | — |`)
+  log('')
+  log('⚠️ 유니버스는 오늘의 시총 상위(사후 선택·생존편향) — 절대 수치는 상한선. 26년 전체 1등은 곡선맞춤 위험이')
+  log('   커서, 채택은 "두 반쪽 모두 기준선을 이기는 조합"으로 한정해 읽는다. 시뮬레이션이며 투자자문이 아니다.')
+}
+
+/**
  * MODE=decade — 주요 모델별 최근 10년 성적 + 연도별 수익률 분해 (2026-07-31 대표 질문).
  * 같은 데이터·같은 비용으로 나란히 돌려 10y 요약(총수익·CAGR·MDD·수익÷MDD·알파)과
  * 연도별 수익률 매트릭스를 출력한다. 연도별 값은 자산곡선의 연말 경계로 계산.
@@ -2478,6 +2763,8 @@ const MODES: Record<string, () => Promise<void>> = {
   sweep,
   mine,
   mar,
+  fullmar,
+  pit1010,
   decade,
   slots,
   tune,
