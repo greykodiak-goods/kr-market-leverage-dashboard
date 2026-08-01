@@ -2097,7 +2097,107 @@ async function tune() {
   log('⚠️ 한 구간 최적화는 곡선맞춤 — 채택 판단은 OOS 생존 + 파라미터 고원 기준. 사후 선택 유니버스 상한선, 투자자문 아님.')
 }
 
+/**
+ * MODE=vintage — 2006년(20년 전) 시총 상위 코스피40+코스닥40 시점 고정 유니버스 (2026-07-31 대표 지시).
+ *
+ * ⚠️ 정직성(규칙 3) — 이 실험의 한계 두 가지를 결과와 함께 반드시 읽을 것:
+ *   ① 2006년 시총 랭킹의 무료 데이터 소스가 없다 — 아래 목록은 **모델 지식 기반 [추정]**이며
+ *     ±수 순위 오차와 일부 누락이 있을 수 있다.
+ *   ② 당시 상위권 중 상장폐지·피인수·합병(국민은행·우리금융·외환은행·하나로텔레콤·GS홈쇼핑·
+ *     옥션·네오위즈(구)·포스데이타 등)은 현재 시세 데이터가 없어 **목록에서 제외** —
+ *     생존편향이 부분적으로 남는다(제외 규모를 함께 보고). 지주전환 승계(국민→KB금융)는
+ *     현재 코드로 매핑하되 상장일 이후 데이터만 편입된다.
+ */
+const VINTAGE_KOSPI_2006: string[] = [
+  // 2006년 초 코스피 시총 상위권 [추정] — 현재 심볼 매핑 가능 종목만
+  '005930', '005490', '015760', '017670', '030200', '005380', '034220', '055550', '086790', '010950',
+  '033780', '023530', '009540', '000810', '066570', '000270', '004170', '012330', '006400', '000660',
+  '051910', '016360', '042660', '034020', '003490', '004020', '035250', '036460', '000720', '000210',
+  '006360', '001040', '000880', '004800', '009150', '003550', '000150', '010140', '011170', '010060',
+].map((s) => `${s}.KS`)
+const VINTAGE_KOSDAQ_2006: string[] = [
+  // 2006년 초 코스닥 시총 상위권 [추정] — NHN·LG텔레콤·다음·아시아나 등은 이후 이전상장/합병돼도
+  // 현재 코드로 시세가 이어지는 경우만 포함. 40개를 채우지 못한 것 자체가 상폐·합병의 규모다.
+  '035420', '032640', '035720', '020560', '035760', '034230', '046890', '036930', '072870', '069080',
+  '026960', '023160', '014620', '044490', '041510', '049070', '064260', '023410', '039030', '022100',
+  '039130', '080160', '053800', '043650', '018000', '084990', '051500', '025980',
+].map((s) => `${s}.KQ`)
+
+async function vintage() {
+  const all = [...VINTAGE_KOSPI_2006, ...VINTAGE_KOSDAQ_2006]
+  log(`시점 고정 유니버스: 2006년 초 시총 상위 [추정] — 코스피 ${VINTAGE_KOSPI_2006.length} + 코스닥 ${VINTAGE_KOSDAQ_2006.length}종목 시도`)
+  log('(당시 상위권 중 상폐·합병으로 매핑 불가한 종목 다수 제외 — 국민·우리·외환은행, 하나로텔레콤, GS홈쇼핑, 옥션 등)')
+  const histories: Record<string, DailyBar[]> = {}
+  const failed: string[] = []
+  for (const sym of all) {
+    try {
+      const bars = await fetchDaily(sym, 'since:2005-01-01')
+      if (bars.length >= 300) histories[sym] = bars
+      else failed.push(`${sym}(${bars.length}봉)`)
+    } catch (e) {
+      failed.push(`${sym}(${(e as Error).message.slice(0, 30)})`)
+    }
+    await sleep(150)
+  }
+  const loaded = Object.keys(histories)
+  const at2006 = loaded.filter((s) => (histories[s][0]?.date ?? '9999') <= '2006-03-31')
+  // 종목이 상장/이전 전이면 그 시점부터 편입 — 코스닥→코스피 이전 심볼은 데이터가 이어진다
+  log(`로드 ${loaded.length}종목 (실패/짧음 ${failed.length}${failed.length ? `: ${failed.join(', ')}` : ''})`)
+  log(`2006년 1분기 시세 존재: ${at2006.length}종목 — 나머지는 승계 상장 시점부터 편입`)
+  try {
+    histories[KOSPI_INDEX] = await fetchDaily(KOSPI_INDEX, 'since:2005-01-01')
+  } catch {
+    log('⚠️ 지수 로드 실패')
+  }
+  const bench = await fetchDaily(BENCH, 'since:2005-01-01')
+  const tradable = loaded
+
+  const uni = { ...baseSpec({}).universe, symbols: tradable }
+  const mk = (ma: number, hb: number, xm: number, buf: number): StrategySpec =>
+    baseSpec({
+      entry: {
+        op: 'and',
+        nodes: [c(`${ma}일선돌파`, { kind: 'maCross', period: ma, dir: 'above' }), c(`${hb}일신고가`, { kind: 'highBreak', days: hb })],
+      },
+      exits: [{ kind: 'maBreak', maPeriod: xm, pct: buf }],
+      universe: uni,
+    })
+  const models = [
+    { label: '현행 MA20×신고20→40선·버퍼2%', spec: mk(20, 20, 40, 2) },
+    { label: '17차 후보 MA15×신고20→60선·버퍼2%', spec: mk(15, 20, 60, 2) },
+  ]
+  const spans: [string, string, string][] = [
+    ['2006–2025 전체', '2006-01-02', '9999-12-31'],
+    ['2006–2010', '2006-01-02', '2010-12-31'],
+    ['2011–2015', '2011-01-01', '2015-12-31'],
+    ['2016–2020', '2016-01-01', '2020-12-31'],
+    ['2021~현재', '2021-01-01', '9999-12-31'],
+  ]
+  log('')
+  log('| 모델 | 구간 | 총수익 | **CAGR** | 벤치CAGR | 알파(연) | MDD | 수익÷MDD | 매매 |')
+  log('|---|---|---|---|---|---|---|---|---|')
+  for (const m of models)
+    for (const [label, start, end] of spans) {
+      const hist: Record<string, DailyBar[]> = {}
+      for (const [s, bars] of Object.entries(histories)) hist[s] = bars.filter((b) => b.date <= end)
+      const benchCut = bench.filter((b) => b.date <= end)
+      const r = runStrategySpec(hist, start, m.spec, COST)
+      const s = stats(label, label, r, benchCut, COST.initialCapital)
+      const mddAbs = Math.abs(s.mddPct ?? 0)
+      const obj = mddAbs > 0.01 ? (s.totalPct ?? 0) / mddAbs : null
+      log(
+        `| ${m.label} | ${label} | ${f1(s.totalPct)}% | **${f1(s.cagrPct)}%** | ${f1(s.benchCagrPct)}% | ${f1(s.alphaPct)}%p | ${f1(
+          s.mddPct,
+        )}% | ${obj?.toFixed(2) ?? '—'} | ${s.trades} |`,
+      )
+    }
+  log('')
+  log('⚠️ 목록은 2006년 랭킹 [추정](±오차)이며, 상폐·합병 종목 제외로 생존편향이 **부분 잔존**한다 —')
+  log('그래도 "오늘의 상위 80"(지난 10년 승자 사후 선택)보다는 훨씬 보수적인 추정치다. 시뮬레이션이며 투자자문 아님.')
+}
+
 const MODES: Record<string, () => Promise<void>> = {
+  vintage,
   sweep,
   mine,
   mar,
