@@ -2481,20 +2481,58 @@ async function fetchKrxTop(trdDd: string, mktId: 'STK' | 'KSQ', topN: number): P
   return parsed.slice(0, topN)
 }
 
+/**
+ * KRX Data Marketplace **Open API** 랭킹 (2026-08-02 준비 — 인증키는 대표 T0).
+ * 포털 스크래핑(fetchKrxTop)이 봇 차단으로 막혀서 만든 공식 경로다.
+ *   GET https://data-dbg.krx.co.kr/svc/apis/sto/{stk|ksq}_bydd_trd?basDd=YYYYMMDD
+ *   header AUTH_KEY: <인증키>  (한도 1만건/일 · 데이터 2010년 이후 · 키 유효 1년)
+ * 응답 필드명은 문서 기준 [미검증 — 첫 실행에서 확정]이라 관용 파싱한다.
+ * 키는 Doppler `investing-ops`의 KRX_API_KEY — loadSecret 경유, 값은 출력하지 않는다.
+ */
+async function fetchKrxTopOpenApi(authKey: string, basDd: string, mktId: 'STK' | 'KSQ', topN: number): Promise<{ code: string; name: string }[]> {
+  const svc = mktId === 'STK' ? 'stk_bydd_trd' : 'ksq_bydd_trd'
+  const res = await fetch(`https://data-dbg.krx.co.kr/svc/apis/sto/${svc}?basDd=${basDd}`, {
+    headers: { AUTH_KEY: authKey, Accept: 'application/json' },
+  })
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '')
+    throw new Error(`KRX OpenAPI HTTP ${res.status} — ${txt.slice(0, 120).replace(/\s+/g, ' ')}`)
+  }
+  const json = (await res.json()) as Record<string, Record<string, string>[]>
+  const rows = json.OutBlock_1 ?? Object.values(json).find(Array.isArray) ?? []
+  return rows
+    .map((r) => ({
+      code: String(r.ISU_SRT_CD ?? r.ISU_CD ?? '').trim(),
+      name: String(r.ISU_ABBRV ?? r.ISU_NM ?? '').trim(),
+      cap: Number(String(r.MKTCAP ?? '0').replace(/,/g, '')),
+    }))
+    .filter((r) => /^\d{6}$/.test(r.code) && r.code.endsWith('0') && !/스팩|SPAC/i.test(r.name) && r.cap > 0)
+    .sort((a, b) => b.cap - a.cap)
+    .slice(0, topN)
+    .map(({ code, name }) => ({ code, name }))
+}
+
 async function pityear() {
   const years: number[] = []
   for (let y = 2006; y <= 2026; y++) years.push(y)
   const lists: Record<number, { ks: { code: string; name: string }[]; kq: { code: string; name: string }[] }> = {}
+  // 랭킹 소스 선택: Doppler에 KRX_API_KEY가 있으면 공식 Open API(2010~), 없으면 구 스크래핑 폴백
+  const { loadSecret } = await import('./lib/loadSecret.mjs')
+  const krxKey = loadSecret('KRX_API_KEY')
+  if (krxKey.value) log(`랭킹 소스: KRX Open API (${krxKey.source} · 데이터 2010년 이후 — 2006~2009는 수집 불가로 누락된다)`)
+  else log('랭킹 소스: KRX 포털 스크래핑 폴백 (봇 차단으로 실패 가능 — KRX_API_KEY를 Doppler에 등록하면 공식 API로 전환)')
+  const fetchTop = (trdDd: string, mktId: 'STK' | 'KSQ', topN: number) =>
+    krxKey.value ? fetchKrxTopOpenApi(krxKey.value, trdDd, mktId, topN) : fetchKrxTop(trdDd, mktId, topN)
   log('KRX 실측 랭킹 수집 (연초 첫 거래일 기준, 보통주만·스팩 제외):')
   for (const y of years) {
     let got: { ks: { code: string; name: string }[]; kq: { code: string; name: string }[] } | null = null
     for (let day = 4; day <= 10 && !got; day++) {
       const trdDd = `${y}01${String(day).padStart(2, '0')}`
       try {
-        const ks = await fetchKrxTop(trdDd, 'STK', 40)
+        const ks = await fetchTop(trdDd, 'STK', 40)
         if (ks.length < 10) continue // 휴장일 — 다음 날짜 시도
         await sleep(400)
-        const kq = await fetchKrxTop(trdDd, 'KSQ', 40)
+        const kq = await fetchTop(trdDd, 'KSQ', 40)
         got = { ks, kq }
         log(`  ${y} (${trdDd}): 코스피 ${ks.length} · 코스닥 ${kq.length} — 1위 ${ks[0]?.name} / ${kq[0]?.name}`)
       } catch (e) {
