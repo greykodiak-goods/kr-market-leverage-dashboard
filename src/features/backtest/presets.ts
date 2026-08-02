@@ -162,10 +162,10 @@ export const PRESETS: Preset[] = [
   { id: 'pit-base', label: '현행 기준선 MA15×신고20→60선·버퍼2%', kind: 'condition', spec: PRESET_PIT_BASE },
   { id: 'pit-top', label: '21차 1위 MA10×신고20→60선·버퍼2%', kind: 'condition', spec: PRESET_PIT_TOP },
   { id: 'pit-maxret', label: '23차 수익률 1위 MA5×신고10→80선 (MDD −40%)', kind: 'condition', spec: PRESET_PIT_MAXRET },
-  { id: 'pit-maxratio', label: '23차 수익÷MDD 1위 MA25×신고10→80선', kind: 'condition', spec: PRESET_PIT_MAXRATIO },
+  { id: 'pit-maxratio', label: '🟢 최소낙폭형 — 추세 단독 MA25×신고10→80선 (23차 수익÷MDD 1위)', kind: 'condition', spec: PRESET_PIT_MAXRATIO },
   {
     id: 'xsmom-5-gate',
-    label: '25차 모멘텀 상위5+게이트 (MDD −61%)',
+    label: '🟡 균형형(주력 후보) — XSM 모멘텀 상위5+게이트 (25차)',
     kind: 'momentum',
     mom: { slots: 5, gate: true },
     note:
@@ -190,7 +190,7 @@ export const PRESETS: Preset[] = [
   //    "수익률 최고"라서 안전한 것이 아니라, **낙폭이 더 깊어진 대가로** 그 수익이 나왔다.
   {
     id: 'xsmom-3-gate',
-    label: '26차 모멘텀 상위3+게이트 (MDD −71%)',
+    label: '🔴 수익률최대형 — XSM 모멘텀 상위3+게이트 (26차 · 낙폭 최대)',
     kind: 'momentum',
     mom: { slots: 3, gate: true },
     note:
@@ -208,7 +208,7 @@ export const PRESETS: Preset[] = [
   },
   {
     id: 'combo-50',
-    label: '26차 결합 50:50 — 기준선+모멘텀 (MDD −43%)',
+    label: '🟢 낙폭억제형 — 결합 50:50 추세+모멘텀 (26차)',
     kind: 'combo',
     // 슬리브 A = 23차 수익÷MDD 1위와 **같은 스펙**(MA25돌파×신고10 진입 → 80선 이탈 청산·버퍼 0).
     // 같은 객체를 그대로 쓴다 — 두 프리셋의 스펙이 조용히 갈라지지 않게 하려는 것이다.
@@ -231,7 +231,7 @@ export const PRESETS: Preset[] = [
   },
   {
     id: 'combo-25-75',
-    label: '26차 결합 25:75 — 기준선+모멘텀 (MDD −53%)',
+    label: '🟡 결합 25:75 추세+모멘텀 (26차 · 가중 민감도 참고)',
     kind: 'combo',
     // 슬리브 A = 23차 수익÷MDD 1위와 **같은 스펙 객체**(combo-50과 동일) — 조용히 갈라지지 않게.
     spec: PRESET_PIT_MAXRATIO,
