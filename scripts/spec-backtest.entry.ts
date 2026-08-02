@@ -1881,20 +1881,22 @@ async function pit1010() {
 
   type Combo = { ma: number; hb: number; xm: number; buf: number }
   const combos: Combo[] = []
-  for (const ma of [10, 15, 20])
-    for (const hb of [20, 60])
-      for (const xm of [40, 60, 80])
-        for (const buf of [0, 2]) combos.push({ ma, hb, xm, buf })
-  const nameOf = (k: Combo) => `MA${k.ma}×신고${k.hb}→${k.xm}선${k.buf ? `·버퍼${k.buf}%` : ''}`
-  const specOf = (k: Combo, symbols: string[]): StrategySpec =>
-    baseSpec({
-      entry: {
-        op: 'and',
-        nodes: [c(`${k.ma}일선돌파`, { kind: 'maCross', period: k.ma, dir: 'above' }), c(`${k.hb}일신고가`, { kind: 'highBreak', days: k.hb })],
-      },
+  // PIT_GRID=wide 면 400조합 확장 격자(수익률 최대 탐색 — 2026-08-02 대표 지시), 기본은 21차 36조합
+  const wide = process.env.PIT_GRID === 'wide'
+  for (const ma of wide ? [5, 10, 15, 20, 25] : [10, 15, 20])
+    for (const hb of wide ? [0, 10, 20, 40, 60] : [20, 60])
+      for (const xm of wide ? [20, 40, 60, 80] : [40, 60, 80])
+        for (const buf of wide ? [0, 1, 2, 3] : [0, 2]) combos.push({ ma, hb, xm, buf })
+  const nameOf = (k: Combo) => `MA${k.ma}${k.hb ? `×신고${k.hb}` : ''}→${k.xm}선${k.buf ? `·버퍼${k.buf}%` : ''}`
+  const specOf = (k: Combo, symbols: string[]): StrategySpec => {
+    const nodes = [c(`${k.ma}일선돌파`, { kind: 'maCross', period: k.ma, dir: 'above' })]
+    if (k.hb) nodes.push(c(`${k.hb}일신고가`, { kind: 'highBreak', days: k.hb }))
+    return baseSpec({
+      entry: { op: 'and', nodes },
       exits: [{ kind: 'maBreak', maPeriod: k.xm, pct: k.buf }],
       universe: { ...baseSpec({}).universe, symbols },
     })
+  }
 
   // 연쇄 로직은 src/features/backtest/pitChain 의 runPitChained 하나뿐이다 —
   // 화면(SpecSimulator)과 이 러너가 같은 함수를 부르므로 수치가 갈릴 수 없다.
@@ -1943,10 +1945,36 @@ async function pit1010() {
     )
   }
 
+  // 총수익 정렬 표 — "가장 수익률 높은 케이스" (2026-08-02 대표 지시). 매매<100 조합은
+  // 몇 번의 운으로 1등 하는 것을 막기 위해 제외하고, 제외 사실을 명시한다.
+  const byTotal = rows.filter((x) => x.r.trades.length >= 100).sort((a, b) => b.r.totalPct - a.r.totalPct)
+  const excludedFew = rows.length - byTotal.length
+  log('')
+  log(`수익률 최대 상위 10 (매매≥100 필터 — 제외 ${excludedFew}조합):`)
+  log('| # | 조건식 | **총수익** | CAGR | MDD | 수익÷MDD | 알파(연) | 매매 |')
+  log('|---|---|---|---|---|---|---|---|')
+  for (const [i, x] of byTotal.slice(0, 10).entries()) {
+    log(
+      `| ${i + 1} | ${nameOf(x.k)} | **${f1(x.r.totalPct)}%** | ${f1(x.r.cagrPct)}% | ${f1(x.r.mddPct)}% | ${x.r.objective?.toFixed(1) ?? '—'} | ${f1(
+        x.r.alphaCagrPct ?? 0,
+      )}%p | ${x.r.trades.length} |`,
+    )
+  }
+  const topTotal = byTotal[0]
+  if (topTotal) {
+    log('')
+    log(`수익률 1위(${nameOf(topTotal.k)}) 연도별 수익 vs 벤치:`)
+    log('| 연도 | 매핑 | 전략 | 벤치 |')
+    log('|---|---|---|---|')
+    for (const py of topTotal.r.perYear) {
+      log(`| ${py.year} | ${py.mapped}/${py.total}${py.cash ? ' (현금)' : ''} | ${f1(py.strategyPct)}% | ${py.benchPct != null ? f1(py.benchPct) : '—'}% |`)
+    }
+  }
+
   // 1위 조합의 연도별 분해 (거짓 매끈함 방지 — 몇 해에 몰려 번 것인지 확인)
   const top = rows[0]
   log('')
-  log(`1위(${nameOf(top.k)}) 연도별 수익 vs 벤치:`)
+  log(`수익÷MDD 1위(${nameOf(top.k)}) 연도별 수익 vs 벤치:`)
   log('| 연도 | 매핑 | 전략 | 벤치 |')
   log('|---|---|---|---|')
   for (const py of top.r.perYear) {
@@ -2727,7 +2755,41 @@ async function krxprobe() {
   }
 }
 
+/**
+ * MODE=usprobe — 미장(미국 주식) 데이터 가용성 실측 (2026-08-02 대표 질문 "미장도 넣어서 해보고 싶은데 종목 데이터 있는지").
+ * 같은 fetchDaily 경로로 미국 티커가 ①얼마나 깊게 ②날짜 라벨이 올바르게(요일 검증 —
+ * KST +9h 변환이 미 동부 마감 타임스탬프를 다음 날로 밀지 확인) 받아지는지 본다.
+ * 상폐 티커(TWTR)로 생존편향 한계도 함께 실측. 조회 전용 · 커밋 없음.
+ */
+async function usprobe() {
+  const TICKERS = ['AAPL', 'MSFT', 'NVDA', 'SPY', 'QQQ', 'BRK-B', 'XOM', 'GE', 'INTC', 'TWTR']
+  log('| 티커 | 행 수 | 시작일 | 끝일 | 끝일 요일 | 종가 표본 | 배당보정(adj≠close) |')
+  log('|---|---|---|---|---|---|---|')
+  for (const t of TICKERS) {
+    try {
+      const bars = await fetchDaily(t, 'since:1995-01-01')
+      if (!bars.length) {
+        log(`| ${t} | 0 | — | — | — | — | — |`)
+        continue
+      }
+      const last = bars[bars.length - 1]
+      const dow = ['일', '월', '화', '수', '목', '금', '토'][new Date(last.date + 'T00:00:00Z').getUTCDay()]
+      // 배당 보정 여부: 오래된 봉에서 o≈c 라운드 수치가 아닌 소수면 보정 계수가 곱해진 것
+      const adj = bars[0].c !== Math.round(bars[0].c) ? '보정됨(소수)' : '[미확인]'
+      log(`| ${t} | ${bars.length} | ${bars[0].date} | ${last.date} | ${dow} | ${last.c.toFixed(2)} | ${adj} |`)
+    } catch (e) {
+      log(`| ${t} | ❌ | ${(e as Error).message.slice(0, 40)} | — | — | — | — |`)
+    }
+    await sleep(200)
+  }
+  log('')
+  log('판독법: ①끝일 요일이 토/일이면 KST +9h 날짜 밀림 버그 — 미장 지원 시 거래소 TZ 변환 필요')
+  log('②TWTR(상폐)가 0행/오류면 미장도 상폐 종목 가격 부재 → PIT 유니버스 매핑률 보고 필수')
+  log('③시작일이 1995면 30년치 확보 — 시뮬레이터 26년 구간과 동등 이상')
+}
+
 const MODES: Record<string, () => Promise<void>> = {
+  usprobe,
   vintage,
   pityear,
   krxprobe,
