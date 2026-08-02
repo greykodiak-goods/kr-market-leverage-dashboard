@@ -6,12 +6,16 @@
 // MODE=seasonal  — 월별 계절성 기술통계 + 승자 조건식 위 월 필터 오버레이 A/B
 // MODE=monthpat  — 종목×월 상승패턴 셀 선정(확장 윈도우) 후 해당 월만 보유
 // MODE=pairprem  — 삼성전자/삼성전자우 괴리율 z-score 스위칭 (롱온리)
+// MODE=flow      — 투자자 순매수(수급) 조건 A/B  (2026-08-02 대표 지시 "수급·거래량 기반 검토")
 //
 // ── 규칙 1(미래참조 금지) 준수 방법 ────────────────────────────────────────
 //   · 모든 통계는 **확장 윈도우**다. 전체 구간 평균·표준편차·최대최소를 임계값
 //     산출에 쓰지 않는다(그 자체가 미래 정보). 월 필터·셀 선정은 "그 해 1월 초까지의
 //     데이터"만, 괴리율 z는 "그 시점까지의" 평균·표준편차만 쓴다.
 //   · pairprem 신호는 당일 종가로 판정하고 **다음 거래일 시가**에 체결한다.
+//   · flow는 **T−1 원칙**을 지킨다 — D일 진입 판단(종가 매수)에 쓰는 수급은
+//     `dt < D`로 확정된 것만이다. D일 투자자별 순매수는 장 마감 후에야 확정되므로
+//     그날 판단에 넣으면 그 자체가 미래참조다(makeFlowLens.before가 유일한 접근 경로).
 //   · 마지막 봉에서는 신규 진입·신규 스위칭을 만들지 않는다(체결할 다음 봉이 없다).
 //   · 집행자는 `tests/idealab.test.ts`의 절단 불변성 테스트다.
 //
@@ -32,11 +36,15 @@ import {
 } from '../src/features/backtest/conditionScreen'
 import {
   SPEC_VERSION,
+  priorHigh,
+  sma,
   type Condition,
   type ConditionNode,
   type StrategySpec,
 } from '../src/features/backtest/strategySpec'
 import type { DailyBar } from '../src/features/backtest/types'
+import { readFileSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
 
 const COST: CostSettings = { initialCapital: 10_000_000, feePct: 0.015, taxPct: 0.15, slippagePct: 0.1 }
 const BENCH = '069500.KS' // KODEX 200
@@ -1034,8 +1042,516 @@ async function pairprem() {
 }
 
 // ============================================================================
+// MODE=flow — 투자자 순매수(수급) 조건 A/B
+// ============================================================================
+//
+// 데이터: public/data/flows/<code>.json (scripts/kiwoom-flow-backfill.mjs가 ka10059로
+//         적재한 캐시). 이 모드는 **네트워크로 수급을 받지 않는다** — 캐시만 읽는다.
+//
+// ⚠️ T−1 원칙(규칙 1) — 이 모드의 존폐가 걸린 지점:
+//   D일 종가에 매수를 판단한다. 그런데 D일의 투자자별 순매수는 **장 마감 후**에
+//   확정된다. 따라서 D일 판단에 D일 수급을 쓰면 "오늘 결과를 보고 오늘 샀다"가 된다.
+//   수급에 접근하는 경로를 `makeFlowLens(...).before(sym, date, k)` **하나로 좁히고**,
+//   그 함수가 `dt < D`만 반환하도록 강제한다. 시뮬 루프는 이 렌즈 밖으로 수급을
+//   읽지 않는다. 집행자는 tests/idealab.test.ts의 "D일 수급을 바꿔도 D일 판정 불변" 케이스.
+//
+// 결측 처리(보수적): 필요한 창(N일)이 캐시에 없으면 **필터를 통과하지 못한 것**으로
+//   본다(유리한 쪽으로 가정하지 않는다 — 규칙 1-4의 정신). 랭킹 키를 못 구하면 최하위로
+//   민다. 결측이 성적을 만든 게 아닌지 볼 수 있도록 결측 비율을 표에 함께 찍는다.
 
-const MODES: Record<string, () => Promise<void>> = { seasonal, monthpat, pairprem }
+export const FLOW_START_YEAR = 2010 // 수급 이력 소급 한계(ka10059 실측)
+export const FLOW_HALF_YEAR = 2018 // 전·후반 분할 — 2010 시작이라 중간점
+
+export interface FlowRow {
+  /** 'YYYYMMDD' */
+  dt: string
+  /** 개인 순매수 수량(단주, 부호 유지) */
+  indNet: number
+  /** 외국인 순매수 수량(단주, 부호 유지) */
+  frgnNet: number
+  /** 기관합 순매수 수량(단주, 부호 유지) */
+  orgnNet: number
+  /** 그 날 누적 거래대금(원, 무보정) */
+  accTrdePrica: number
+  /** 그 날 종가(원, 무보정) — 순매수 수량을 금액으로 바꿀 때만 쓴다 */
+  curPrc: number
+}
+
+/** 종목 코드 → 날짜 오름차순 수급 행 */
+export type FlowStore = Record<string, FlowRow[]>
+
+/** 'YYYY-MM-DD' → 'YYYYMMDD' (이미 8자리면 그대로) */
+export function toDt(date: string): string {
+  return /^\d{8}$/.test(date) ? date : date.slice(0, 4) + date.slice(5, 7) + date.slice(8, 10)
+}
+
+export interface FlowLens {
+  /**
+   * 결정일 `date` **직전**까지 확정된 수급 행을 최대 k개, 과거→최근 순으로 반환한다.
+   * `dt < date`만 본다 — 이것이 T−1 원칙의 유일한 집행 지점이다.
+   */
+  before(sym: string, date: string, k: number): FlowRow[]
+  has(sym: string): boolean
+}
+
+export function makeFlowLens(store: FlowStore): FlowLens {
+  const dtsOf: Record<string, string[]> = {}
+  for (const [sym, rows] of Object.entries(store)) dtsOf[sym] = rows.map((r) => r.dt)
+  return {
+    has: (sym) => (store[sym]?.length ?? 0) > 0,
+    before(sym, date, k) {
+      const rows = store[sym]
+      if (!rows?.length || k <= 0) return []
+      const cut = toDt(date)
+      // 이분 탐색: dt >= cut 인 첫 인덱스 → 쓸 수 있는 행은 [0, lo)
+      const dts = dtsOf[sym]
+      let lo = 0
+      let hi = dts.length
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1
+        if (dts[mid] < cut) lo = mid + 1
+        else hi = mid
+      }
+      return rows.slice(Math.max(0, lo - k), lo)
+    },
+  }
+}
+
+/** 수급 가설 한 개. admits=진입 자격 필터, rankKey=슬롯 초과 시 우선순위(내림차순). */
+export interface FlowVariant {
+  key: string
+  label: string
+  /** 진입 후보 자격. `null` = 수급 데이터 부족 → 보수적으로 불통과 처리된다. */
+  admits?: (lens: FlowLens, sym: string, date: string) => boolean | null
+  /** 랭킹 키(클수록 우선). `null` = 데이터 부족 → 최하위. 없으면 기본 거래대금 랭킹. */
+  rankKey?: (lens: FlowLens, sym: string, date: string) => number | null
+}
+
+export const FLOW_BASE: FlowVariant = { key: 'base', label: `base ${WINNER_LABEL} · 거래대금 랭킹 (수급 조건 없음)` }
+
+/** F1 — 직전 N영업일 외국인 순매수가 **연속 양(+)**인 종목만 진입 후보로 인정 */
+export function flowF1(n: number): FlowVariant {
+  return {
+    key: `F1-${n}`,
+    label: `F1 외국인 ${n}영업일 연속 순매수(+) 필터`,
+    admits: (lens, sym, date) => {
+      const w = lens.before(sym, date, n)
+      if (w.length < n) return null // 창이 안 차면 판정 불가 → 보수적 탈락
+      return w.every((r) => r.frgnNet > 0)
+    },
+  }
+}
+
+/**
+ * F2 — 슬롯 초과 시 거래대금 대신 **수급강도** 순으로 고른다.
+ * 강도 = Σ직전5영업일 (외국인+기관) 순매수량×그날 종가  ÷  Σ직전5영업일 거래대금.
+ * 합계÷합계로 잡는다(일별 비율의 평균이 아니라) — 거래대금이 유난히 작은 하루가
+ * 비율을 폭발시키는 것을 막기 위해서다. 분자·분모 모두 **무보정 원본**이라 배당·분할
+ * 보정 계수가 종목마다 다르게 섞이지 않는다(그래서 백필러가 curPrc를 함께 저장한다).
+ */
+export const FLOW_F2: FlowVariant = {
+  key: 'F2',
+  label: 'F2 수급강도 랭킹 (직전 5영업일 외국인+기관 순매수대금 ÷ 거래대금)',
+  rankKey: (lens, sym, date) => {
+    const w = lens.before(sym, date, 5)
+    if (w.length < 5) return null
+    let net = 0
+    let val = 0
+    for (const r of w) {
+      net += (r.frgnNet + r.orgnNet) * r.curPrc
+      val += r.accTrdePrica
+    }
+    return val > 0 ? net / val : null
+  },
+}
+
+/** F3 — 진입일 기준 **직전 영업일**에 외국인·기관이 모두 순매수(+)였던 종목만 */
+export const FLOW_F3: FlowVariant = {
+  key: 'F3',
+  label: 'F3 직전 영업일 외국인·기관 동반 순매수(+) 필터',
+  admits: (lens, sym, date) => {
+    const w = lens.before(sym, date, 1)
+    if (w.length < 1) return null
+    return w[0].frgnNet > 0 && w[0].orgnNet > 0
+  },
+}
+
+/**
+ * 승자 조건식(MA10 상향돌파 × 20일 신고가) 진입 판정.
+ * 엔진(evaluateEntry)이 쓰는 `sma`·`priorHigh` **같은 함수**를 부른다 — 지표를 다시
+ * 구현하면 base 재현이 조용히 갈라진다. priorHigh는 당일을 제외한 직전 N일이다(규칙 1-3).
+ */
+export function flowEntryPassed(bars: DailyBar[], i: number): boolean {
+  if (i < 1) return false
+  const now = sma(bars, i, WINNER.ma)
+  const prev = sma(bars, i - 1, WINNER.ma)
+  if (now == null || prev == null) return false
+  if (!(bars[i].c > now && bars[i - 1].c <= prev)) return false
+  const h = priorHigh(bars, i, WINNER.hb)
+  return h != null && bars[i].c > h
+}
+
+export interface FlowSimResult {
+  equity: { date: string; equity: number }[]
+  trades: number
+  openAtEnd: number
+  /** 수급 판정을 시도한 횟수(결측 비율의 분모) */
+  evaluated: number
+  /** 데이터 부족으로 진입 후보에서 보수적으로 탈락시킨 횟수 */
+  missingAdmit: number
+  /** 랭킹 키를 못 구해 최하위로 민 횟수 */
+  missingRank: number
+}
+
+/**
+ * 한 해치 bespoke 시뮬 — `runStrategySpec`의 승자 스펙 경로(진입 sameClose·청산
+ * maBreak60 버퍼2%·거래대금 랭킹·equalSlot)를 그대로 옮긴 것이다. 엔진 코어를 고치지
+ * 않고 수급 필터를 끼우기 위해 복제했으므로, **필터를 끄면 엔진과 완전히 같아야 한다**
+ * (tests/idealab.test.ts가 자산곡선 전 점 일치를 강제한다 — 갈라지면 구현 버그).
+ */
+export function simulateFlowYear(
+  histories: Record<string, DailyBar[]>,
+  startDate: string,
+  symbols: string[],
+  cost: CostSettings,
+  variant: FlowVariant,
+  lens: FlowLens,
+  maxPositions = MAX_POSITIONS,
+): FlowSimResult {
+  const universe = [...new Set(symbols)].filter((s) => histories[s]?.length).sort()
+  const scoped: Record<string, DailyBar[]> = {}
+  for (const s of universe) scoped[s] = histories[s]
+  const calendar = calendarOf(scoped).filter((d) => d >= startDate)
+
+  const idxOf: Record<string, Map<string, number>> = {}
+  for (const s of universe) {
+    const m = new Map<string, number>()
+    histories[s].forEach((b, i) => m.set(b.date, i))
+    idxOf[s] = m
+  }
+
+  const buyCost = (px: number) => px * (1 + cost.slippagePct / 100)
+  const sellCost = (px: number) => px * (1 - cost.slippagePct / 100)
+
+  interface Pos {
+    entryPrice: number
+    qty: number
+    entryIdx: number
+    peak: number
+    lastClose: number
+  }
+  const positions = new Map<string, Pos>()
+  let cash = cost.initialCapital
+  const equity: { date: string; equity: number }[] = []
+  let trades = 0
+  let evaluated = 0
+  let missingAdmit = 0
+  let missingRank = 0
+
+  for (let d = 0; d < calendar.length; d++) {
+    const date = calendar[d]
+    const isLast = d === calendar.length - 1
+
+    // ---- 1) 청산 판정 — 전일 종가가 MA60×(1−2%) 아래면 오늘 시가 청산 -------
+    for (const [sym, pos] of [...positions]) {
+      const bi = idxOf[sym].get(date)
+      if (bi == null) continue
+      const bars = histories[sym]
+      const bar = bars[bi]
+      if (bar.h > pos.peak) pos.peak = bar.h
+      if (d === pos.entryIdx) continue // 진입 당일은 평가하지 않는다(엔진과 동일)
+      const pi = idxOf[sym].get(calendar[d - 1])
+      if (pi == null) continue
+      const ma = sma(bars, pi, WINNER.xm)
+      if (ma == null) continue
+      if (bars[pi].c < ma * (1 - WINNER.buf / 100)) {
+        const fill = sellCost(bar.o)
+        const gross = pos.qty * fill
+        cash += gross - gross * (cost.feePct / 100) - gross * (cost.taxPct / 100)
+        positions.delete(sym)
+        trades++
+      }
+    }
+
+    // ---- 2) 오늘 종가로 진입 (LOC · sameClose) -----------------------------
+    // 마지막 봉에서도 sameClose는 체결 가능하지만, 엔진이 규칙 1-6으로 막고 있으므로
+    // 동일하게 막는다(그래야 base가 재현된다).
+    if (!isLast && positions.size < maxPositions) {
+      const rows: { sym: string; bi: number; passed: boolean; key: number }[] = []
+      for (const sym of universe) {
+        const bi = idxOf[sym].get(date)
+        if (bi == null) continue
+        const bars = histories[sym]
+        const b = bars[bi]
+        let passed = flowEntryPassed(bars, bi)
+        if (passed && variant.admits) {
+          evaluated++
+          const a = variant.admits(lens, sym, date)
+          if (a == null) {
+            missingAdmit++
+            passed = false
+          } else passed = a
+        }
+        let key = b.c * b.v
+        if (variant.rankKey) {
+          evaluated++
+          const k = variant.rankKey(lens, sym, date)
+          if (k == null) {
+            missingRank++
+            key = -Infinity
+          } else key = k
+        }
+        rows.push({ sym, bi, passed, key })
+      }
+      // 엔진과 같은 비교자·같은 초기 순서(정렬된 심볼) — 동점은 심볼 오름차순으로 남는다
+      const ranked = [...rows].sort((a, b) => (a.key === b.key ? 0 : (a.key - b.key) * -1))
+      const picks = ranked.filter((r) => r.passed && !positions.has(r.sym)).slice(0, maxPositions - positions.size)
+      for (const r of picks) {
+        if (positions.size >= maxPositions) break
+        const px = histories[r.sym][r.bi].c
+        const slot = cash / Math.max(1, maxPositions - positions.size)
+        const fill = buyCost(px)
+        const qty = Math.floor(slot / (fill * (1 + cost.feePct / 100)))
+        if (qty <= 0) continue
+        const gross = qty * fill
+        cash -= gross + gross * (cost.feePct / 100)
+        positions.set(r.sym, { entryPrice: fill, qty, entryIdx: d, peak: px, lastClose: px })
+      }
+    }
+
+    // ---- 3) 자산 평가 — 봉 없는 날은 마지막 관측 종가 이월 -------------------
+    let holdings = 0
+    for (const [sym, pos] of positions) {
+      const bi = idxOf[sym].get(date)
+      if (bi != null) pos.lastClose = histories[sym][bi].c
+      holdings += pos.qty * pos.lastClose
+    }
+    equity.push({ date, equity: cash + holdings })
+  }
+
+  return { equity, trades, openAtEnd: positions.size, evaluated, missingAdmit, missingRank }
+}
+
+export interface FlowChainRes {
+  equity: { date: string; equity: number }[]
+  perYear: { y: number; ret: number; mapped: string }[]
+  trades: number
+  evaluated: number
+  missingAdmit: number
+  missingRank: number
+}
+
+/**
+ * 연도별 유니버스 교체 연쇄 — `runOverlayChain(…, OV_BASE, …)`과 같은 이월·청산비용
+ * 근사를 쓴다(그래야 base 대조가 성립한다). 매핑 5종목 미만인 해는 현금 보유.
+ */
+export function runFlowChain(
+  yearly: YearSlice[],
+  variant: FlowVariant,
+  lens: FlowLens,
+  cost: CostSettings,
+  applyHaircut = true,
+): FlowChainRes {
+  let factor = 1
+  const equity: { date: string; equity: number }[] = []
+  const perYear: { y: number; ret: number; mapped: string }[] = []
+  let trades = 0
+  let evaluated = 0
+  let missingAdmit = 0
+  let missingRank = 0
+
+  for (const v of yearly) {
+    const yearStart = factor
+    if (v.syms.length < 5) {
+      perYear.push({ y: v.y, ret: 1, mapped: v.mapped })
+      continue
+    }
+    const r = simulateFlowYear(v.hist, `${v.y}-01-01`, v.syms, cost, variant, lens)
+    trades += r.trades
+    evaluated += r.evaluated
+    missingAdmit += r.missingAdmit
+    missingRank += r.missingRank
+    const base = factor
+    for (const e of r.equity) equity.push({ date: e.date, equity: base * (e.equity / cost.initialCapital) })
+    const finalEq = r.equity.length ? r.equity[r.equity.length - 1].equity : cost.initialCapital
+    const segRet = finalEq / cost.initialCapital
+    const frac = applyHaircut ? Math.min(1, Math.max(0, r.openAtEnd / Math.max(1, MAX_POSITIONS))) : 0
+    const hc = frac * ((cost.feePct + cost.taxPct + cost.slippagePct) / 100)
+    factor *= segRet * (1 - hc)
+    perYear.push({ y: v.y, ret: factor / yearStart, mapped: v.mapped })
+  }
+  return { equity, perYear, trades, evaluated, missingAdmit, missingRank }
+}
+
+// ---- 캐시 로더 (네트워크 없음) ----------------------------------------------
+
+export interface FlowCacheInfo {
+  store: FlowStore
+  files: number
+  rows: number
+  oldest: string
+  newest: string
+  incomplete: string[]
+}
+
+/** public/data/flows/*.json 을 읽어 FlowStore로. 파일이 없으면 빈 스토어. */
+export function loadFlowCache(dir: string): FlowCacheInfo {
+  const store: FlowStore = {}
+  const incomplete: string[] = []
+  let rows = 0
+  let oldest = ''
+  let newest = ''
+  let names: string[] = []
+  try {
+    names = readdirSync(dir).filter((f) => f.endsWith('.json') && f !== 'index.json')
+  } catch {
+    return { store, files: 0, rows: 0, oldest: '', newest: '', incomplete }
+  }
+  for (const n of names.sort()) {
+    let j: { code?: string; rows?: FlowRow[]; meta?: { complete?: boolean } }
+    try {
+      j = JSON.parse(readFileSync(join(dir, n), 'utf8'))
+    } catch {
+      continue
+    }
+    const code = String(j.code ?? n.replace(/\.json$/, ''))
+    const rs = (j.rows ?? []).filter((r) => r && typeof r.dt === 'string')
+    if (!rs.length) continue
+    // 저장 시 오름차순이지만 방어적으로 다시 정렬한다(정렬 가정이 렌즈의 이분 탐색 전제)
+    rs.sort((a, b) => (a.dt < b.dt ? -1 : a.dt > b.dt ? 1 : 0))
+    store[code] = rs
+    rows += rs.length
+    if (!oldest || rs[0].dt < oldest) oldest = rs[0].dt
+    if (!newest || rs[rs.length - 1].dt > newest) newest = rs[rs.length - 1].dt
+    if (j.meta?.complete === false) incomplete.push(code)
+  }
+  return { store, files: Object.keys(store).length, rows, oldest, newest, incomplete }
+}
+
+async function flow() {
+  log('# MODE=flow — 투자자 순매수(수급) 조건 A/B')
+  log('')
+  const dir = join(process.env.REPO_ROOT ?? process.cwd(), 'public', 'data', 'flows')
+  const cache = loadFlowCache(dir)
+  if (cache.files === 0) {
+    log(`❌ 수급 캐시가 비어 있다 (${dir})`)
+    log('   먼저 EC2/러너에서 `node scripts/kiwoom-flow-backfill.mjs`를 돌려 ka10059 이력을 적재한다.')
+    log('   (컨테이너는 키움 접속이 막혀 있어 여기서 받을 수 없다.)')
+    return
+  }
+  log(
+    `수급 캐시: ${cache.files}종목 · ${cache.rows.toLocaleString('ko-KR')}행 · ${cache.oldest} ~ ${cache.newest}` +
+      (cache.incomplete.length ? ` · ⚠️ 소급 미완 ${cache.incomplete.length}종목(재실행 필요)` : ''),
+  )
+  const lens = makeFlowLens(cache.store)
+
+  // 지표 워밍업(MA60)을 위해 시작 2년 전부터 시세를 받는다
+  const { years, histories } = await loadPitHistories(`since:${FLOW_START_YEAR - 2}-01-01`)
+  const flowYears = years.filter((y) => y >= FLOW_START_YEAR)
+  const yearly = buildYearly(histories, flowYears).filter((v) => v.syms.length > 0)
+  if (yearly.length === 0) {
+    log('❌ 시세 로드 실패로 실행할 해가 없다 — 중단')
+    return
+  }
+  log(`실행 구간: ${flowYears[0]}~${flowYears[flowYears.length - 1]} · 전·후반 경계 ${FLOW_HALF_YEAR}`)
+  const covered = yearly.reduce((n, v) => n + v.syms.filter((s) => lens.has(s)).length, 0)
+  const totalSyms = yearly.reduce((n, v) => n + v.syms.length, 0)
+  log(`수급 캐시 매칭: 연도별 유니버스 ${totalSyms}칸 중 ${covered}칸(${((covered / Math.max(1, totalSyms)) * 100).toFixed(0)}%)에 수급 파일이 있다`)
+
+  // ---- 자기검증: bespoke base ≡ 엔진 base -----------------------------------
+  const engineBase = runOverlayChain(yearly, OV_BASE, COST)
+  const flowBase = runFlowChain(yearly, FLOW_BASE, lens, COST)
+  let maxDiff = 0
+  const sameLen = engineBase.equity.length === flowBase.equity.length
+  if (sameLen)
+    for (let i = 0; i < engineBase.equity.length; i++) {
+      const a = engineBase.equity[i].equity
+      const b = flowBase.equity[i].equity
+      maxDiff = Math.max(maxDiff, Math.abs(a - b) / Math.max(1e-12, Math.abs(a)))
+    }
+  const baseOk = sameLen && maxDiff < 1e-9 && engineBase.trades === flowBase.trades
+  log('')
+  log('## 자기검증 — bespoke 루프가 엔진 base를 재현하는가')
+  log(
+    baseOk
+      ? `✅ 일치 — 자산곡선 ${engineBase.equity.length}점 전부 동일(상대오차 ${maxDiff.toExponential(1)}), 매매수 ${engineBase.trades}건 동일.`
+      : `❌ 불일치 — 구현 버그다. 곡선 길이 ${engineBase.equity.length} vs ${flowBase.equity.length} · 최대 상대오차 ${maxDiff.toExponential(1)} · 매매수 ${engineBase.trades} vs ${flowBase.trades}`,
+  )
+  if (!baseOk) {
+    log('아래 A/B 수치는 base가 갈라진 상태이므로 **읽지 않는다.** 먼저 simulateFlowYear를 고친다.')
+    return
+  }
+  log('※ 22차 수치와의 대조는 같은 구간(2000~)에서만 성립한다 — 이 표는 수급 캐시가 있는')
+  log(`   ${FLOW_START_YEAR}년 이후만 돌리므로 22차 총수익과 직접 같지 않다. 아래 참고 행으로 전 구간 base를 함께 찍는다.`)
+  const fullBase = runOverlayChain(buildYearly(histories, years), OV_BASE, COST)
+  const fp = perfOf(fullBase.equity)
+  log(`참고(22차 대조용) 엔진 base 전 구간 ${years[0]}~${years[years.length - 1]}: 총 ${f1(fp.total)}% · CAGR ${f1(fp.cagr)}% · MDD ${f1(fp.mdd)}% · 매매 ${fullBase.trades}건`)
+
+  // ---- A/B -----------------------------------------------------------------
+  const variants: FlowVariant[] = [FLOW_BASE, flowF1(3), flowF1(5), FLOW_F2, FLOW_F3]
+  log('')
+  log('## 수급 가설 A/B')
+  log('| 전략 | 총수익 | CAGR | MDD | **수익÷MDD** | 매매 | 결측률 | 전반(~2017) 총/MDD/수익÷MDD | 후반(2018~) 총/MDD/수익÷MDD |')
+  log('|---|---|---|---|---|---|---|---|---|')
+  const results: { v: FlowVariant; r: FlowChainRes; full: Perf; a: Perf; b: Perf }[] = []
+  for (const v of variants) {
+    const r = v.key === FLOW_BASE.key ? flowBase : runFlowChain(yearly, v, lens, COST)
+    const full = perfOf(r.equity)
+    const a = perfOf(r.equity, '', `${FLOW_HALF_YEAR - 1}-12-31`)
+    const b = perfOf(r.equity, `${FLOW_HALF_YEAR}-01-01`)
+    results.push({ v, r, full, a, b })
+    const miss = r.missingAdmit + r.missingRank
+    const missPct = r.evaluated > 0 ? `${((miss / r.evaluated) * 100).toFixed(1)}% (${miss}/${r.evaluated})` : '—'
+    log(
+      `| ${v.label} | ${f1(full.total)}% | ${f1(full.cagr)}% | ${f1(full.mdd)}% | ${full.obj?.toFixed(1) ?? '—'} | ${r.trades} | ${missPct} | ` +
+        `${f1(a.total)}% / ${f1(a.mdd)}% / ${a.obj?.toFixed(1) ?? '—'} | ${f1(b.total)}% / ${f1(b.mdd)}% / ${b.obj?.toFixed(1) ?? '—'} |`,
+    )
+  }
+
+  // ---- 판정 ----------------------------------------------------------------
+  const baseRow = results[0]
+  log('')
+  log('## 판정 (base 대비 · 규칙 5 — 절대 수익이 아니라 base 초과분으로 본다)')
+  log('| 가설 | 전 구간 초과 | 전반 초과 | 후반 초과 | 두 구간 모두 개선? |')
+  log('|---|---|---|---|---|')
+  let winners = 0
+  for (const x of results.slice(1)) {
+    const dFull = x.full.total - baseRow.full.total
+    const dA = x.a.total - baseRow.a.total
+    const dB = x.b.total - baseRow.b.total
+    const both = dA > 0 && dB > 0
+    if (both) winners++
+    log(`| ${x.v.key} | ${f1(dFull)}%p | ${f1(dA)}%p | ${f1(dB)}%p | ${both ? '✅' : '❌'} |`)
+  }
+
+  log('')
+  log('## 다중검정 경고')
+  const n = results.length - 1
+  log(`수급 가설을 ${n}개(F1 N=3·N=5, F2, F3) 돌려 base와 비교했다. 이 중 ${winners}개가 전·후반 모두에서 base를 이겼다.`)
+  log(
+    `순수 우연이라면 한 가설이 두 구간 모두 이길 확률은 ≈25%이고, ${n}개 중 ${winners}개 이상이 그럴 확률은 ` +
+      `약 ${(binomTail(n, winners, 0.25) * 100).toFixed(0)}%다 — 이 값이 크면 "찾아낸 패턴"이 아니라 표본 잡음이다.`,
+  )
+  log('가설 하나만 이겼다면 그것을 골라 읽는 순간 곡선맞춤이다. 채택 기준은 ① 전·후반 모두 개선 ②')
+  log('결측률이 낮을 것(결측이 만든 성적이 아닐 것) ③ 매매수가 base 대비 극단적으로 줄지 않을 것(표본 소실)이다.')
+
+  log('')
+  log('## T−1 처리 · 결측 처리')
+  log('· D일 종가 진입 판단에 쓴 수급은 **dt < D**로 확정된 것뿐이다(makeFlowLens.before). D일 수급은 장 마감')
+  log('  후 확정이라 그날 판단에 넣으면 미래참조가 된다 — 렌즈 밖에서 수급을 읽는 경로는 시뮬에 없다.')
+  log('· 필요한 창(N영업일)이 캐시에 없으면 **불통과**로 처리했다(유리한 쪽 가정 금지). 위 표의 결측률이')
+  log('  높은 가설은 "필터가 좋아서"가 아니라 "데이터가 없어서" 매매가 줄었을 수 있으니 그렇게 읽는다.')
+  log(`· 수급 캐시 소급 시작 ${cache.oldest} — 그 이전 구간은 이 실험에 포함하지 않았다.`)
+
+  log('')
+  log('⚠️ [미검증-실데이터] 이 러너는 컨테이너에서 Yahoo(403)·키움(키 없음) 접속이 막혀 있어')
+  log('   합성 데이터 테스트로만 검증됐다. 위 수치는 EC2/러너 실행 결과로 채워야 한다.')
+  disclaimer({ universe: true, segmentExit: true })
+}
+
+// ============================================================================
+
+const MODES: Record<string, () => Promise<void>> = { seasonal, monthpat, pairprem, flow }
 
 // 런처(scripts/idea-lab.mjs)만 IDEA_LAB_RUN=1을 넘긴다. 테스트가 이 모듈을
 // import할 때는 자동 실행되지 않는다.
