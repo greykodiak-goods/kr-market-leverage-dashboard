@@ -2727,7 +2727,41 @@ async function krxprobe() {
   }
 }
 
+/**
+ * MODE=usprobe — 미장(미국 주식) 데이터 가용성 실측 (2026-08-02 대표 질문 "미장도 넣어서 해보고 싶은데 종목 데이터 있는지").
+ * 같은 fetchDaily 경로로 미국 티커가 ①얼마나 깊게 ②날짜 라벨이 올바르게(요일 검증 —
+ * KST +9h 변환이 미 동부 마감 타임스탬프를 다음 날로 밀지 확인) 받아지는지 본다.
+ * 상폐 티커(TWTR)로 생존편향 한계도 함께 실측. 조회 전용 · 커밋 없음.
+ */
+async function usprobe() {
+  const TICKERS = ['AAPL', 'MSFT', 'NVDA', 'SPY', 'QQQ', 'BRK-B', 'XOM', 'GE', 'INTC', 'TWTR']
+  log('| 티커 | 행 수 | 시작일 | 끝일 | 끝일 요일 | 종가 표본 | 배당보정(adj≠close) |')
+  log('|---|---|---|---|---|---|---|')
+  for (const t of TICKERS) {
+    try {
+      const bars = await fetchDaily(t, 'since:1995-01-01')
+      if (!bars.length) {
+        log(`| ${t} | 0 | — | — | — | — | — |`)
+        continue
+      }
+      const last = bars[bars.length - 1]
+      const dow = ['일', '월', '화', '수', '목', '금', '토'][new Date(last.date + 'T00:00:00Z').getUTCDay()]
+      // 배당 보정 여부: 오래된 봉에서 o≈c 라운드 수치가 아닌 소수면 보정 계수가 곱해진 것
+      const adj = bars[0].c !== Math.round(bars[0].c) ? '보정됨(소수)' : '[미확인]'
+      log(`| ${t} | ${bars.length} | ${bars[0].date} | ${last.date} | ${dow} | ${last.c.toFixed(2)} | ${adj} |`)
+    } catch (e) {
+      log(`| ${t} | ❌ | ${(e as Error).message.slice(0, 40)} | — | — | — | — |`)
+    }
+    await sleep(200)
+  }
+  log('')
+  log('판독법: ①끝일 요일이 토/일이면 KST +9h 날짜 밀림 버그 — 미장 지원 시 거래소 TZ 변환 필요')
+  log('②TWTR(상폐)가 0행/오류면 미장도 상폐 종목 가격 부재 → PIT 유니버스 매핑률 보고 필수')
+  log('③시작일이 1995면 30년치 확보 — 시뮬레이터 26년 구간과 동등 이상')
+}
+
 const MODES: Record<string, () => Promise<void>> = {
+  usprobe,
   vintage,
   pityear,
   krxprobe,
