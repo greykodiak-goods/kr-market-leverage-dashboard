@@ -16,6 +16,8 @@
 // ── 25차 승자(횡단면 모멘텀) 검증 3종 (2026-08-02 대표 승인 "모두 진행") ──────
 // MODE=xswf     — 워크포워드 + 슬롯 민감도. "사후에 고른 5"와 "그때 골랐을 파라미터"의 차이.
 // MODE=usxsmom  — 미장 교차 실행. 24차에서 추세돌파가 미국에서 전패한 것의 역질문.
+// MODE=usxsmom80 — 같은 실험을 **미국 상위 80** 유니버스로(2026-08-02 대표 지시). 26차의
+//                  "연 20종목이라 분위가 묽다"는 한계가 원인이었는지를 상위 8 = 상위 10%로 재검증.
 // MODE=combo    — 기준선 + xsmom 반반 결합. 상관·낙폭 완화 폭을 잰다.
 //   판정 기준선은 셋 다 **MA25×신고10→80선**(23차 격자 수익÷MDD 1위)을 같은 유니버스·
 //   같은 비용으로 **재실행한** 수치다. 다른 표의 숫자를 옮겨 적지 않는다.
@@ -57,10 +59,13 @@ import {
 import type { DailyBar } from '../src/features/backtest/types'
 import {
   US_COMPANY_NAMES,
+  US_PIT80_SOURCE_NOTE,
+  US_PIT80_UNION,
   US_PIT_SOURCE_NOTE,
   US_PIT_UNION,
   US_PIT_YEARS,
   resolveUsTicker,
+  usPit80Codes,
   usPitCodes,
 } from '../src/features/backtest/usPitUniverse'
 import { readFileSync, readdirSync } from 'node:fs'
@@ -3227,9 +3232,13 @@ export function usTrendSpec(symbols: string[]): StrategySpec {
  * (재사용 티커는 매핑 거부 = 정직한 실패). 그 해 6월 30일 이전 상장분만 편입하는 규칙은
  * KR `buildYearly`와 동일하게 맞춘다 — 두 시장 표를 나란히 읽으려면 규칙이 같아야 한다.
  */
-export function buildYearlyUs(histories: Record<string, DailyBar[]>, years: number[]): YearSlice[] {
+export function buildYearlyUs(
+  histories: Record<string, DailyBar[]>,
+  years: number[],
+  codesFor: (y: number) => string[] = usPitCodes,
+): YearSlice[] {
   return years.map((y) => {
-    const codes = usPitCodes(y)
+    const codes = codesFor(y)
     const syms: string[] = []
     for (const cd of codes) {
       const r = resolveUsTicker(cd, (s) => !!histories[s]?.length)
@@ -3244,9 +3253,8 @@ export function buildYearlyUs(histories: Record<string, DailyBar[]>, years: numb
   })
 }
 
-async function loadUsPitHistories(range = 'since:1999-01-01') {
+async function loadUsPitHistories(range = 'since:1999-01-01', union: string[] = US_PIT_UNION) {
   const years = US_PIT_YEARS
-  const union = US_PIT_UNION
   const histories: Record<string, DailyBar[]> = {}
   const failed: string[] = []
   for (const ticker of union) {
@@ -3269,14 +3277,62 @@ async function loadUsPitHistories(range = 'since:1999-01-01') {
   return { years, histories, bench }
 }
 
-async function usxsmom() {
-  log('# MODE=usxsmom — 횡단면 모멘텀 미장 교차 실행 (24차의 역질문)')
+/**
+ * 미장 xsmom 실험의 **유니버스 축**. 상위 20과 상위 80이 같은 판정 프레임을 공유하도록
+ * 이것만 갈아끼운다 — 비용·벤치·분할연도·알파 판정·다중검정 경고는 전부 동일하다.
+ * (유니버스 정의 자체는 `src/features/backtest/usPitUniverse.ts`가 정본이고 여기선 읽기만 한다.)
+ */
+export interface UsUniverseCfg {
+  /** 그 해 목록의 종목 수(매핑률 분모 · 표 제목에 쓴다). */
+  size: number
+  codesFor: (y: number) => string[]
+  /** 시세를 한 번만 받기 위한 조회용 합집합. */
+  union: string[]
+  sourceNote: string
+}
+
+export const US_UNI20: UsUniverseCfg = {
+  size: 20,
+  codesFor: usPitCodes,
+  union: US_PIT_UNION,
+  sourceNote: US_PIT_SOURCE_NOTE,
+}
+export const US_UNI80: UsUniverseCfg = {
+  size: 80,
+  codesFor: usPit80Codes,
+  union: US_PIT80_UNION,
+  sourceNote: US_PIT80_SOURCE_NOTE,
+}
+
+interface UsXsMomCfg {
+  /** 첫 줄 제목(모드명 포함). */
+  heading: string
+  /** 제목 아래 도입 문단. */
+  intro: string[]
+  uni: UsUniverseCfg
+  /** 돌릴 슬롯 수 목록. 각 슬롯 × 게이트 on/off = 변형 2개. */
+  slotList: number[]
+  /** 성적표 직후에 끼워 넣을 추가 해설(대조 문단 등). */
+  afterTable?: (rows: StratRow[]) => void
+  /** '이 실험의 구조적 한계' 항목. */
+  limits: string[]
+}
+
+/**
+ * MODE=usxsmom / usxsmom80 공용 실행부.
+ *
+ * ⚠️ 메모리(2026-08-02 OOM 재발 방지): 변형별로 남기는 것은 `summarizeStrat`가 접은
+ *    **요약 스칼라(StratRow)**뿐이다. 자산곡선 배열은 `runCustomChain` → `summarizeStrat`
+ *    구간에서만 살아 있고 루프를 나가면 버려진다. 변형 수만큼 곡선을 쌓지 않는다.
+ *    시세도 유니온 기준으로 **한 번만** 받아 모든 해가 나눠 쓴다(기존 fetch 경로 그대로 —
+ *    딜레이·재시도·404 처리를 새로 짜지 않는다).
+ */
+async function runUsXsMom(cfg: UsXsMomCfg) {
+  log(cfg.heading)
   log('')
-  log('24차에서 추세돌파 계열은 미국에서 전패했다. 같은 규칙을 미국 시총 상위20 [추정] 유니버스에')
-  log('그대로 옮겼을 때 **횡단면 모멘텀은 알파를 내는가**를 본다. 미국에서도 되면 25차 결과가')
-  log('한국 표본 특유의 잡음이 아니라는 방증이 되고, 안 되면 25차는 한 표본에만 있는 성적이다.')
+  for (const line of cfg.intro) log(line)
   log('')
-  log(`⚠️ ${US_PIT_SOURCE_NOTE}`)
+  log(`⚠️ ${cfg.uni.sourceNote}`)
   log(
     `비용: 수수료 ${COST_US.feePct}% · 거래세 ${COST_US.taxPct}%(미국은 매도 거래세 없음) · ` +
       `슬리피지 ${COST_US.slippagePct}% [추정] — MODE=uspit과 같은 값이다.`,
@@ -3284,8 +3340,8 @@ async function usxsmom() {
   log('⚠️ 환율 미반영 — 전 구간 USD 기준 수익률이다. 원화 환산 시 원/달러 변동이 그대로 더해진다.')
   log('')
 
-  const { years, histories, bench } = await loadUsPitHistories()
-  const yearly = buildYearlyUs(histories, years)
+  const { years, histories, bench } = await loadUsPitHistories('since:1999-01-01', cfg.uni.union)
+  const yearly = buildYearlyUs(histories, years, cfg.uni.codesFor)
   if (yearly.every((v) => v.syms.length < 5)) {
     log('❌ 시세 로드 실패로 실행할 해가 없다 — 중단')
     return
@@ -3299,7 +3355,7 @@ async function usxsmom() {
   // 기준선(rows[0])은 **미장 추세 기준선**이다 — 판정은 "미장에서 추세 대비 모멘텀"이다.
   const trendChain = runSpecChain(yearly, usTrendSpec, COST_US)
   const rows: StratRow[] = [summarizeStrat(US_TREND_LABEL, trendChain, benchEq)]
-  for (const slots of [4, 5, 6]) {
+  for (const slots of cfg.slotList) {
     for (const gate of [false, true]) {
       const chain = runCustomChain(
         yearly,
@@ -3312,8 +3368,9 @@ async function usxsmom() {
   }
 
   log('')
-  log('## 성적 (미국 연도별 상위20 교체 유니버스 · 알파는 vs SPY)')
+  log(`## 성적 (미국 연도별 상위${cfg.uni.size} 교체 유니버스 · 알파는 vs SPY)`)
   stratTable(rows)
+  cfg.afterTable?.(rows)
 
   const [from, to] = spanOf(trendChain.equity)
   const holds: HoldRow[] = [
@@ -3351,17 +3408,112 @@ async function usxsmom() {
 
   log('')
   log('## 이 실험의 구조적 한계')
-  log('· 유니버스가 연 20종목이라 "상위 4~6"은 상위 20~30% 분위다. 학계의 상위 10% 분위 모멘텀보다')
-  log('  신호가 훨씬 묽다 — 알파가 안 나와도 "미국에서 모멘텀이 죽었다"가 아니라 "이 표본에서는')
-  log('  분위가 안 갈린다"일 수 있다.')
-  log('· 미국 대형주 상위 20은 서로 상관이 매우 높다(같은 지수·같은 매크로). 분산 효과가 작아')
-  log('  KR 결과와 직접 비교할 때 유니버스 성격 차이를 감안해야 한다.')
+  for (const line of cfg.limits) log(line)
   log('· 비용 0.1%는 국내 증권사 해외주식 수수료 [추정]이며 환전 스프레드·최소수수료가 빠져 있다.')
   log('· 상폐 종목은 가격 부재로 빠진다 — 매핑률로 크기를 드러냈을 뿐 편향이 제거된 것은 아니다.')
   log('· 배당은 adjclose 계수로 OHLC에 반영했지만 **미국 배당세(원천징수 15%)는 반영하지 않았다** —')
   log('  실제 세후 수익은 이보다 낮다.')
   unverifiedNote()
   disclaimer({ segmentExit: true })
+}
+
+async function usxsmom() {
+  await runUsXsMom({
+    heading: '# MODE=usxsmom — 횡단면 모멘텀 미장 교차 실행 (24차의 역질문)',
+    intro: [
+      '24차에서 추세돌파 계열은 미국에서 전패했다. 같은 규칙을 미국 시총 상위20 [추정] 유니버스에',
+      '그대로 옮겼을 때 **횡단면 모멘텀은 알파를 내는가**를 본다. 미국에서도 되면 25차 결과가',
+      '한국 표본 특유의 잡음이 아니라는 방증이 되고, 안 되면 25차는 한 표본에만 있는 성적이다.',
+    ],
+    uni: US_UNI20,
+    slotList: [4, 5, 6],
+    limits: [
+      '· 유니버스가 연 20종목이라 "상위 4~6"은 상위 20~30% 분위다. 학계의 상위 10% 분위 모멘텀보다',
+      '  신호가 훨씬 묽다 — 알파가 안 나와도 "미국에서 모멘텀이 죽었다"가 아니라 "이 표본에서는',
+      '  분위가 안 갈린다"일 수 있다.',
+      '· 미국 대형주 상위 20은 서로 상관이 매우 높다(같은 지수·같은 매크로). 분산 효과가 작아',
+      '  KR 결과와 직접 비교할 때 유니버스 성격 차이를 감안해야 한다.',
+    ],
+  })
+}
+
+// ============================================================================
+// MODE=usxsmom80 — 같은 실험을 상위 80 유니버스로 (26차 한계의 직접 검증)
+// ============================================================================
+//
+// 26차(MODE=usxsmom · 상위20)에서 12-1 횡단면 모멘텀 6변형이 **전부 알파 음수**였고,
+// 그때 명시한 구조적 한계가 이것이었다 — "연 20종목이라 상위 4~6은 상위 20~30% 분위라
+// 학계의 상위 10% 분위 모멘텀보다 신호가 묽다". 그 한계가 **원인이었는지**를 재는 실험이다.
+//
+//   유니버스를 80으로 넓히면 **상위 8 = 상위 10%** 로 학계 분위와 정합해진다.
+//   · 알파가 살아나면: 26차의 음수 알파는 "미국에서 모멘텀이 안 먹힌다"가 아니라
+//     **분위가 안 갈리는 유니버스** 탓이었다는 뜻이 된다.
+//   · 그래도 음수면: 유니버스 폭은 원인이 아니었고, 미국 대형주 표본에서 12-1 모멘텀이
+//     비용 차감 후 알파를 못 낸다는 쪽 증거가 하나 더 붙는다.
+// 어느 쪽이든 결론이 나오므로 돌릴 가치가 있다(26차와 같은 판정 프레임을 그대로 쓴다).
+//
+// ⚠️ 슬롯을 4→16까지 넓힌 만큼 **변형 수가 8개로 늘었다** — 다중검정 경고를 26차보다
+//    더 무겁게 읽어야 한다. "8개 중 하나가 좋았다"는 그 자체로는 증거가 아니다.
+
+/** 26차(MODE=usxsmom · 상위20) 실측 요약 — 대조 문단에 그대로 인용한다. */
+export const USXSMOM20_PRIOR = { variants: 6, positiveAlpha: 0, bestAlphaPp: -1.0 } as const
+
+/** 학계 표준 분위(상위 10%)와 정합하는 슬롯 수 = 80 × 10%. */
+export const DECILE_SLOTS = 8
+
+async function usxsmom80() {
+  await runUsXsMom({
+    heading: '# MODE=usxsmom80 — 횡단면 모멘텀 미장 교차 실행 (유니버스 상위 80)',
+    intro: [
+      '26차(상위20)에서 12-1 횡단면 모멘텀은 6변형 전부 알파 음수였다. 그때 적어 둔 한계가',
+      '"연 20종목이라 상위 4~6은 상위 20~30% 분위 — 학계의 상위 10% 분위보다 신호가 묽다"였다.',
+      '**유니버스를 80으로 넓혀 분위를 갈랐을 때 알파가 사는가**가 이 실험의 질문이다.',
+      `학계 분위와 정합한 슬롯은 **상위 ${DECILE_SLOTS}**(80 × 10%)이며, 나머지 슬롯(5·12·16)은`,
+      '그 주변의 민감도를 보기 위한 행이다 — 최고 성적 슬롯을 골라 읽으라는 표가 아니다.',
+    ],
+    uni: US_UNI80,
+    slotList: [5, DECILE_SLOTS, 12, 16],
+    afterTable: (rows) => {
+      const xs = rows.slice(1)
+      const decile = xs.filter((r) => r.label.includes(`상위${DECILE_SLOTS}`))
+      const pos = xs.filter((r) => (r.alphaFull ?? -1) > 0)
+      log('')
+      log('## 26차(상위20) 대조 — 유니버스를 넓히자 분위가 갈렸는가')
+      log('| 실험 | 유니버스 | 변형 수 | 전 구간 알파 > 0 | 최고 알파 |')
+      log('|---|---|---|---|---|')
+      log(
+        `| 26차 usxsmom | 상위 20 | ${USXSMOM20_PRIOR.variants} | ${USXSMOM20_PRIOR.positiveAlpha}개 | ` +
+          `${f1(USXSMOM20_PRIOR.bestAlphaPp)}%p |`,
+      )
+      const best = xs.reduce<number | null>((m, r) => (r.alphaFull == null ? m : m == null || r.alphaFull > m ? r.alphaFull : m), null)
+      log(`| 이번 usxsmom80 | 상위 80 | ${xs.length} | ${pos.length}개 | ${pctOrDash(best)} |`)
+      log('')
+      log(`**학계 분위와 정합한 슬롯은 ${DECILE_SLOTS}이다**(상위 80의 10%). 그 두 행(게이트 on/off)의 알파:`)
+      for (const r of decile) log(`· ${r.label} — 전 구간 ${pctOrDash(r.alphaFull)} · 전반 ${pctOrDash(r.alphaA)} · 후반 ${pctOrDash(r.alphaB)}`)
+      log('')
+      if (pos.length === 0) {
+        log('→ 유니버스를 4배로 넓혀 상위 10% 분위를 만들었는데도 **전 구간 알파가 양(+)인 변형이 없다.**')
+        log('   26차의 "분위가 묽어서"라는 설명은 이 표본에서 지지되지 않는다 — 유니버스 폭이 아니라')
+        log('   **미국 대형주에서 12-1 모멘텀 자체가 비용 차감 후 초과수익을 못 낸다**는 쪽으로 읽어야 한다.')
+      } else {
+        log(`→ 상위 80에서는 ${pos.length}개 변형이 전 구간 알파 양(+)이다. 26차와 갈린 지점이 유니버스 폭이라는`)
+        log('   방증이 된다. 다만 **전·후반 모두** 양(+)인지(아래 판정)와 다중검정 경고를 함께 통과해야')
+        log('   의미가 있다 — 전 구간 알파 하나만으로 채택하지 않는다.')
+      }
+    },
+    limits: [
+      `· 유니버스가 연 80종목이라 "상위 ${DECILE_SLOTS}"이 상위 10% 분위다(26차의 상위 20~30%보다 학계 표준에`,
+      '  가깝다). 다만 **21~80위 목록의 [추정] 신뢰도는 상위 20보다 한 단계 낮다** — 순위 경계가 넓어',
+      '  누락·오배치가 있을 수 있고 CRSP/Compustat와 대조하지 않았다. 유니버스가 틀리면 결과도 틀린다.',
+      '· 넓힌 구간에는 상폐·피인수 종목(Enron·Lehman·Bear Stearns·Wachovia·Merrill·Warner-Lambert 등)이',
+      '  더 많이 들어 있고, 그만큼 초기 연도의 매핑률이 상위 20보다 낮게 나온다 — 매핑률 표를 반드시 함께',
+      '  읽는다. 낮은 매핑률 구간의 성적은 "살아남은 종목 위주"라 실제보다 후하다.',
+      '· 미국 대형주는 상위 80까지 넓혀도 서로 상관이 높다(같은 지수·같은 매크로). 분위를 갈랐다고',
+      '  분산까지 좋아지는 것은 아니다.',
+      `· 변형이 ${2 * 4}개다(슬롯 4종 × 게이트 2). 26차(6개)보다 다중검정 위험이 크다 — 아래 경고를 그만큼`,
+      '  무겁게 읽는다.',
+    ],
+  })
 }
 
 // ============================================================================
@@ -3522,6 +3674,7 @@ const MODES: Record<string, () => Promise<void>> = {
   rsirev,
   xswf,
   usxsmom,
+  usxsmom80,
   combo,
 }
 
