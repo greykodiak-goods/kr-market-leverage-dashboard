@@ -8,6 +8,13 @@
 // MODE=pairprem  — 삼성전자/삼성전자우 괴리율 z-score 스위칭 (롱온리)
 // MODE=flow      — 투자자 순매수(수급) 조건 A/B  (2026-08-02 대표 지시 "수급·거래량 기반 검토")
 //
+// ── 비(非)이평 계열 (2026-08-02 대표 지시 "MA 이평선 말고 다른 접근은 없냐") ──────
+// MODE=xsmom    — 횡단면 모멘텀 랭킹(12-1). 이동평균을 아예 쓰지 않는다.
+// MODE=volbrk   — 변동성 돌파(래리 윌리엄스 k). 전일 레인지만 쓴다.
+// MODE=rsirev   — 단기 평균회귀(RSI2 · Wilder) + 200일선 추세 필터.
+//   판정 기준선은 셋 다 **MA25×신고10→80선**(23차 격자 수익÷MDD 1위)을 같은 유니버스·
+//   같은 비용으로 **재실행한** 수치다. 다른 표의 숫자를 옮겨 적지 않는다.
+//
 // ── 규칙 1(미래참조 금지) 준수 방법 ────────────────────────────────────────
 //   · 모든 통계는 **확장 윈도우**다. 전체 구간 평균·표준편차·최대최소를 임계값
 //     산출에 쓰지 않는다(그 자체가 미래 정보). 월 필터·셀 선정은 "그 해 1월 초까지의
@@ -1550,8 +1557,1009 @@ async function flow() {
 }
 
 // ============================================================================
+// 비(非)이평 전략군 — 공용 기반 (MODE=xsmom · volbrk · rsirev)
+// ============================================================================
+//
+// 2026-08-02 대표 지시: "백테스트 MA 이평선 기반 말고 다른 접근은 없냐? 수익률이 좀 낮은데."
+//
+// 판정 기준선 = 현행 최고 조합 **MA25×신고10→80선**(23차 400조합 격자 수익÷MDD 1위).
+// 기준선 수치를 다른 보고서에서 옮겨 적지 않고 **같은 PIT 유니버스·같은 비용·같은
+// 연도 연쇄로 여기서 다시 돌린다** — 유니버스·구간·비용이 다르면 비교가 성립하지 않는다.
+//
+// ── 규칙 1(미래참조 금지) 준수 ─────────────────────────────────────────────
+//   · xsmom : 리밸런스일 D의 랭킹은 `date < 전월 1일` 종가까지만 본다(12-1 모멘텀은
+//             최근 1개월을 통째로 버리므로 D 근처 데이터가 아예 안 들어간다).
+//             체결은 **월 첫 거래일 시가**.
+//   · volbrk: 돌파가 = 당일 시가 + k×(**전일** 고가−저가). 전일 봉과 당일 시가는 주문
+//             시점에 이미 확정된 값이다. 당일 고가는 "체결 여부 판정"에만 쓰고,
+//             체결가는 `breakoutFill`이 **max(시가, 돌파가)** 로 불리한 쪽을 잡는다(규칙 1-4).
+//             랭킹 키는 **전일** 거래대금이다 — 당일 거래대금은 장중에 확정되지 않는다.
+//   · rsirev: RSI(2)·MA200 모두 당일 종가까지만 쓰는 재귀·롤링 계산. 신호는 D 종가,
+//             체결은 **D+1 시가**. 마지막 봉에서는 신규 신호를 만들지 않는다(규칙 1-6).
+//   · 집행자는 `tests/idealab.test.ts`의 절단 불변성 케이스다.
+//
+// ⚠️ 메모리: 변형별 자산곡선은 요약 즉시 버리고 **스칼라만** 남긴다(2026-08-02 pit1010
+//    400조합 OOM 재발 방지). 표에 남는 것은 Perf 스칼라·연도별 배수뿐이다.
 
-const MODES: Record<string, () => Promise<void>> = { seasonal, monthpat, pairprem, flow }
+/** 23차 격자 수익÷MDD 1위 — 현행 최고 조합(총 +5,442% · CAGR 16.3% · 알파 +7.9%p/연). */
+export const BASE25 = { ma: 25, hb: 10, xm: 80, buf: 0 } as const
+export const BASELINE_LABEL = `기준선 MA${BASE25.ma}×신고${BASE25.hb}→${BASE25.xm}선`
+
+/** 기준선 스펙 — src/features/backtest/SpecSimulator.tsx의 PRESET_PIT_MAXRATIO와 같은 파라미터. */
+export function baselineSpec(symbols: string[]): StrategySpec {
+  return {
+    version: SPEC_VERSION,
+    id: 'idea-lab-baseline-ma25',
+    name: BASELINE_LABEL,
+    source: '23차 400조합 격자 수익÷MDD 1위',
+    universe: {
+      markets: ['KOSPI', 'KOSDAQ'],
+      excludeAdministrative: true,
+      excludeSuspended: true,
+      excludeLiquidation: true,
+      excludePreferred: true,
+      excludeEtf: true,
+      symbols,
+    },
+    entry: {
+      op: 'and',
+      nodes: [
+        c(`${BASE25.ma}일선돌파`, { kind: 'maCross', period: BASE25.ma, dir: 'above' }),
+        c(`${BASE25.hb}일신고가`, { kind: 'highBreak', days: BASE25.hb }),
+      ],
+    },
+    ranking: { by: 'tradingValue', dir: 'desc' },
+    exits: [{ kind: 'maBreak', maPeriod: BASE25.xm, pct: BASE25.buf }],
+    sizing: { maxPositions: MAX_POSITIONS, mode: 'equalSlot' },
+    execution: { timing: 'sameClose', orderType: 'market' },
+    regime: null,
+  }
+}
+
+// ---- 장부(Book) — 세 전략이 공유하는 체결·손익 원장 ---------------------------
+
+export interface BookPos {
+  qty: number
+  /** 취득 총원가(체결가×수량 + 매수수수료). 부분매도 시 비례 차감. */
+  basis: number
+  /** 부분매도까지 포함한 실현손익 누계 — 전량 청산 시 이 부호로 승패를 가른다. */
+  realized: number
+  /** 진입 체결일의 캘린더 인덱스(보유일수 계산용) */
+  entryIdx: number
+  /** 봉이 없는 날 평가에 쓰는 마지막 관측 종가 */
+  lastClose: number
+}
+
+export interface Book {
+  cash: number
+  positions: Map<string, BookPos>
+  /** 전량 청산으로 완결된 라운드트립 수 */
+  closed: number
+  /** 그중 실현손익 > 0 */
+  wins: number
+}
+
+export const newBook = (cash: number): Book => ({ cash, positions: new Map(), closed: 0, wins: 0 })
+
+/**
+ * 매수. `rawPx`는 슬리피지 **적용 전** 기준가(시가·종가·돌파가)이며 여기서 불리한 쪽으로
+ * 슬리피지를 얹는다. 예산·현금 한도 안에서 정수 주만 산다. 실제 매수 수량을 돌려준다.
+ */
+export function bookBuy(
+  book: Book,
+  cost: CostSettings,
+  sym: string,
+  rawPx: number,
+  budget: number,
+  idx: number,
+): number {
+  if (!(rawPx > 0) || !(budget > 0)) return 0
+  const fill = rawPx * (1 + cost.slippagePct / 100)
+  const qty = Math.floor(Math.min(budget, book.cash) / (fill * (1 + cost.feePct / 100)))
+  if (qty <= 0) return 0
+  const gross = qty * fill
+  const fee = gross * (cost.feePct / 100)
+  book.cash -= gross + fee
+  const p = book.positions.get(sym)
+  if (p) {
+    p.qty += qty
+    p.basis += gross + fee
+  } else {
+    book.positions.set(sym, { qty, basis: gross + fee, realized: 0, entryIdx: idx, lastClose: rawPx })
+  }
+  return qty
+}
+
+/** 매도(부분 가능). 전량이 나가면 라운드트립 1건으로 세고 실현손익 부호로 승패를 가른다. */
+export function bookSell(book: Book, cost: CostSettings, sym: string, rawPx: number, qty: number): number {
+  const p = book.positions.get(sym)
+  if (!p || !(qty > 0) || !(rawPx > 0)) return 0
+  const q = Math.min(qty, p.qty)
+  const fill = rawPx * (1 - cost.slippagePct / 100)
+  const gross = q * fill
+  const net = gross - gross * ((cost.feePct + cost.taxPct) / 100)
+  book.cash += net
+  const portion = q / p.qty
+  const basisOut = p.basis * portion
+  p.realized += net - basisOut
+  p.basis -= basisOut
+  p.qty -= q
+  if (p.qty <= 0) {
+    book.closed++
+    if (p.realized > 0) book.wins++
+    book.positions.delete(sym)
+  }
+  return q
+}
+
+/** 종가 마킹 — 봉 없는 날은 마지막 관측 종가를 이월한다. 총자산(현금+평가)을 돌려준다. */
+export function bookMark(book: Book, priceOf: (sym: string) => number | null): number {
+  let mv = 0
+  for (const [sym, p] of book.positions) {
+    const px = priceOf(sym)
+    if (px != null && px > 0) p.lastClose = px
+    mv += p.qty * p.lastClose
+  }
+  return book.cash + mv
+}
+
+// ---- 한 해치 시뮬 공용 컨텍스트 ----------------------------------------------
+
+export interface SimCtx {
+  universe: string[]
+  calendar: string[]
+  idxOf: Record<string, Map<string, number>>
+}
+
+export function makeSimCtx(
+  histories: Record<string, DailyBar[]>,
+  symbols: string[],
+  startDate: string,
+): SimCtx {
+  const universe = [...new Set(symbols)].filter((s) => histories[s]?.length).sort()
+  const scoped: Record<string, DailyBar[]> = {}
+  for (const s of universe) scoped[s] = histories[s]
+  const calendar = calendarOf(scoped).filter((d) => d >= startDate)
+  const idxOf: Record<string, Map<string, number>> = {}
+  for (const s of universe) {
+    const m = new Map<string, number>()
+    histories[s].forEach((b, i) => m.set(b.date, i))
+    idxOf[s] = m
+  }
+  return { universe, calendar, idxOf }
+}
+
+/**
+ * 체결 1건. **테스트가 규칙 1을 집행하는 지점**이다 — "신호일 종가로 판단해 체결일 시가에
+ * 샀다"를 검증하려면 체결일·신호일·체결 기준가가 다 남아 있어야 한다.
+ * 연쇄(runCustomChain)는 이 배열을 누적하지 않는다(해마다 버린다 — 메모리).
+ */
+export interface FillEvent {
+  date: string
+  sym: string
+  side: 'buy' | 'sell'
+  /** 슬리피지 적용 **전** 기준가 — 시가·종가·돌파가 중 무엇을 썼는지 그대로 남긴다 */
+  px: number
+  qty: number
+  /** 이 체결을 만든 판단이 이뤄진 날(종가 기준). 당일 판단·당일 체결이면 date와 같다. */
+  signalDate: string
+}
+
+export interface CustomYearRun {
+  equity: { date: string; equity: number }[]
+  closed: number
+  wins: number
+  openAtEnd: number
+  fills: FillEvent[]
+}
+
+export interface ChainStats {
+  equity: { date: string; equity: number }[]
+  perYear: { y: number; ret: number; mapped: string }[]
+  closed: number
+  wins: number
+}
+
+/**
+ * 연도별 유니버스 교체 연쇄 — `runOverlayChain`/`runFlowChain`과 **같은** 이월·구간끝
+ * 청산비용 근사를 쓴다(그래야 기준선 대조가 성립한다). 매핑 5종목 미만인 해는 현금.
+ * 각 해는 독립 시뮬이라 12/31에 사실상 전량 정산되는 셈이며, 그 비용이 haircut이다.
+ */
+export function runCustomChain(
+  yearly: YearSlice[],
+  runYear: (v: YearSlice) => CustomYearRun,
+  cost: CostSettings,
+  slots: number,
+  applyHaircut = true,
+): ChainStats {
+  let factor = 1
+  const equity: { date: string; equity: number }[] = []
+  const perYear: { y: number; ret: number; mapped: string }[] = []
+  let closed = 0
+  let wins = 0
+
+  for (const v of yearly) {
+    const yearStart = factor
+    if (v.syms.length < 5) {
+      perYear.push({ y: v.y, ret: 1, mapped: v.mapped })
+      continue
+    }
+    const r = runYear(v)
+    closed += r.closed
+    wins += r.wins
+    const base = factor
+    for (const e of r.equity) equity.push({ date: e.date, equity: base * (e.equity / cost.initialCapital) })
+    const finalEq = r.equity.length ? r.equity[r.equity.length - 1].equity : cost.initialCapital
+    const segRet = finalEq / cost.initialCapital
+    const frac = applyHaircut ? Math.min(1, Math.max(0, r.openAtEnd / Math.max(1, slots))) : 0
+    factor *= segRet * (1 - frac * ((cost.feePct + cost.taxPct + cost.slippagePct) / 100))
+    perYear.push({ y: v.y, ret: factor / yearStart, mapped: v.mapped })
+  }
+  return { equity, perYear, closed, wins }
+}
+
+/** 정본 엔진(runStrategySpec) 경로를 같은 연쇄에 태운다 — 기준선 재실행용. */
+export function runSpecChain(
+  yearly: YearSlice[],
+  makeSpec: (syms: string[]) => StrategySpec,
+  cost: CostSettings,
+  applyHaircut = true,
+): ChainStats {
+  return runCustomChain(
+    yearly,
+    (v) => {
+      const r = runStrategySpec(v.hist, `${v.y}-01-01`, makeSpec(v.syms), cost)
+      const done = r.trades.filter((t) => t.exitDate != null)
+      return {
+        equity: r.equity.map((e) => ({ date: e.date, equity: e.equity })),
+        closed: done.length,
+        wins: done.filter((t) => (t.pnl ?? 0) > 0).length,
+        openAtEnd: r.openAtEnd,
+        fills: [],
+      }
+    },
+    cost,
+    MAX_POSITIONS,
+    applyHaircut,
+  )
+}
+
+// ---- 요약(스칼라만) · 알파 · 표 ----------------------------------------------
+
+export interface StratRow {
+  label: string
+  full: Perf
+  a: Perf
+  b: Perf
+  closed: number
+  wins: number
+  /** 벤치 대비 연환산 초과수익(%p). 벤치 구간이 없으면 null. */
+  alphaFull: number | null
+  alphaA: number | null
+  alphaB: number | null
+  perYear: { y: number; ret: number }[]
+}
+
+/**
+ * 알파는 **두 곡선이 겹치는 구간**에서만 계산한다. 벤치(KODEX 200)는 2002년 상장이라
+ * 2000~2001 구간에는 존재하지 않는데, 그 구간을 전략에만 유리하게 넣으면 알파가 부풀려진다.
+ */
+export function alphaOf(
+  strat: { date: string; equity: number }[],
+  bench: { date: string; equity: number }[],
+  from: string,
+  to: string,
+): { s: Perf; b: Perf | null; alpha: number | null; from: string; to: string } {
+  const bWin = bench.filter((e) => e.date >= from && e.date <= to)
+  const sWin = strat.filter((e) => e.date >= from && e.date <= to)
+  if (bWin.length < 2 || sWin.length < 2) return { s: perfOf(strat, from, to), b: null, alpha: null, from, to }
+  const lo = bWin[0].date > sWin[0].date ? bWin[0].date : sWin[0].date
+  const hi = bWin[bWin.length - 1].date < sWin[sWin.length - 1].date ? bWin[bWin.length - 1].date : sWin[sWin.length - 1].date
+  const s = perfOf(strat, lo, hi)
+  const b = perfOf(bench, lo, hi)
+  if (s.years < 0.5 || b.years < 0.5) return { s, b, alpha: null, from: lo, to: hi }
+  return { s, b, alpha: s.cagr - b.cagr, from: lo, to: hi }
+}
+
+/** 자산곡선을 스칼라로 접는다. 호출 뒤 곡선 배열은 버려도 된다(메모리). */
+export function summarizeStrat(
+  label: string,
+  chain: ChainStats,
+  benchEq: { date: string; equity: number }[],
+  halfYear = HALF_YEAR,
+): StratRow {
+  return {
+    label,
+    full: perfOf(chain.equity),
+    a: perfOf(chain.equity, '', `${halfYear - 1}-12-31`),
+    b: perfOf(chain.equity, `${halfYear}-01-01`),
+    closed: chain.closed,
+    wins: chain.wins,
+    alphaFull: alphaOf(chain.equity, benchEq, '', '9999-12-31').alpha,
+    alphaA: alphaOf(chain.equity, benchEq, '', `${halfYear - 1}-12-31`).alpha,
+    alphaB: alphaOf(chain.equity, benchEq, `${halfYear}-01-01`, '9999-12-31').alpha,
+    perYear: chain.perYear.map((p) => ({ y: p.y, ret: p.ret })),
+  }
+}
+
+const pctOrDash = (v: number | null) => (v == null ? '—' : `${f1(v)}%p`)
+
+export function stratTable(rows: StratRow[], halfYear = HALF_YEAR) {
+  log(
+    `| 전략 | 총수익 | CAGR | MDD | **수익÷MDD** | 매매(청산완료) | 승률 | 알파(CAGR) | ` +
+      `전반(~${halfYear - 1}) 총/MDD/알파 | 후반(${halfYear}~) 총/MDD/알파 |`,
+  )
+  log('|---|---|---|---|---|---|---|---|---|---|')
+  for (const r of rows) {
+    const wr = r.closed > 0 ? `${((r.wins / r.closed) * 100).toFixed(0)}%` : '—'
+    log(
+      `| ${r.label} | ${f1(r.full.total)}% | ${f1(r.full.cagr)}% | ${f1(r.full.mdd)}% | ` +
+        `${r.full.obj?.toFixed(1) ?? '—'} | ${r.closed} | ${wr} | ${pctOrDash(r.alphaFull)} | ` +
+        `${f1(r.a.total)}% / ${f1(r.a.mdd)}% / ${pctOrDash(r.alphaA)} | ` +
+        `${f1(r.b.total)}% / ${f1(r.b.mdd)}% / ${pctOrDash(r.alphaB)} |`,
+    )
+  }
+  // 전멸한 줄이 서로 똑같아 보이는 것을 "같은 전략"으로 오독하지 않게 못 박는다
+  if (rows.some((r) => r.full.total <= -99.9))
+    log(
+      '※ 총수익 −100%인 줄은 **자본을 다 잃었다**는 뜻이다. 그런 줄끼리는 수치가 같아 보여도 같은 전략이 아니다 ' +
+        '(자산곡선이 0에 붙으면 지표가 하한에서 뭉친다). 비교는 살아남은 줄끼리만 의미가 있다.',
+    )
+}
+
+/**
+ * 기준선 대조행 — 23차 격자 보고(+5,442% · CAGR 16.3%)는 구간끝 청산비용 근사가 없는
+ * 수치다. 표의 기준선이 그보다 낮게 나오는 것이 정상이라는 걸 매번 보여준다
+ * (안 보여주면 다음 세션이 "기준선이 깨졌다"고 오진한다).
+ */
+function baselineCrossCheck(yearly: YearSlice[]) {
+  const p = perfOf(runSpecChain(yearly, baselineSpec, COST, false).equity)
+  log('')
+  log(
+    `기준선 대조: 구간끝 청산비용 근사를 빼면 총 ${f1(p.total)}% · CAGR ${f1(p.cagr)}% · MDD ${f1(p.mdd)}% — ` +
+      '23차 격자 보고(+5,442% · CAGR 16.3% · MDD −31.9%)와 맞춰 볼 값이다.',
+  )
+  log('(표의 기준선은 매년 말 정산비용 [추정]을 뺀 값이라 23차 수치보다 낮게 나오는 것이 정상이다.)')
+}
+
+/** rows[0]이 기준선이라는 전제. 전·후반 모두 기준선을 이긴 변형 수를 돌려준다. */
+export function verdictTable(rows: StratRow[]): number {
+  const base = rows[0]
+  log('')
+  log('## 판정 (기준선 대비 · 규칙 5 — 절대 수익이 아니라 초과분으로 본다)')
+  log('| 전략 | 전 구간 초과 | 전반 초과 | 후반 초과 | 전·후반 모두 개선? |')
+  log('|---|---|---|---|---|')
+  let winners = 0
+  for (const r of rows.slice(1)) {
+    const dA = r.a.total - base.a.total
+    const dB = r.b.total - base.b.total
+    const both = dA > 0 && dB > 0
+    if (both) winners++
+    log(`| ${r.label} | ${f1(r.full.total - base.full.total)}%p | ${f1(dA)}%p | ${f1(dB)}%p | ${both ? '✅' : '❌'} |`)
+  }
+  return winners
+}
+
+export function perYearTable(rows: StratRow[]) {
+  log('')
+  log('## 연도별 수익 분해 (거짓 매끈함 방지)')
+  log(`| 연도 | ${rows.map((r) => r.label).join(' | ')} |`)
+  log(`|---|${rows.map(() => '---').join('|')}|`)
+  const years = rows[0].perYear.map((p) => p.y)
+  for (const [i, y] of years.entries())
+    log(`| ${y} | ${rows.map((r) => `${f1(((r.perYear[i]?.ret ?? 1) - 1) * 100)}%`).join(' | ')} |`)
+}
+
+function multipleTestingNote(n: number, winners: number) {
+  log('')
+  log('## 다중검정 경고')
+  log(`같은 데이터에 변형 ${n}개를 돌려 기준선과 비교했다. 그중 ${winners}개가 전·후반 **모두**에서 기준선을 이겼다.`)
+  log(
+    `순수 우연이라도 한 변형이 두 구간 모두 이길 확률은 ≈25%이고, ${n}개 중 ${winners}개 이상이 그럴 확률은 ` +
+      `약 ${(binomTail(n, winners, 0.25) * 100).toFixed(0)}%다 — 이 값이 크면 "찾아낸 패턴"이 아니라 표본 잡음이다.`,
+  )
+  log('채택 기준은 ① 전·후반 모두 기준선 초과 ② 두 구간 모두 알파 양(+) ③ 매매수가 극단적으로 적지 않을 것')
+  log('(표본 소실)이다. 하나만 만족하는 변형을 골라 읽는 순간 곡선맞춤이다.')
+}
+
+/** 벤치 단순보유 곡선(총수익 보정 종가) — 알파 계산 기준. */
+export const benchCurve = (bench: DailyBar[]) => bench.map((b) => ({ date: b.date, equity: b.c }))
+
+function unverifiedNote() {
+  log('')
+  log('⚠️ [미검증-실데이터] 이 러너는 컨테이너에서 Yahoo가 403이라 합성 데이터 테스트로만 검증됐다.')
+  log('   위 수치는 GitHub Actions(backtest.yml)·EC2 실행 결과로 채워야 한다.')
+}
+
+// ============================================================================
+// MODE=xsmom — 횡단면 모멘텀 랭킹 (12-1) · 이동평균 없음
+// ============================================================================
+//
+// 학계 표준(Jegadeesh–Titman 계열): 매월 첫 거래일에 "12개월 전 ~ 1개월 전" 수익률로
+// 전 종목을 줄 세우고 상위 N만 동일가중 보유, 다음 달 첫 거래일에 리밸런스.
+// **최근 1개월을 통째로 버리는 것**이 핵심이다(단기 반전 효과 회피).
+//
+// 미래참조 차단: 랭킹은 `date < 전월 1일` 종가만 본다. 리밸런스일 D의 시가는 체결에만
+// 쓰고 판정에는 쓰지 않는다. 12개월치 데이터가 없는 종목은 후보에서 뺀다.
+
+/** 'YYYY-MM-DD'에서 k개월 이동한 달의 1일 — 'YYYY-MM-01' */
+export function shiftMonthStart(date: string, k: number): string {
+  const y = Number(date.slice(0, 4))
+  const m = Number(date.slice(5, 7))
+  const t = y * 12 + (m - 1) + k
+  const yy = Math.floor(t / 12)
+  const mm = t - yy * 12 + 1
+  return `${String(yy).padStart(4, '0')}-${String(mm).padStart(2, '0')}-01`
+}
+
+/** `date` **미만**(strictly before) 마지막 봉의 종가. 없으면 null. 이분 탐색. */
+export function lastCloseBefore(bars: DailyBar[], date: string): number | null {
+  let lo = 0
+  let hi = bars.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (bars[mid].date < date) lo = mid + 1
+    else hi = mid
+  }
+  return lo > 0 ? bars[lo - 1].c : null
+}
+
+/**
+ * 12-1 모멘텀. 리밸런스일 `date`(월 첫 거래일) 기준으로
+ *   시작 = 12개월 전 달 1일 직전 종가 · 끝 = 1개월 전 달 1일 직전 종가.
+ * 두 기준일 모두 `date`보다 과거라 미래참조가 원천적으로 불가능하고, 직전 한 달의
+ * 수익은 창에서 빠진다. 12개월치 데이터가 없으면(시작 종가 부재) null = 후보 제외.
+ */
+export function momentum12_1(bars: DailyBar[], date: string): number | null {
+  const pe = lastCloseBefore(bars, shiftMonthStart(date, -1))
+  const ps = lastCloseBefore(bars, shiftMonthStart(date, -12))
+  if (pe == null || ps == null || !(ps > 0)) return null
+  return pe / ps - 1
+}
+
+export interface MomRow {
+  sym: string
+  mom: number
+}
+
+/** 모멘텀 내림차순, 동점은 심볼 오름차순(결정적). */
+export function xsmomRank(histories: Record<string, DailyBar[]>, universe: string[], date: string): MomRow[] {
+  const rows: MomRow[] = []
+  for (const s of universe) {
+    const bars = histories[s]
+    if (!bars?.length) continue
+    const m = momentum12_1(bars, date)
+    if (m == null) continue
+    rows.push({ sym: s, mom: m })
+  }
+  rows.sort((x, y) => (y.mom !== x.mom ? y.mom - x.mom : x.sym < y.sym ? -1 : x.sym > y.sym ? 1 : 0))
+  return rows
+}
+
+export interface XsMomOpts {
+  /** 보유 종목 수 N */
+  slots: number
+  /** 절대 모멘텀 게이트 — 12-1 수익 < 0인 종목은 그 슬롯을 **현금**으로 둔다 */
+  gate: boolean
+}
+
+/**
+ * 한 해치 횡단면 모멘텀 시뮬. 월 첫 거래일 **시가**에 리밸런스한다.
+ * 슬롯 분모는 게이트와 무관하게 `min(N, 후보수)`로 고정한다 — 그래야 게이트 A/B가
+ * "같은 슬롯 중 몇 개를 현금으로 돌렸나"의 비교가 된다(분모를 같이 줄이면 게이트가
+ * 남은 종목에 레버리지를 거는 셈이라 비교가 오염된다).
+ */
+export function simulateXsMomYear(
+  histories: Record<string, DailyBar[]>,
+  startDate: string,
+  symbols: string[],
+  cost: CostSettings,
+  opts: XsMomOpts,
+): CustomYearRun {
+  const { universe, calendar, idxOf } = makeSimCtx(histories, symbols, startDate)
+  const book = newBook(cost.initialCapital)
+  const equity: { date: string; equity: number }[] = []
+  const fills: FillEvent[] = []
+  const closeAt = (date: string) => (s: string) => {
+    const bi = idxOf[s]?.get(date)
+    return bi != null ? histories[s][bi].c : null
+  }
+  let curYm = ''
+
+  for (let d = 0; d < calendar.length; d++) {
+    const date = calendar[d]
+    // 랭킹은 전월 1일 이전 종가까지만 보므로 판단 시점은 늦어도 직전 거래일이다
+    const signalDate = d > 0 ? calendar[d - 1] : date
+    const sell = (sym: string, px: number, qty: number) => {
+      const q = bookSell(book, cost, sym, px, qty)
+      if (q > 0) fills.push({ date, sym, side: 'sell', px, qty: q, signalDate })
+    }
+    const buy = (sym: string, px: number, budget: number) => {
+      const q = bookBuy(book, cost, sym, px, budget, d)
+      if (q > 0) fills.push({ date, sym, side: 'buy', px, qty: q, signalDate })
+    }
+    const ym = ymOf(date)
+    if (ym !== curYm) {
+      curYm = ym
+      // ---- 월 첫 거래일: 시가 리밸런스 ----------------------------------
+      const openPx = new Map<string, number | null>()
+      for (const s of universe) {
+        const bi = idxOf[s].get(date)
+        openPx.set(s, bi != null ? histories[s][bi].o : null)
+      }
+      let eq = book.cash
+      for (const [s, p] of book.positions) {
+        const px = openPx.get(s)
+        eq += p.qty * (px != null && px > 0 ? px : p.lastClose)
+      }
+      // 후보: 랭킹 산출 가능 + 오늘 실제로 거래되는 종목만(체결 불가 종목을 담지 않는다)
+      const ranked = xsmomRank(histories, universe, date).filter((r) => (openPx.get(r.sym) ?? 0) > 0)
+      const denom = Math.max(1, Math.min(opts.slots, ranked.length))
+      const picked = ranked.slice(0, denom)
+      const targets = opts.gate ? picked.filter((r) => r.mom >= 0) : picked
+      const targetSet = new Set(targets.map((r) => r.sym))
+      const slot = eq / denom
+
+      // 1) 목표 밖 전량 매도 (봉이 없으면 못 판다 — 다음 기회로 이월)
+      for (const s of [...book.positions.keys()]) {
+        if (targetSet.has(s)) continue
+        const px = openPx.get(s)
+        if (px == null || !(px > 0)) continue
+        sell(s, px, book.positions.get(s)!.qty)
+      }
+      // 2) 목표 초과분 트림
+      for (const r of targets) {
+        const p = book.positions.get(r.sym)
+        if (!p) continue
+        const px = openPx.get(r.sym)!
+        const want = Math.floor(slot / px)
+        if (p.qty > want) sell(r.sym, px, p.qty - want)
+      }
+      // 3) 부족분 매수
+      for (const r of targets) {
+        const px = openPx.get(r.sym)!
+        const held = book.positions.get(r.sym)?.qty ?? 0
+        const budget = Math.min(slot - held * px, book.cash)
+        if (budget <= 0) continue
+        buy(r.sym, px, budget)
+      }
+    }
+    equity.push({ date, equity: bookMark(book, closeAt(date)) })
+  }
+  return { equity, closed: book.closed, wins: book.wins, openAtEnd: book.positions.size, fills }
+}
+
+async function xsmom() {
+  log('# MODE=xsmom — 횡단면 모멘텀 랭킹 (12-1) · 이동평균 없음')
+  log('')
+  log('매월 첫 거래일에 "12개월 전~1개월 전" 수익률로 줄 세워 상위 N만 동일가중 보유하고,')
+  log('다음 달 첫 거래일 **시가**에 리밸런스한다. 최근 1개월은 단기 반전을 피하려고 통째로 뺀다.')
+  log('이동평균·신고가 같은 추세 지표를 전혀 쓰지 않는 접근이다.')
+  log('')
+  const { years, histories, bench } = await loadPitHistories()
+  const yearly = buildYearly(histories, years)
+  if (yearly.every((v) => v.syms.length < 5)) {
+    log('❌ 시세 로드 실패로 실행할 해가 없다 — 중단')
+    return
+  }
+  const benchEq = benchCurve(bench)
+  log(`연도별 매핑률: ${yearly.map((v) => `${v.y} ${v.mapped}`).join(' · ')}`)
+  log(`벤치 ${BENCH} 데이터 시작 ${bench[0]?.date ?? '—'} — 알파는 이 날짜 이후 겹치는 구간에서만 계산한다.`)
+
+  const rows: StratRow[] = []
+  rows.push(summarizeStrat(BASELINE_LABEL, runSpecChain(yearly, baselineSpec, COST), benchEq))
+  for (const slots of [5, 10]) {
+    for (const gate of [false, true]) {
+      const label = `XSM 상위 ${slots}${gate ? ' + 절대모멘텀 게이트' : ''}`
+      // 변형별 자산곡선은 이 블록 안에서만 살아 있다 — 요약 후 즉시 회수된다(메모리)
+      const chain = runCustomChain(
+        yearly,
+        (v) => simulateXsMomYear(v.hist, `${v.y}-01-01`, v.syms, COST, { slots, gate }),
+        COST,
+        slots,
+      )
+      rows.push(summarizeStrat(label, chain, benchEq))
+    }
+  }
+
+  log('')
+  log('## 성적 (기준선을 같은 유니버스·같은 비용으로 재실행한 값과 나란히)')
+  stratTable(rows)
+  baselineCrossCheck(yearly)
+  const winners = verdictTable(rows)
+  perYearTable(rows)
+  multipleTestingNote(rows.length - 1, winners)
+
+  log('')
+  log('## 이 실험의 구조적 한계')
+  log('· 유니버스가 연 20종목뿐이라 "상위 5/10"은 사실상 상위 25~50% 분위다 — 학계의 상위 10% 분위')
+  log('  모멘텀보다 신호가 훨씬 묽다. 알파가 안 나와도 "모멘텀이 죽었다"가 아니라 "이 유니버스에서는')
+  log('  분위가 안 갈린다"일 수 있다.')
+  log('· 연도별 유니버스 교체 구조라 매년 1월 초 전량 재편입 + 12월 말 정산 근사가 들어간다.')
+  log('· 12개월치 시세가 없는 종목은 그 시점 후보에서 빠진다(신규 편입 종목은 1년 뒤부터 랭킹 대상).')
+  unverifiedNote()
+  disclaimer()
+}
+
+// ============================================================================
+// MODE=volbrk — 변동성 돌파 (래리 윌리엄스 k)
+// ============================================================================
+//
+// 돌파가 = 당일 시가 + k×(전일 고가 − 전일 저가). 당일 고가가 돌파가에 닿으면 매수한다.
+//
+// ⚠️ 일봉 근사의 한계(출력에도 명시한다):
+//   · 일봉에는 **장중 경로**가 없다. 고가가 돌파가를 넘었다는 사실만 알 뿐, 그것이 언제
+//     찍혔는지·그 가격에 실제로 체결됐는지(호가 잔량)는 알 수 없다.
+//   · 청산 변형이 "당일 종가"인 경우, 돌파 체결 → 종가 청산의 순서만 가정할 뿐 그 사이
+//     저가를 관통했는지는 반영하지 못한다(손절 없음).
+//   · 랭킹은 **전일** 거래대금으로 한다 — 당일 거래대금은 장이 끝나야 확정되므로
+//     진입 시점에 쓰면 미래참조다.
+
+/**
+ * 돌파 체결가. 고가가 돌파가에 못 닿으면 체결 없음(null).
+ * **시가가 이미 돌파가 위면 시가**로 체결한다 — 갭으로 관통한 경우 유리한 쪽(돌파가)이
+ * 아니라 불리한 쪽을 잡는 것이 규칙 1-4다.
+ */
+export function breakoutFill(open: number, high: number, target: number): number | null {
+  if (!(high >= target)) return null
+  return Math.max(open, target)
+}
+
+export interface VolBrkOpts {
+  k: number
+  /** 'close' = 당일 종가 청산(데이트레이드형) · 'nextOpen' = 익일 시가 청산 */
+  exit: 'close' | 'nextOpen'
+  slots: number
+}
+
+export function simulateVolBrkYear(
+  histories: Record<string, DailyBar[]>,
+  startDate: string,
+  symbols: string[],
+  cost: CostSettings,
+  opts: VolBrkOpts,
+): CustomYearRun {
+  const { universe, calendar, idxOf } = makeSimCtx(histories, symbols, startDate)
+  const book = newBook(cost.initialCapital)
+  const equity: { date: string; equity: number }[] = []
+  const fills: FillEvent[] = []
+  const closeAt = (date: string) => (s: string) => {
+    const bi = idxOf[s]?.get(date)
+    return bi != null ? histories[s][bi].c : null
+  }
+
+  for (let d = 0; d < calendar.length; d++) {
+    const date = calendar[d]
+    const isLast = d === calendar.length - 1
+    const sell = (sym: string, px: number, qty: number, signalDate: string) => {
+      const q = bookSell(book, cost, sym, px, qty)
+      if (q > 0) fills.push({ date, sym, side: 'sell', px, qty: q, signalDate })
+    }
+
+    // ---- 1) 익일 시가 청산 변형 — 전일 진입분을 오늘 시가에 전량 청산 ----------
+    if (opts.exit === 'nextOpen') {
+      for (const [s, p] of [...book.positions]) {
+        if (p.entryIdx >= d) continue
+        const bi = idxOf[s].get(date)
+        if (bi == null) continue
+        sell(s, histories[s][bi].o, p.qty, calendar[Math.max(0, d - 1)])
+      }
+    }
+
+    // ---- 2) 돌파 진입 -------------------------------------------------------
+    // 마지막 봉에서는 신규 진입을 만들지 않는다(규칙 1-6 — 익일 청산이 불가능하고
+    // 엔진 기준선도 같은 날 신규 진입을 막으므로 비교 조건을 맞춘다).
+    if (!isLast && book.positions.size < opts.slots) {
+      const cands: { sym: string; fill: number; key: number }[] = []
+      for (const s of universe) {
+        if (book.positions.has(s)) continue
+        const bi = idxOf[s].get(date)
+        if (bi == null || bi < 1) continue
+        const bars = histories[s]
+        const b = bars[bi]
+        const prev = bars[bi - 1]
+        const range = prev.h - prev.l
+        if (!(range > 0)) continue // 레인지 0(상·하한가 잠김 등)은 돌파 정의가 성립하지 않는다
+        const fill = breakoutFill(b.o, b.h, b.o + opts.k * range)
+        if (fill == null) continue
+        cands.push({ sym: s, fill, key: prev.c * prev.v }) // 전일 거래대금 — 당일 값은 미래참조
+      }
+      cands.sort((x, y) => (y.key !== x.key ? y.key - x.key : x.sym < y.sym ? -1 : x.sym > y.sym ? 1 : 0))
+      for (const cd of cands) {
+        if (book.positions.size >= opts.slots) break
+        const slot = book.cash / Math.max(1, opts.slots - book.positions.size)
+        const q = bookBuy(book, cost, cd.sym, cd.fill, slot, d)
+        // 판단도 체결도 당일 장중이라 signalDate = date다(장중 스톱 주문 근사)
+        if (q > 0) fills.push({ date, sym: cd.sym, side: 'buy', px: cd.fill, qty: q, signalDate: date })
+      }
+    }
+
+    // ---- 3) 당일 종가 청산 변형 ---------------------------------------------
+    if (opts.exit === 'close') {
+      for (const [s, p] of [...book.positions]) {
+        const bi = idxOf[s].get(date)
+        if (bi == null) continue
+        sell(s, histories[s][bi].c, p.qty, date)
+      }
+    }
+
+    equity.push({ date, equity: bookMark(book, closeAt(date)) })
+  }
+  return { equity, closed: book.closed, wins: book.wins, openAtEnd: book.positions.size, fills }
+}
+
+async function volbrk() {
+  log('# MODE=volbrk — 변동성 돌파 (래리 윌리엄스 k)')
+  log('')
+  log('돌파가 = **당일 시가 + k×(전일 고가−전일 저가)**. 당일 고가가 돌파가에 닿으면 매수하고,')
+  log('당일 종가(데이트레이드형) 또는 익일 시가에 청산한다. 이동평균을 쓰지 않는다.')
+  log('')
+  const { years, histories, bench } = await loadPitHistories()
+  const yearly = buildYearly(histories, years)
+  if (yearly.every((v) => v.syms.length < 5)) {
+    log('❌ 시세 로드 실패로 실행할 해가 없다 — 중단')
+    return
+  }
+  const benchEq = benchCurve(bench)
+  log(`연도별 매핑률: ${yearly.map((v) => `${v.y} ${v.mapped}`).join(' · ')}`)
+  log(`슬롯 ${MAX_POSITIONS} · 후보 초과 시 **전일** 거래대금 순 · 벤치 ${BENCH} 시작 ${bench[0]?.date ?? '—'}`)
+
+  const rows: StratRow[] = []
+  rows.push(summarizeStrat(BASELINE_LABEL, runSpecChain(yearly, baselineSpec, COST), benchEq))
+  for (const k of [0.5, 0.7]) {
+    for (const exit of ['close', 'nextOpen'] as const) {
+      const label = `VB k=${k.toFixed(1)} · ${exit === 'close' ? '당일 종가 청산' : '익일 시가 청산'}`
+      const chain = runCustomChain(
+        yearly,
+        (v) => simulateVolBrkYear(v.hist, `${v.y}-01-01`, v.syms, COST, { k, exit, slots: MAX_POSITIONS }),
+        COST,
+        MAX_POSITIONS,
+      )
+      rows.push(summarizeStrat(label, chain, benchEq))
+    }
+  }
+
+  log('')
+  log('## 성적 (기준선을 같은 유니버스·같은 비용으로 재실행한 값과 나란히)')
+  stratTable(rows)
+  baselineCrossCheck(yearly)
+  const winners = verdictTable(rows)
+  perYearTable(rows)
+  multipleTestingNote(rows.length - 1, winners)
+
+  log('')
+  log('## ⚠️ 일봉 근사의 한계 — 이 수치를 실전 기대치로 읽지 말 것')
+  log('· **실제 체결 순서를 알 수 없다.** 일봉에는 장중 경로가 없어서 "고가가 돌파가에 닿았다"만 알고')
+  log('  언제 닿았는지·그 가격에 체결됐는지(호가 잔량·상한가 잠김)는 알 수 없다. 체결 가정이 낙관적이면')
+  log('  성적은 통째로 허수가 된다. 이 계열은 분봉으로 재검증하기 전에는 채택 후보로도 올리지 않는다.')
+  log('· 갭 관통 보수 처리: 시가가 이미 돌파가 위면 **시가(더 불리한 쪽)** 로 체결했다(규칙 1-4).')
+  log('  다만 돌파가를 당일 시가 기준으로 잡는 정의에서는 이 경우가 전일 레인지 0일 때뿐이라,')
+  log('  실제로는 전일 레인지 0을 후보에서 제외해 그 구간을 아예 만들지 않았다.')
+  log('· 당일 종가 청산 변형에는 **손절이 없다** — 진입가 아래로 흘러도 종가까지 들고 간다.')
+  log('  일봉으로는 장중 손절 체결가를 알 수 없어 넣지 않았다(넣으면 유리한 쪽 가정이 된다).')
+  log('· 회전율이 극단적으로 높아 비용이 성적을 지배한다 — 왕복 1회에 매수 슬리피지 0.1% + 매수 수수료 0.015%')
+  log('  + 매도 슬리피지 0.1% + 매도 수수료 0.015% + 거래세 0.15% = **약 0.38%**가 나간다. 매매수와 승률을')
+  log('  같이 보고, 승률이 높아도 총수익이 안 나오면 비용이 먹은 것이다.')
+  unverifiedNote()
+  disclaimer()
+}
+
+// ============================================================================
+// MODE=rsirev — 단기 평균회귀 (RSI2 · Wilder) + 200일선 추세 필터
+// ============================================================================
+//
+// RSI(2) < 10 이면서 종가가 200일선 위(장기 추세 안에 있는 눌림)일 때 D+1 시가 매수,
+// RSI(2) > 60 또는 5거래일 경과 시 D+1 시가 청산. 추세 지표를 필터로만 쓰고 진입 신호는
+// 평균회귀라 이평 돌파 계열과 성격이 반대다.
+
+const rsiFrom = (avgGain: number, avgLoss: number) =>
+  avgLoss === 0 ? (avgGain === 0 ? 50 : 100) : 100 - 100 / (1 + avgGain / avgLoss)
+
+/**
+ * Wilder RSI. 첫 `period`개 변화량의 단순평균으로 시드하고 이후 Wilder 평활
+ * (avg = (avg×(period−1) + 오늘값) / period)로 이어간다.
+ *
+ * 인덱스 i의 값은 `bars[0..i]`만으로 결정된다 — 재귀가 앞에서 뒤로만 흐르므로
+ * **뒤를 잘라내도 앞의 값이 바뀌지 않는다**(절단 불변). 엔진의 `rsi()`는 단순평균
+ * 방식이라 값이 다르다. 여기서는 지시대로 Wilder를 쓰므로 별도 함수로 둔다.
+ */
+export function wilderRsi(bars: DailyBar[], period: number): (number | null)[] {
+  const out: (number | null)[] = new Array(bars.length).fill(null)
+  if (period <= 0 || bars.length <= period) return out
+  let g = 0
+  let l = 0
+  for (let i = 1; i <= period; i++) {
+    const dv = bars[i].c - bars[i - 1].c
+    if (dv > 0) g += dv
+    else l -= dv
+  }
+  let ag = g / period
+  let al = l / period
+  out[period] = rsiFrom(ag, al)
+  for (let i = period + 1; i < bars.length; i++) {
+    const dv = bars[i].c - bars[i - 1].c
+    ag = (ag * (period - 1) + Math.max(0, dv)) / period
+    al = (al * (period - 1) + Math.max(0, -dv)) / period
+    out[i] = rsiFrom(ag, al)
+  }
+  return out
+}
+
+export interface RsiRevOpts {
+  slots: number
+  period: number
+  /** 진입 임계 — RSI(2)가 이 값 **미만** */
+  lowThr: number
+  /** 청산 임계 — RSI(2)가 이 값 **초과** */
+  highThr: number
+  /** 최대 보유 거래일 — 진입 체결일로부터 이만큼 지나면 강제 청산 신호 */
+  maxHold: number
+  /** 추세 필터 이동평균 기간. 0이면 필터 없음(A/B용). */
+  trendMa: number
+}
+
+export const RSIREV_DEFAULT: RsiRevOpts = {
+  slots: MAX_POSITIONS,
+  period: 2,
+  lowThr: 10,
+  highThr: 60,
+  maxHold: 5,
+  trendMa: 200,
+}
+
+/**
+ * 신호는 **당일 종가**, 체결은 **다음 거래일 시가**(규칙 1-2 규칙형). 마지막 봉에서는
+ * 신규 신호를 만들지 않는다(규칙 1-6). 슬롯 초과 시 RSI가 낮은(더 과매도) 순으로 채운다.
+ */
+export function simulateRsiRevYear(
+  histories: Record<string, DailyBar[]>,
+  startDate: string,
+  symbols: string[],
+  cost: CostSettings,
+  opts: RsiRevOpts,
+): CustomYearRun {
+  const { universe, calendar, idxOf } = makeSimCtx(histories, symbols, startDate)
+  const rsiOf: Record<string, (number | null)[]> = {}
+  for (const s of universe) rsiOf[s] = wilderRsi(histories[s], opts.period)
+  const book = newBook(cost.initialCapital)
+  const equity: { date: string; equity: number }[] = []
+  const fills: FillEvent[] = []
+  const closeAt = (date: string) => (s: string) => {
+    const bi = idxOf[s]?.get(date)
+    return bi != null ? histories[s][bi].c : null
+  }
+  let pendingBuys: { sym: string; key: number }[] = []
+  let pendingSells: string[] = []
+  /** 대기 주문을 만든 신호일(그날 **종가**로 판정했다) */
+  let signalDate = ''
+
+  for (let d = 0; d < calendar.length; d++) {
+    const date = calendar[d]
+    const isLast = d === calendar.length - 1
+
+    // ---- 1) 어제 종가 신호 → 오늘 시가 청산 (먼저 슬롯을 비운다) --------------
+    for (const s of pendingSells) {
+      const p = book.positions.get(s)
+      if (!p) continue
+      const bi = idxOf[s].get(date)
+      if (bi == null) continue // 봉이 없으면 못 판다 — 다음 봉에서 다시 신호가 잡힌다
+      const px = histories[s][bi].o
+      const q = bookSell(book, cost, s, px, p.qty)
+      if (q > 0) fills.push({ date, sym: s, side: 'sell', px, qty: q, signalDate })
+    }
+    pendingSells = []
+
+    // ---- 2) 어제 종가 신호 → 오늘 시가 매수 ---------------------------------
+    for (const cand of pendingBuys) {
+      if (book.positions.size >= opts.slots) break
+      if (book.positions.has(cand.sym)) continue
+      const bi = idxOf[cand.sym].get(date)
+      if (bi == null) continue
+      const slot = book.cash / Math.max(1, opts.slots - book.positions.size)
+      const px = histories[cand.sym][bi].o
+      const q = bookBuy(book, cost, cand.sym, px, slot, d)
+      if (q > 0) fills.push({ date, sym: cand.sym, side: 'buy', px, qty: q, signalDate })
+    }
+    pendingBuys = []
+
+    // ---- 3) 종가 마킹 --------------------------------------------------------
+    equity.push({ date, equity: bookMark(book, closeAt(date)) })
+
+    // ---- 4) 오늘 종가로 내일 신호 (마지막 봉이면 만들지 않는다) ---------------
+    if (isLast) continue
+    for (const [s, p] of book.positions) {
+      const bi = idxOf[s].get(date)
+      if (bi == null) continue
+      const r = rsiOf[s][bi]
+      if ((r != null && r > opts.highThr) || d - p.entryIdx >= opts.maxHold) pendingSells.push(s)
+    }
+    const cands: { sym: string; key: number }[] = []
+    for (const s of universe) {
+      if (book.positions.has(s)) continue
+      const bi = idxOf[s].get(date)
+      if (bi == null) continue
+      const r = rsiOf[s][bi]
+      if (r == null || !(r < opts.lowThr)) continue
+      if (opts.trendMa > 0) {
+        const ma = sma(histories[s], bi, opts.trendMa)
+        if (ma == null || !(histories[s][bi].c > ma)) continue
+      }
+      cands.push({ sym: s, key: r })
+    }
+    cands.sort((x, y) => (x.key !== y.key ? x.key - y.key : x.sym < y.sym ? -1 : x.sym > y.sym ? 1 : 0))
+    pendingBuys = cands
+    signalDate = date
+  }
+  return { equity, closed: book.closed, wins: book.wins, openAtEnd: book.positions.size, fills }
+}
+
+async function rsirev() {
+  log('# MODE=rsirev — 단기 평균회귀 (RSI2 · Wilder)')
+  log('')
+  log('RSI(2) < 10 **그리고** 종가가 200일선 위일 때 다음 거래일 **시가** 매수 →')
+  log('RSI(2) > 60 또는 5거래일 경과 시 다음 거래일 **시가** 청산. 추세 돌파와 부호가 반대인 접근이다.')
+  log('')
+  const { years, histories, bench } = await loadPitHistories()
+  const yearly = buildYearly(histories, years)
+  if (yearly.every((v) => v.syms.length < 5)) {
+    log('❌ 시세 로드 실패로 실행할 해가 없다 — 중단')
+    return
+  }
+  const benchEq = benchCurve(bench)
+  log(`연도별 매핑률: ${yearly.map((v) => `${v.y} ${v.mapped}`).join(' · ')}`)
+  log(`슬롯 ${MAX_POSITIONS} · 후보 초과 시 RSI 낮은 순 · 벤치 ${BENCH} 시작 ${bench[0]?.date ?? '—'}`)
+
+  const variants: { label: string; opts: RsiRevOpts }[] = [
+    { label: 'RSI2<10 · 200일선 위 (본안)', opts: RSIREV_DEFAULT },
+    { label: 'RSI2<5 · 200일선 위 (민감도)', opts: { ...RSIREV_DEFAULT, lowThr: 5 } },
+    { label: 'RSI2<15 · 200일선 위 (민감도)', opts: { ...RSIREV_DEFAULT, lowThr: 15 } },
+    { label: 'RSI2<10 · 추세필터 없음 (A/B)', opts: { ...RSIREV_DEFAULT, trendMa: 0 } },
+  ]
+
+  const rows: StratRow[] = []
+  rows.push(summarizeStrat(BASELINE_LABEL, runSpecChain(yearly, baselineSpec, COST), benchEq))
+  for (const v of variants) {
+    const chain = runCustomChain(
+      yearly,
+      (ys) => simulateRsiRevYear(ys.hist, `${ys.y}-01-01`, ys.syms, COST, v.opts),
+      COST,
+      v.opts.slots,
+    )
+    rows.push(summarizeStrat(v.label, chain, benchEq))
+  }
+
+  log('')
+  log('## 성적 (기준선을 같은 유니버스·같은 비용으로 재실행한 값과 나란히)')
+  stratTable(rows)
+  baselineCrossCheck(yearly)
+  const winners = verdictTable(rows)
+  perYearTable(rows)
+  multipleTestingNote(rows.length - 1, winners)
+
+  log('')
+  log('## 이 실험의 구조적 한계')
+  log('· RSI(2)는 Wilder 평활이며 **당일 종가까지만** 쓴다. 신호(D 종가)와 체결(D+1 시가)이 분리돼 있어')
+  log('  갭 오픈이 성적을 크게 흔든다 — 과매도 다음날 갭하락으로 시작하면 그 손실을 그대로 먹는다.')
+  log('· 평균회귀는 승률이 높고 손실이 꼬리에 몰리는 구조다. **승률이 높다고 좋은 전략이 아니다** —')
+  log('  MDD·수익÷MDD를 같은 무게로 본다. 2008·2020 같은 급락 구간에서 "싸 보이는" 종목을 계속')
+  log('  받아내다 크게 다치는 경로가 이 계열의 전형적 실패 방식이다.')
+  log('· 임계값 3종(5/10/15)과 추세필터 A/B를 함께 돌렸다 — 그중 최고를 골라 읽으면 곡선맞춤이다.')
+  log('· 5거래일 강제 청산은 진입 **체결일**로부터 센다(신호일이 아니다).')
+  unverifiedNote()
+  disclaimer()
+}
+
+// ============================================================================
+
+const MODES: Record<string, () => Promise<void>> = {
+  seasonal,
+  monthpat,
+  pairprem,
+  flow,
+  xsmom,
+  volbrk,
+  rsirev,
+}
 
 // 런처(scripts/idea-lab.mjs)만 IDEA_LAB_RUN=1을 넘긴다. 테스트가 이 모듈을
 // import할 때는 자동 실행되지 않는다.

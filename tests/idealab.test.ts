@@ -15,10 +15,33 @@
 //
 // 실데이터(Yahoo)는 컨테이너에서 403이라 전부 합성 시계열로 검증한다.
 
-import { check, eq, section, finish, rng } from './harness'
+import { check, close as closeTo, eq, section, finish, rng } from './harness'
 import {
   PIT1010,
   MONTH_GATE,
+  BASE25,
+  RSIREV_DEFAULT,
+  alphaOf,
+  baselineSpec,
+  benchCurve,
+  perYearTable,
+  stratTable,
+  summarizeStrat,
+  verdictTable,
+  bookBuy,
+  bookSell,
+  breakoutFill,
+  lastCloseBefore,
+  momentum12_1,
+  newBook,
+  runCustomChain,
+  runSpecChain,
+  shiftMonthStart,
+  simulateRsiRevYear,
+  simulateVolBrkYear,
+  simulateXsMomYear,
+  wilderRsi,
+  xsmomRank,
   FLOW_BASE,
   FLOW_F2,
   FLOW_F3,
@@ -52,6 +75,7 @@ import {
   type PairBar,
 } from '../scripts/idea-lab.entry'
 import { runStrategySpec, type CostSettings } from '../src/features/backtest/conditionScreen'
+import { sma } from '../src/features/backtest/strategySpec'
 import type { DailyBar } from '../src/features/backtest/types'
 
 const COST: CostSettings = { initialCapital: 10_000_000, feePct: 0.015, taxPct: 0.15, slippagePct: 0.1 }
@@ -704,6 +728,493 @@ section('8) flow — 수급 조건 (T−1 원칙 · 연속판정 · 랭킹 · �
       const r = simulateFlowYear(hist, RANGE_A, syms, COST, v, lens)
       check(`${v.key}: 필터는 매매를 늘리지 않는다`, r.trades <= b.trades, `${r.trades} vs base ${b.trades}`)
     }
+  }
+}
+
+// ============================================================================
+// 비(非)이평 전략군 (MODE=xsmom · volbrk · rsirev)
+// ============================================================================
+//
+// 여기서 막는 것:
+//   · 공용 원장(Book)의 체결·비용·승패 산술 — 세 전략이 전부 이 위에 서 있다
+//   · xsmom  : 12-1 모멘텀이 **전월 1일 이전** 종가만 본다 / 절대모멘텀 게이트가 현금으로
+//              돌린다 / 절단 불변 / 체결은 월 첫 거래일 시가
+//   · volbrk : 체결 보수성 — 시가가 이미 돌파가 위면 **시가**(불리한 쪽)로 체결 / 돌파가는
+//              **전일** 레인지로 만든다 / 절단 불변
+//   · rsirev : Wilder RSI 산술(손 계산 대조) / 재귀가 앞으로만 흘러 절단 불변 /
+//              신호 D 종가 → 체결 D+1 시가 / 보유일수 상한
+//   · 기준선(MA25×신고10→80선)이 같은 연쇄 위에서 재실행된다
+
+/** 단조 추세 봉 — 게이트가 실제로 무언가를 막는지 보려면 부호가 확실한 데이터가 필요하다 */
+function makeDriftBars(n: number, base: number, drift: number, seed: number): DailyBar[] {
+  const rnd = rng(seed)
+  const out: DailyBar[] = []
+  let p = base
+  for (let i = 0; i < n; i++) {
+    const o = p
+    const c = Math.max(1, p * (1 + drift))
+    out.push({
+      date: new Date(Date.UTC(1999, 0, 1) + i * 86400000).toISOString().slice(0, 10),
+      t: 0,
+      o,
+      h: Math.max(o, c) * 1.001,
+      l: Math.min(o, c) * 0.999,
+      c,
+      v: 1_000_000 + Math.floor(rnd() * 10),
+    })
+    p = c
+  }
+  return out
+}
+
+// ============================================================================
+section('9) 공용 원장(Book) — 체결 산술 · 승패 집계')
+// ============================================================================
+{
+  const b = newBook(10_000_000)
+  const fill = 10_000 * (1 + COST.slippagePct / 100)
+  const expQty = Math.floor(10_000_000 / (fill * (1 + COST.feePct / 100)))
+  eq('매수 수량 = 예산 ÷ (슬리피지·수수료 반영 체결가)', bookBuy(b, COST, 'A', 10_000, 10_000_000, 0), expQty)
+  const gross = expQty * fill
+  closeTo('매수 후 현금', b.cash, 10_000_000 - gross - gross * (COST.feePct / 100), 1e-6)
+  eq('보유 종목 1개', b.positions.size, 1)
+
+  bookSell(b, COST, 'A', 10_000, expQty)
+  eq('전량 청산 → 라운드트립 1건', b.closed, 1)
+  eq('같은 값에 되팔면 비용 때문에 패', b.wins, 0)
+  eq('청산 후 보유 없음', b.positions.size, 0)
+  check('비용만큼만 자본이 줄었다', b.cash < 10_000_000 && b.cash > 9_900_000, `${b.cash}`)
+
+  // 부분매도는 라운드트립으로 세지 않는다 — 승률 분모가 부풀지 않게
+  const b2 = newBook(10_000_000)
+  const q2 = bookBuy(b2, COST, 'B', 1_000, 10_000_000, 0)
+  bookSell(b2, COST, 'B', 3_000, Math.floor(q2 / 2))
+  eq('부분매도는 라운드트립이 아니다', b2.closed, 0)
+  bookSell(b2, COST, 'B', 3_000, q2)
+  eq('전량이 나가면 1건', b2.closed, 1)
+  eq('3배에 팔았으면 승', b2.wins, 1)
+  check('현금이 늘었다', b2.cash > 10_000_000, `${b2.cash}`)
+
+  const b3 = newBook(1_000)
+  eq('현금보다 비싼 종목은 못 산다', bookBuy(b3, COST, 'C', 10_000, 10_000_000, 0), 0)
+  eq('실패한 매수는 포지션을 만들지 않는다', b3.positions.size, 0)
+}
+
+// ============================================================================
+section('10) xsmom — 12-1 모멘텀 산술 · 절대모멘텀 게이트 · 절단 불변성')
+// ============================================================================
+{
+  // ---- (a) 달 이동 산술 ------------------------------------------------------
+  eq('1개월 전 달의 1일', shiftMonthStart('2001-03-05', -1), '2001-02-01')
+  eq('12개월 전 달의 1일', shiftMonthStart('2001-03-05', -12), '2000-03-01')
+  eq('연 경계(-1)', shiftMonthStart('2001-01-10', -1), '2000-12-01')
+  eq('연 경계(-12)', shiftMonthStart('2001-01-10', -12), '2000-01-01')
+  eq('연 경계(-13)', shiftMonthStart('2000-01-05', -13), '1998-12-01')
+
+  // ---- (b) lastCloseBefore — 경계 **미포함**(strictly before) ----------------
+  const bars = HISTORIES[CODES[0]]
+  const at = (d: string) => bars.filter((x) => x.date < d).slice(-1)[0]
+  eq('경계 직전 봉의 종가', lastCloseBefore(bars, '2001-02-01'), at('2001-02-01').c)
+  eq('데이터 이전 시점은 null', lastCloseBefore(bars, '1998-01-01'), null)
+
+  // ---- (c) 12-1 모멘텀 = (전월 1일 직전) ÷ (12개월 전 1일 직전) − 1 -----------
+  const D = '2001-03-05'
+  const pe = at(shiftMonthStart(D, -1)).c
+  const ps = at(shiftMonthStart(D, -12)).c
+  closeTo('12-1 모멘텀 산술', momentum12_1(bars, D)!, pe / ps - 1, 1e-12)
+
+  // 최근 1개월(그리고 리밸런스일 당일)을 실제로 안 본다 — 그 구간을 3배로 조작해도 불변
+  const tampered = bars.map((x) => (x.date >= shiftMonthStart(D, -1) ? { ...x, c: x.c * 3, o: x.o * 3 } : x))
+  closeTo('전월 1일 이후 값을 조작해도 모멘텀 불변(미래 미포함)', momentum12_1(tampered, D)!, momentum12_1(bars, D)!, 1e-12)
+
+  // ---- (d) 12개월치가 없으면 후보 제외 --------------------------------------
+  eq('12개월 미만 종목은 null', momentum12_1(bars.filter((x) => x.date >= '2000-06-01'), D), null)
+
+  // ---- (e) 랭킹 -------------------------------------------------------------
+  const ranked = xsmomRank(HISTORIES, PIT1010[2002].ks, D)
+  check('랭킹이 비어 있지 않다', ranked.length > 5, `${ranked.length}`)
+  check('모멘텀 내림차순', ranked.every((r, i) => i === 0 || ranked[i - 1].mom >= r.mom))
+  check('랭킹 값이 momentum12_1과 일치', ranked.every((r) => Object.is(r.mom, momentum12_1(HISTORIES[r.sym], D))))
+}
+
+{
+  // ---- (f) 절대 모멘텀 게이트 — 전 종목 하락이면 전량 현금 -------------------
+  const syms = ['AAA', 'BBB', 'CCC', 'DDD', 'EEE', 'FFF']
+  const down: Record<string, DailyBar[]> = {}
+  syms.forEach((s, i) => (down[s] = makeDriftBars(1200, 10_000 + i * 100, -0.001, 5000 + i)))
+  const gated = simulateXsMomYear(down, '2001-01-01', syms, COST, { slots: 5, gate: true })
+  const open = simulateXsMomYear(down, '2001-01-01', syms, COST, { slots: 5, gate: false })
+  check(
+    '게이트 ON: 12-1 수익 전부 음(-) → 매수 0 · 자본 불변(현금)',
+    gated.fills.length === 0 && gated.equity.every((e) => Object.is(e.equity, COST.initialCapital)),
+    `fills=${gated.fills.length}`,
+  )
+  check('게이트 OFF: 같은 데이터에서 매수가 일어난다', open.fills.some((f) => f.side === 'buy'), `fills=${open.fills.length}`)
+  check(
+    '게이트 OFF는 하락장에서 손실 — 게이트가 실제로 무언가를 막고 있다',
+    open.equity[open.equity.length - 1].equity < COST.initialCapital,
+    `${open.equity[open.equity.length - 1].equity}`,
+  )
+}
+
+{
+  // ---- (g) 절단 불변성 + 체결 시점·기준가 ------------------------------------
+  const syms = PIT1010[2003].ks
+  const CUT = '2004-07-20'
+  const opts = { slots: 5, gate: false }
+  const full = simulateXsMomYear(HISTORIES, '2001-01-01', syms, COST, opts)
+  const cut = simulateXsMomYear(truncate(HISTORIES, CUT), '2001-01-01', syms, COST, opts)
+  const fe = full.equity.filter((e) => e.date <= CUT)
+  const ce = cut.equity.filter((e) => e.date <= CUT)
+  check(
+    `절단 전 자산곡선 동일 (${fe.length}점)`,
+    fe.length > 900 && fe.length === ce.length && fe.every((e, i) => e.date === ce[i].date && Object.is(e.equity, ce[i].equity)),
+    `full=${fe.length} cut=${ce.length}`,
+  )
+  const ff = full.fills.filter((f) => f.date <= CUT)
+  const cf = cut.fills.filter((f) => f.date <= CUT)
+  check(
+    `절단 전 체결 이력 동일 (${ff.length}건)`,
+    ff.length > 10 &&
+      ff.length === cf.length &&
+      ff.every((f, i) => f.date === cf[i].date && f.sym === cf[i].sym && f.side === cf[i].side && Object.is(f.px, cf[i].px) && f.qty === cf[i].qty),
+    `full=${ff.length} cut=${cf.length}`,
+  )
+  check('절단 후 구간은 달라진다(테스트가 실제로 무언가를 재고 있다)', full.equity.length > cut.equity.length)
+
+  const monthFirst = new Set<string>()
+  let curYm = ''
+  for (const e of full.equity) {
+    const ym = e.date.slice(0, 7)
+    if (ym !== curYm) {
+      curYm = ym
+      monthFirst.add(e.date)
+    }
+  }
+  check('모든 체결이 월 첫 거래일에 일어난다', full.fills.every((f) => monthFirst.has(f.date)), `fills=${full.fills.length}`)
+  const barAt = (sym: string, date: string) => HISTORIES[sym].find((x) => x.date === date)
+  check('체결 기준가 = 그 날 시가', full.fills.every((f) => Object.is(f.px, barAt(f.sym, f.date)?.o)))
+}
+
+// ============================================================================
+section('11) volbrk — 돌파 체결 보수성 · 전일 레인지 · 절단 불변성')
+// ============================================================================
+{
+  // ---- (a) breakoutFill 순수 함수 (규칙 1-4 집행 지점) -----------------------
+  eq('고가가 돌파가에 못 닿으면 체결 없음', breakoutFill(100, 102, 103), null)
+  eq('고가가 돌파가에 닿으면 돌파가 체결', breakoutFill(100, 105, 103), 103)
+  eq('고가 = 돌파가 경계도 체결', breakoutFill(100, 103, 103), 103)
+  eq('시가가 이미 돌파가 위면 **시가** 체결(더 불리한 쪽)', breakoutFill(110, 115, 103), 110)
+  check('유리한 쪽(돌파가)으로 가정하지 않는다', (breakoutFill(110, 115, 103) ?? 0) > 103)
+
+  // ---- (b) 돌파가는 **전일** 레인지로 만든다 — 손으로 만든 봉 ----------------
+  const mk = (i: number, o: number, h: number, l: number, cl: number): DailyBar => ({
+    date: new Date(Date.UTC(2001, 0, 1) + i * 86400000).toISOString().slice(0, 10),
+    t: 0,
+    o,
+    h,
+    l,
+    c: cl,
+    v: 1_000_000,
+  })
+  // 0일차 레인지 = 110−90 = 20 → 1일차 돌파가 = 시가100 + k×20 (k=0.5→110, k=0.7→114)
+  // 2~4일차는 레인지 0이라 후보에서 빠지고, 마지막 봉은 신규 진입 금지다.
+  const hand: Record<string, DailyBar[]> = {
+    A: [mk(0, 100, 110, 90, 100), mk(1, 100, 110, 95, 105), mk(2, 100, 100, 100, 100), mk(3, 100, 100, 100, 100), mk(4, 100, 100, 100, 100)],
+  }
+  const hit = simulateVolBrkYear(hand, '2001-01-01', ['A'], COST, { k: 0.5, exit: 'close', slots: 1 })
+  const miss = simulateVolBrkYear(hand, '2001-01-01', ['A'], COST, { k: 0.7, exit: 'close', slots: 1 })
+  eq('k=0.5 → 돌파가 110 = 고가 110 → 체결 1회', hit.closed, 1)
+  eq('k=0.7 → 돌파가 114 > 고가 110 → 체결 없음', miss.closed, 0)
+  eq('매수 기준가 = 돌파가 110 (시가도 고가도 아니다)', hit.fills.find((f) => f.side === 'buy')?.px, 110)
+  eq('청산 기준가 = 당일 종가 105', hit.fills.find((f) => f.side === 'sell')?.px, 105)
+  check('당일 종가 청산이면 진입·청산이 같은 날', hit.fills.length === 2 && hit.fills[0].date === hit.fills[1].date)
+  eq('레인지 0인 날은 후보에서 빠진다 — 전 구간 매수 1회뿐', hit.fills.filter((f) => f.side === 'buy').length, 1)
+
+  // 손익을 독립 산술로 재계산 — 체결가·비용 모델이 맞는지
+  const fb = 110 * (1 + COST.slippagePct / 100)
+  const q = Math.floor(COST.initialCapital / (fb * (1 + COST.feePct / 100)))
+  const gB = q * fb
+  const afterBuy = COST.initialCapital - gB - gB * (COST.feePct / 100)
+  const fsPx = 105 * (1 - COST.slippagePct / 100)
+  const gS = q * fsPx
+  const afterSell = afterBuy + gS - gS * ((COST.feePct + COST.taxPct) / 100)
+  closeTo('라운드트립 후 자본이 독립 산술과 일치', hit.equity.find((e) => e.date === hand.A[1].date)!.equity, afterSell, 1e-6)
+  eq('당일 종가 청산이면 미청산 없음', hit.openAtEnd, 0)
+}
+
+{
+  // ---- (c) 절단 불변성 + 체결가 정의 일치 ------------------------------------
+  const syms = PIT1010[2004].ks
+  const CUT = '2004-07-20'
+  const K = 0.5
+  const idxMap: Record<string, Map<string, number>> = {}
+  for (const s of syms) idxMap[s] = new Map(HISTORIES[s].map((b, i) => [b.date, i]))
+
+  for (const exit of ['close', 'nextOpen'] as const) {
+    const opts = { k: K, exit, slots: 5 }
+    const full = simulateVolBrkYear(HISTORIES, '2001-01-01', syms, COST, opts)
+    const cut = simulateVolBrkYear(truncate(HISTORIES, CUT), '2001-01-01', syms, COST, opts)
+    // 절단본의 마지막 봉(CUT)에는 "마지막 봉 신규 진입 금지"가 걸리므로 한 칸 앞까지 본다
+    const fe = full.equity.filter((e) => e.date < CUT)
+    const ce = cut.equity.filter((e) => e.date < CUT)
+    check(
+      `[${exit}] 절단 전 자산곡선 동일 (${fe.length}점)`,
+      fe.length > 900 && fe.length === ce.length && fe.every((e, i) => e.date === ce[i].date && Object.is(e.equity, ce[i].equity)),
+      `full=${fe.length} cut=${ce.length}`,
+    )
+    const ff = full.fills.filter((f) => f.date < CUT)
+    const cf = cut.fills.filter((f) => f.date < CUT)
+    check(
+      `[${exit}] 절단 전 체결 이력 동일 (${ff.length}건)`,
+      ff.length > 10 &&
+        ff.length === cf.length &&
+        ff.every((f, i) => f.date === cf[i].date && f.sym === cf[i].sym && f.side === cf[i].side && Object.is(f.px, cf[i].px)),
+      `full=${ff.length} cut=${cf.length}`,
+    )
+    const buys = full.fills.filter((f) => f.side === 'buy')
+    check(`[${exit}] 매수 체결이 발생한다`, buys.length > 10, `${buys.length}`)
+    check(
+      `[${exit}] 모든 매수 체결가 = max(당일 시가, 당일 시가 + k×전일 레인지)`,
+      buys.every((f) => {
+        const bars = HISTORIES[f.sym]
+        const i = idxMap[f.sym].get(f.date)
+        if (i == null || i < 1) return false
+        const target = bars[i].o + K * (bars[i - 1].h - bars[i - 1].l)
+        return Object.is(f.px, Math.max(bars[i].o, target)) && bars[i].h >= target
+      }),
+    )
+  }
+
+  // 익일 시가 청산 변형: 매도는 매수 **다음** 거래일 시가여야 한다
+  const nxt = simulateVolBrkYear(HISTORIES, '2001-01-01', syms, COST, { k: K, exit: 'nextOpen', slots: 5 })
+  const posOf = new Map(nxt.equity.map((e, i) => [e.date, i]))
+  const lastBuyIdx = new Map<string, number>()
+  let okNext = true
+  let sells = 0
+  for (const f of nxt.fills) {
+    if (f.side === 'buy') lastBuyIdx.set(f.sym, posOf.get(f.date)!)
+    else {
+      sells++
+      const bi = lastBuyIdx.get(f.sym)
+      const si = posOf.get(f.date)!
+      if (bi == null || si !== bi + 1) okNext = false
+      if (!Object.is(f.px, HISTORIES[f.sym][idxMap[f.sym].get(f.date)!].o)) okNext = false
+      lastBuyIdx.delete(f.sym)
+    }
+  }
+  check(`[nextOpen] 청산 = 매수 다음 거래일 시가 (${sells}건 전수)`, sells > 10 && okNext, `sells=${sells}`)
+}
+
+// ============================================================================
+section('12) rsirev — Wilder RSI 산술 · 재귀 절단 불변 · 신호 D종가 → 체결 D+1 시가')
+// ============================================================================
+{
+  // ---- (a) 손 계산 대조 ------------------------------------------------------
+  const mkc = (cs: number[]): DailyBar[] =>
+    cs.map((cl, i) => ({
+      date: new Date(Date.UTC(2001, 0, 1) + i * 86400000).toISOString().slice(0, 10),
+      t: 0,
+      o: cl,
+      h: cl,
+      l: cl,
+      c: cl,
+      v: 1_000,
+    }))
+  const r = wilderRsi(mkc([10, 11, 10.5, 11.5]), 2)
+  eq('워밍업 이전은 null (i=0)', r[0], null)
+  eq('워밍업 이전은 null (i=1)', r[1], null)
+  // 시드: avgGain=(1+0)/2=0.5, avgLoss=(0+0.5)/2=0.25 → RS=2 → 100−100/3
+  closeTo('시드 RSI(첫 period개 단순평균)', r[2]!, 100 - 100 / 3, 1e-9)
+  // Wilder 평활: ag=(0.5×1+1)/2=0.75, al=(0.25×1+0)/2=0.125 → RS=6 → 100−100/7
+  closeTo('Wilder 평활 1스텝', r[3]!, 100 - 100 / 7, 1e-9)
+  eq('전 구간 상승 → RSI 100', wilderRsi(mkc([10, 11, 12, 13, 14]), 2)[4], 100)
+  eq('무변동 → RSI 50', wilderRsi(mkc([10, 10, 10, 10]), 2)[3], 50)
+
+  // ---- (b) 재귀는 앞으로만 흐른다 — 뒤를 잘라도 앞의 값이 그대로 --------------
+  const bars = HISTORIES[CODES[1]]
+  const K = 1500
+  const fullR = wilderRsi(bars, 2)
+  const cutR = wilderRsi(bars.slice(0, K), 2)
+  check('RSI 절단 불변 (앞 구간 완전 동일)', cutR.length === K && cutR.every((v, i) => Object.is(v, fullR[i])))
+  check('RSI가 실제로 값을 만든다', fullR.filter((v) => v != null).length > K, `${fullR.filter((v) => v != null).length}`)
+}
+
+{
+  // ---- (c) 시뮬 — 체결 시점·조건 되돌아보기·보유일수·절단 불변 ---------------
+  const syms = PIT1010[2005].ks
+  const opts = { ...RSIREV_DEFAULT, slots: 5 }
+  const CUT = '2004-07-20'
+  const full = simulateRsiRevYear(HISTORIES, '2001-01-01', syms, COST, opts)
+  const cut = simulateRsiRevYear(truncate(HISTORIES, CUT), '2001-01-01', syms, COST, opts)
+
+  const posOf = new Map(full.equity.map((e, i) => [e.date, i]))
+  const idxMap: Record<string, Map<string, number>> = {}
+  const rsiMap: Record<string, (number | null)[]> = {}
+  for (const s of syms) {
+    idxMap[s] = new Map(HISTORIES[s].map((b, i) => [b.date, i]))
+    rsiMap[s] = wilderRsi(HISTORIES[s], opts.period)
+  }
+  const buys = full.fills.filter((f) => f.side === 'buy')
+  check('매수 체결이 발생한다', buys.length > 5, `${buys.length}`)
+  check('체결일 = 신호일 다음 거래일', buys.every((f) => posOf.get(f.date)! === posOf.get(f.signalDate)! + 1))
+  check('체결 기준가 = 그 날 시가', buys.every((f) => Object.is(f.px, HISTORIES[f.sym][idxMap[f.sym].get(f.date)!].o)))
+  check(
+    `모든 진입이 RSI2<${opts.lowThr} · 종가>MA${opts.trendMa} 신호에서 나왔다 (${buys.length}건 전수)`,
+    buys.every((f) => {
+      const bars = HISTORIES[f.sym]
+      const i = idxMap[f.sym].get(f.signalDate)
+      if (i == null) return false
+      const rv = rsiMap[f.sym][i]
+      const ma = sma(bars, i, opts.trendMa)
+      return rv != null && rv < opts.lowThr && ma != null && bars[i].c > ma
+    }),
+  )
+
+  const sellFills = full.fills.filter((f) => f.side === 'sell')
+  check('청산도 신호 다음 거래일 시가', sellFills.every((f) => posOf.get(f.date)! === posOf.get(f.signalDate)! + 1))
+  const lastBuy = new Map<string, number>()
+  let maxHold = 0
+  let okHold = true
+  for (const f of full.fills) {
+    if (f.side === 'buy') lastBuy.set(f.sym, posOf.get(f.date)!)
+    else {
+      const bi = lastBuy.get(f.sym)
+      if (bi == null) {
+        okHold = false
+        continue
+      }
+      const h = posOf.get(f.date)! - bi
+      maxHold = Math.max(maxHold, h)
+      if (h > opts.maxHold + 1) okHold = false
+      lastBuy.delete(f.sym)
+    }
+  }
+  check(`보유일수 ≤ ${opts.maxHold + 1}거래일 (최장 ${maxHold})`, sellFills.length > 5 && okHold, `max=${maxHold}`)
+
+  const fe = full.equity.filter((e) => e.date <= CUT)
+  const ce = cut.equity.filter((e) => e.date <= CUT)
+  check(
+    `절단 전 자산곡선 동일 (${fe.length}점)`,
+    fe.length > 900 && fe.length === ce.length && fe.every((e, i) => e.date === ce[i].date && Object.is(e.equity, ce[i].equity)),
+    `full=${fe.length} cut=${ce.length}`,
+  )
+  const ff = full.fills.filter((f) => f.date <= CUT)
+  const cf = cut.fills.filter((f) => f.date <= CUT)
+  check(
+    `절단 전 체결 이력 동일 (${ff.length}건)`,
+    ff.length > 5 &&
+      ff.length === cf.length &&
+      ff.every((f, i) => f.date === cf[i].date && f.sym === cf[i].sym && f.side === cf[i].side && Object.is(f.px, cf[i].px)),
+    `full=${ff.length} cut=${cf.length}`,
+  )
+  check('절단 후 구간은 달라진다(테스트가 실제로 무언가를 재고 있다)', full.equity.length > cut.equity.length)
+
+  // 추세 필터를 끄면 진입 후보가 줄지 않는다(필터는 부분집합을 만든다)
+  const noTrend = simulateRsiRevYear(HISTORIES, '2001-01-01', syms, COST, { ...opts, trendMa: 0 })
+  check(
+    '200일선 필터는 진입을 늘리지 않는다',
+    full.fills.filter((f) => f.side === 'buy').length <= noTrend.fills.filter((f) => f.side === 'buy').length,
+    `${full.fills.filter((f) => f.side === 'buy').length} vs ${noTrend.fills.filter((f) => f.side === 'buy').length}`,
+  )
+}
+
+// ============================================================================
+section('13) 기준선 재실행 · 연쇄 공용 기반')
+// ============================================================================
+{
+  const spec = baselineSpec(['005930'])
+  eq('기준선 이평 25', BASE25.ma, 25)
+  eq('기준선 신고가 10', BASE25.hb, 10)
+  eq('기준선 청산 이평 80', BASE25.xm, 80)
+  eq('청산 규칙 = maBreak', spec.exits[0].kind, 'maBreak')
+  eq('청산 이평 기간 80', spec.exits[0].maPeriod, 80)
+  eq('진입은 종가 체결(LOC)', spec.execution.timing, 'sameClose')
+  eq('슬롯 10', spec.sizing.maxPositions, 10)
+
+  const yearly = buildYearly(HISTORIES, YEARS)
+  const baseChain = runSpecChain(yearly, baselineSpec, COST)
+  check('기준선 연쇄가 자산곡선을 만든다', baseChain.equity.length > 1000, `${baseChain.equity.length}`)
+  check('기준선 매매가 발생한다', baseChain.closed > 0, `closed=${baseChain.closed}`)
+  check('승리 수 ≤ 청산 수', baseChain.wins >= 0 && baseChain.wins <= baseChain.closed, `${baseChain.wins}/${baseChain.closed}`)
+  eq('연쇄 길이 = 연도 수', baseChain.perYear.length, YEARS.length)
+  check('연쇄 자산곡선은 시작 1.0 배수 스케일', baseChain.equity[0].equity > 0.5 && baseChain.equity[0].equity < 2, `${baseChain.equity[0].equity}`)
+
+  // 매핑 5종목 미만인 해는 현금(배수 1) — 왜곡 방지 규약
+  const sparse = yearly.map((v, i) => (i === 0 ? { ...v, syms: v.syms.slice(0, 3) } : v))
+  const sparseChain = runCustomChain(
+    sparse,
+    (v) => simulateXsMomYear(v.hist, `${v.y}-01-01`, v.syms, COST, { slots: 5, gate: false }),
+    COST,
+    5,
+  )
+  eq('종목 5개 미만인 해는 현금 보유(배수 1)', sparseChain.perYear[0].ret, 1)
+  check('나머지 해는 실제로 돌아간다', sparseChain.equity.length > 500, `${sparseChain.equity.length}`)
+}
+
+// ============================================================================
+section('14) 보고 경로 — 알파는 겹치는 구간에서만 · 표 렌더링이 죽지 않는다')
+// ============================================================================
+{
+  // 벤치(KODEX 200)는 2002년 상장이라 그 이전 구간이 없다. 그 구간까지 전략에만
+  // 얹으면 알파가 부풀려지므로 alphaOf는 **겹치는 구간**으로 잘라야 한다.
+  const strat = [
+    { date: '2000-01-01', equity: 1 },
+    { date: '2002-01-01', equity: 1 },
+    { date: '2004-01-01', equity: 2 },
+  ]
+  const bench = [
+    { date: '2002-01-01', equity: 100 },
+    { date: '2004-01-01', equity: 100 },
+  ]
+  const a = alphaOf(strat, bench, '', '9999-12-31')
+  eq('알파 구간 시작 = 벤치 시작(전략 시작 아님)', a.from, '2002-01-01')
+  eq('알파 구간 끝', a.to, '2004-01-01')
+  closeTo('알파 = 전략 CAGR − 벤치 CAGR', a.alpha!, a.s.cagr - (a.b?.cagr ?? 0), 1e-12)
+  check('벤치 없는 구간을 얹지 않는다(전 구간 CAGR과 다르다)', Math.abs(a.alpha! - perfOf(strat).cagr) > 1, `${a.alpha} vs ${perfOf(strat).cagr}`)
+  eq('겹치는 구간이 없으면 알파 없음', alphaOf(strat, [{ date: '2030-01-01', equity: 1 }, { date: '2031-01-01', equity: 1 }], '', '9999-12-31').alpha, null)
+
+  // benchCurve — 총수익 보정 종가를 그대로 쓴다
+  const bc = benchCurve(BENCH_BARS)
+  eq('벤치 곡선 길이', bc.length, BENCH_BARS.length)
+  check('벤치 곡선 = 종가', bc.every((e, i) => e.date === BENCH_BARS[i].date && Object.is(e.equity, BENCH_BARS[i].c)))
+
+  // 요약은 스칼라만 남긴다 — 곡선 배열을 들고 있지 않아야 한다(메모리)
+  const yearly = buildYearly(HISTORIES, YEARS)
+  const row = summarizeStrat('테스트 기준선', runSpecChain(yearly, baselineSpec, COST), bc)
+  check('요약 결과에 자산곡선 배열이 없다', !('equity' in (row as unknown as Record<string, unknown>)))
+  eq('요약 연도 수', row.perYear.length, YEARS.length)
+  check('요약 스칼라가 채워진다', Number.isFinite(row.full.total) && Number.isFinite(row.full.cagr) && Number.isFinite(row.full.mdd))
+
+  // 표 렌더링 경로가 예외 없이 돈다 — 출력은 삼킨다(테스트 로그 오염 방지)
+  const rows = [row, { ...row, label: '변형 A' }, { ...row, label: '변형 B' }]
+  const orig = console.log
+  let lines = 0
+  let threw = ''
+  console.log = () => {
+    lines++
+  }
+  try {
+    stratTable(rows)
+    verdictTable(rows)
+    perYearTable(rows)
+  } catch (e) {
+    threw = String(e)
+  } finally {
+    console.log = orig
+  }
+  check('표 3종이 예외 없이 렌더링된다', threw === '' && lines > 15, threw || `lines=${lines}`)
+  eq('판정: 자기 자신과 비교하면 개선 0건', verdictTableSilent(rows), 0)
+}
+
+/** verdictTable을 출력 없이 호출해 승자 수만 받는다 */
+function verdictTableSilent(rows: Parameters<typeof verdictTable>[0]): number {
+  const orig = console.log
+  console.log = () => {}
+  try {
+    return verdictTable(rows)
+  } finally {
+    console.log = orig
   }
 }
 
