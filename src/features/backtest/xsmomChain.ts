@@ -442,9 +442,14 @@ export interface XsmomChainOptions {
    */
   listedBy?: (year: number) => string
   /**
-   * 구간 끝 청산비용 근사(idea-lab runCustomChain의 haircut). 기본 **false** —
-   * 같은 화면의 조건식 모드(runPitChained)가 haircut을 쓰지 않으므로, 켜면 두 모드가
-   * 서로 다른 비용 전제로 비교된다. 25차 러너 수치와 정확히 맞추려면 true로 둔다.
+   * 구간 끝 청산비용 근사(idea-lab runCustomChain의 haircut). 기본 **false**.
+   *
+   * 같은 화면의 조건식 모드(runPitChained)는 haircut을 쓰지 않으므로 켜면 두 모드의 비용
+   * 전제가 달라진다. 그럼에도 **화면(SpecSimulator)·사전계산(preset-precompute)은 true로
+   * 켠다**(2026-08-02) — 연구 러너가 해마다 물리는 비용이라, 끄면 그 두 경로만 비용을
+   * 면제받아 낙관적으로 보이고 25차 실측 수치와도 어긋난다. 켜는 방향은 성적을 **낮추는**
+   * 보수적 방향이다. 기본값을 false로 남겨 둔 이유는 다른 호출부(진단·연구 대조·기존 테스트)가
+   * on/off를 나란히 비교하는 축으로 쓰기 때문이다.
    */
   applyLiquidationHaircut?: boolean
 }

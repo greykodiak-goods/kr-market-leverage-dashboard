@@ -35,6 +35,7 @@ import { PIT_UNION, PIT_YEARS, pitCodes } from '../src/features/backtest/pitUniv
 import { BENCH_SYMBOL, DEFAULT_COST, PRESETS, type Preset, type StrategyKind } from '../src/features/backtest/presets'
 import type { StrategySpec } from '../src/features/backtest/strategySpec'
 import type { DailyBar } from '../src/features/backtest/types'
+import { KR_LOAD_NOTE, KR_MIN_BARS, loadKrDual } from '../src/lib/history'
 
 // CJS 번들에서 import.meta.url이 없으므로 런처가 REPO_ROOT를 넘긴다.
 const root = process.env.REPO_ROOT ?? process.cwd()
@@ -44,12 +45,17 @@ const OUT_PATH = join(root, 'public', 'data', 'presets-precomputed.json')
 export const PRECOMPUTE_SCHEMA = 1
 
 /**
- * 화면의 `getDailyHistory(sym, 'max')`와 **같은 구간**을 받는다.
- * (src/lib/history.ts: range=max 는 period1=2000-01-01 로 치환된다 — Yahoo가 range=max에서
- *  interval=1d를 무시하고 월봉을 돌려주기 때문. 여기서 구간이 어긋나면 사전계산 수치와
- *  화면에서 "직접 다시 돌리기" 한 수치가 달라진다.)
+ * 화면의 `getDailyHistory(sym, BACKTEST_HISTORY_RANGE)`와 **같은 구간**을 받는다.
+ * (src/lib/history.ts: `max1999` 는 period1=1999-01-01 로 치환된다. 여기서 구간이 어긋나면
+ *  사전계산 수치와 화면에서 "직접 다시 돌리기" 한 수치가 달라진다.)
+ *
+ * ⚠️ 2026-08-02 수정 — 예전 값은 `since:2000-01-01`이었다. 연쇄 첫 해(2000년)에 이평·모멘텀
+ * 워밍업 봉이 없어 `maBreak` 청산이 발동하지 않고 모멘텀 후보가 통째로 빠졌다(MODE=presetdiag 실측).
+ * 연구 러너는 처음부터 1999년부터 받는다. **백테스트 시작(곡선 시작)은 그대로 2000년**이다 —
+ * `runPitChained`/`runXsmomChained`가 PIT_YEARS(2000~) 단위로 돌기 때문에 1999년 봉은
+ * 지표 창을 채우는 데만 쓰인다.
  */
-const RANGE = 'since:2000-01-01'
+const RANGE = 'since:1999-01-01'
 
 function log(msg: string) {
   console.log(msg)
@@ -280,6 +286,7 @@ export function buildPayload(
       '시뮬레이터 프리셋을 화면과 같은 엔진·같은 비용으로 미리 돌린 [추정] 산출물이다. ' +
       '곡선은 주 1점으로 줄였고(최저점·최종일 보존), 요약 수치는 줄이기 전 원곡선에서 쟀다. ' +
       '유니버스는 연도별 시총 상위 10+10 [추정]이며 상장폐지 종목의 가격 부재로 생존편향이 남아 있다. ' +
+      `${KR_LOAD_NOTE} ` +
       '매수 권유가 아니다.',
     presets,
   }
@@ -307,6 +314,10 @@ export function runPreset(
       { resolve, bench, extraSymbols },
     )
   }
+  // 구간끝 청산비용 근사(haircut)는 **켠다** — 연구 러너(idea-lab runCustomChain)가 해마다
+  // 물리는 비용이고, 끄면 사전계산만 그 비용을 면제받아 성적이 낙관적으로 나온다.
+  // 방향이 보수적(성적을 낮춤)이고 25차 실측 수치와 정합한다. 옵션 기본값(false)은
+  // 건드리지 않는다 — 기존 테스트·다른 호출부의 동작을 바꾸지 않기 위해 호출부에서만 켠다.
   const runMomentum = (slots: number, gate: boolean) =>
     runXsmomChained(histories, {
       cost,
@@ -316,6 +327,7 @@ export function runPreset(
       codesFor: pitCodes,
       resolve,
       bench,
+      applyLiquidationHaircut: true,
     })
 
   if (preset.kind === 'condition') return runCondition(preset.spec)
@@ -331,29 +343,24 @@ async function main(): Promise<void> {
   log('# 프리셋 사전계산 — 화면과 같은 엔진으로 전 프리셋 실행')
   log(`유니버스 ${PIT_UNION.length}종목 · 연도 ${PIT_YEARS[0]}~${PIT_YEARS[PIT_YEARS.length - 1]} · 구간 ${RANGE}`)
 
-  // ---- 시세 로딩 — 화면과 같은 순서(.KS → .KQ 폴백) ----
+  // ---- 시세 로딩 — 화면·연구 러너와 **같은 듀얼 소스 규약**(.KQ/.KS 둘 다 · 긴 이력 채택 · 200봉 게이트) ----
   const histories: Record<string, DailyBar[]> = {}
   const symOf: Record<string, string> = {}
   const failed: string[] = []
   for (const code of PIT_UNION) {
-    for (const suffix of ['.KS', '.KQ']) {
-      const sym = `${code}${suffix}`
-      try {
-        const bars = await fetchDaily(sym)
-        if (bars.length > 0) {
-          histories[sym] = bars
-          symOf[code] = sym
-          break
-        }
-      } catch {
-        /* 다음 접미사 시도 */
-      }
-      await sleep(120)
-    }
-    if (!symOf[code]) failed.push(code)
+    const picked = await loadKrDual(code, (sym) => fetchDaily(sym), (bars) => bars.length, {
+      betweenAttempts: () => sleep(120),
+    })
+    if (picked) {
+      histories[picked.symbol] = picked.value
+      symOf[code] = picked.symbol
+    } else failed.push(code)
   }
   const okCount = Object.keys(symOf).length
-  log(`시세 로드 ${okCount}/${PIT_UNION.length}${failed.length ? ` · 가격 없음(상장폐지 등): ${failed.join(', ')}` : ''}`)
+  log(
+    `시세 로드 ${okCount}/${PIT_UNION.length} · .KQ/.KS 긴 이력 채택 · ${KR_MIN_BARS}봉 미만 제외` +
+      `${failed.length ? ` · 가격 없음(상장폐지·짧은 응답): ${failed.join(', ')}` : ''}`,
+  )
   if (okCount === 0) throw new Error('시세를 하나도 받지 못했습니다 — Yahoo 응답을 확인하세요')
 
   // ---- 벤치마크(KODEX 200) — 알파 판정 기준(규칙 5) ----

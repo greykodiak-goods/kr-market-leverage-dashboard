@@ -20,7 +20,7 @@
 //   (목록 pitUniverse.ts · 연쇄 실행 pitChain.ts — 헤드리스 러너와 같은 코드).
 
 import { useEffect, useMemo, useState } from 'react'
-import { getDailyHistory } from '../../lib/history'
+import { BACKTEST_HISTORY_RANGE, KR_LOAD_NOTE, getDailyHistory, loadKrDual } from '../../lib/history'
 import type { DailyBar } from './types'
 import { EXIT_LABELS, type CostSettings } from './conditionScreen'
 import { annualize, runPitChained, yearsBetween, type PitChainResult } from './pitChain'
@@ -756,10 +756,13 @@ export function SpecSimulator() {
   /**
    * 실행 — 전 연도 합집합(67종목) 시세를 한 번만 받아 연도별 유니버스 연쇄 백테스트를 돌린다.
    *
-   * 심볼 매핑: 유니버스 목록은 6자리 코드다. Yahoo는 시장 접미사를 요구하므로 `.KS`를 먼저
-   * 시도하고 실패(또는 빈 응답)하면 `.KQ`로 폴백한다 — 카카오·셀트리온처럼 코스닥에서
-   * 코스피로 옮겨간 종목도 한쪽에서는 잡힌다. 두 쪽 다 실패하면 상장폐지 등으로 가격이
-   * 없는 종목이며, 그 해 매핑률에 그대로 드러난다(생존편향을 숨기지 않는다).
+   * 심볼 매핑: 유니버스 목록은 6자리 코드다. Yahoo는 시장 접미사를 요구하므로 `.KQ`/`.KS`
+   * **양쪽을 조회해 긴 이력을 채택**한다(`loadKrDual` — 연구 러너 `fetchKrDual`과 같은 규약).
+   * 예전에는 `.KS` 첫 성공에서 중단했는데, Yahoo가 다수 코스닥 종목의 `.KS` 쿼리에 11봉짜리
+   * 가짜 시계열을 돌려주는 탓에 시작일이 밀려 그 종목이 유니버스에서 통째로 빠졌다
+   * (2026-08-02 실측 — 평균 매핑률 98%→71%). 200봉 미만은 채택하지 않는다.
+   * 두 쪽 다 실패하면 상장폐지 등으로 가격이 없는 종목이며, 그 해 매핑률에 그대로
+   * 드러난다(생존편향을 숨기지 않는다).
    */
   async function run() {
     if (busy) return // 중복 클릭 방어 (버튼 disabled와 이중 잠금)
@@ -775,7 +778,8 @@ export function SpecSimulator() {
       const failed: string[] = []
       // 병렬 로딩 — 순차(67회 왕복 직렬)가 시뮬 체감 지연의 주범이었다. 동시 6개:
       // 공용 CORS 프록시의 유량 제한을 넘지 않는 선에서 벽시계 시간을 ~1/6로 줄인다.
-      // 범위는 'max' 고정 — 유니버스가 2000년부터라 5y·10y로는 앞 구간이 통째로 빈다.
+      // 범위는 BACKTEST_HISTORY_RANGE(1999~) 고정 — 유니버스가 2000년부터라 5y·10y로는 앞
+      // 구간이 통째로 비고, 1999년 봉은 첫 해 지표 워밍업에 쓰인다(백테스트 시작은 2000년).
       {
         let done = 0
         setProgress(`시세 로딩 0/${codes.length}…`)
@@ -785,20 +789,15 @@ export function SpecSimulator() {
           for (;;) {
             const code = queue.shift()
             if (!code) return
-            for (const suffix of ['.KS', '.KQ']) {
-              const sym = `${code}${suffix}`
-              try {
-                const h = await getDailyHistory(sym, 'max')
-                if (h.bars.length > 0) {
-                  histories[sym] = h.bars
-                  symOf[code] = sym
-                  break
-                }
-              } catch {
-                /* 다음 접미사 시도 */
-              }
-            }
-            if (!symOf[code]) failed.push(code)
+            const picked = await loadKrDual(
+              code,
+              (sym) => getDailyHistory(sym, BACKTEST_HISTORY_RANGE),
+              (h) => h.bars.length,
+            )
+            if (picked) {
+              histories[picked.symbol] = picked.value.bars
+              symOf[code] = picked.symbol
+            } else failed.push(code)
             done++
             setProgress(`시세 로딩 ${done}/${codes.length}…`)
           }
@@ -818,7 +817,9 @@ export function SpecSimulator() {
       if (kind !== 'momentum' && spec.regime) {
         setProgress(`레짐 지수(${spec.regime.symbol}) 로딩…`)
         try {
-          const rh = await getDailyHistory(spec.regime.symbol, 'max')
+          // 레짐 지수도 1999년부터 — 첫 해 레짐 판정에 쓰는 이평의 워밍업이 없으면
+          // 2000년만 게이트가 다르게 작동한다(유니버스 종목과 같은 이유).
+          const rh = await getDailyHistory(spec.regime.symbol, BACKTEST_HISTORY_RANGE)
           if (rh.bars.length > 0) {
             histories[spec.regime.symbol] = rh.bars
             extraSymbols.push(spec.regime.symbol)
@@ -832,7 +833,9 @@ export function SpecSimulator() {
       setProgress('벤치마크 로딩…')
       let bench: DailyBar[] | undefined
       try {
-        const b = await getDailyHistory(BENCH_SYMBOL, 'max')
+        // 벤치도 같은 구간으로 받는다(연구 러너와 동일). 연도별로 그 해 구간만 잘라 쓰므로
+        // 1999년 봉은 수치에 들어가지 않는다 — 사전계산과 요청 구간을 어긋나게 두지 않으려는 것.
+        const b = await getDailyHistory(BENCH_SYMBOL, BACKTEST_HISTORY_RANGE)
         if (b.bars.length >= 2) {
           bench = b.bars
           setBenchSpan({ start: b.bars[0].date, end: b.bars[b.bars.length - 1].date })
@@ -867,6 +870,10 @@ export function SpecSimulator() {
           cost,
           { resolve: (code) => symOf[code], startDate, endDate, bench, extraSymbols },
         )
+      // 구간끝 청산비용 근사(haircut)는 **켠다** — 연구 러너(idea-lab runCustomChain)가 해마다
+      // 물리는 비용이라 끄면 화면만 그 비용을 면제받아 낙관적으로 보인다. 방향이 보수적이고
+      // 사전계산(preset-precompute)과도 같은 전제가 된다. 옵션 기본값(false)은 그대로 두고
+      // 호출부에서만 켠다 — 다른 호출부·기존 테스트의 동작을 바꾸지 않기 위해서다.
       const runMomentum = () =>
         runXsmomChained(histories, {
           cost,
@@ -878,6 +885,7 @@ export function SpecSimulator() {
           startDate,
           endDate,
           bench,
+          applyLiquidationHaircut: true,
         })
 
       let chained: PitChainResult
@@ -1967,7 +1975,9 @@ export function SpecSimulator() {
         없어 빠지므로 <strong>일부 생존편향이 잔존</strong>하고(연도별 매핑률 참조), 매년 말 평가액을 다음 해로
         이월하는 <strong>연말 청산 근사</strong>가 들어갑니다. 시뮬레이션 전용 — 주문·실계좌·브로커 API와 연결되어
         있지 않습니다. 전 종목이 아니라 연 20종목 표본이므로 실제 조건검색과 결과가 다릅니다. 데이터: Yahoo Finance
-        일봉(비공식 엔드포인트 · 정확성 미보증 · 환율 미반영). 장중 조건(분봉)은 일봉 백테스트로 검증되지 않습니다.
+        일봉(비공식 엔드포인트 · 정확성 미보증 · 환율 미반영) — <strong>{KR_LOAD_NOTE}</strong>{' '}
+        모멘텀 모드는 연구 러너와 같게 <strong>구간끝 청산비용 근사(haircut)</strong>를 물립니다. 장중 조건(분봉)은
+        일봉 백테스트로 검증되지 않습니다.
         <strong>QQQ 비교는 KRW=X 종가 환산 기준 — 환헤지·거래비용 미반영</strong>이며 참고 표시일 뿐 알파 판정에
         들어가지 않습니다(판정 벤치는 KODEX 200). 모멘텀 랭킹 모드는 매월 첫 거래일 시가에 리밸런스하는 12-1 횡단면
         모멘텀이며, 25차 실측 낙폭은 <strong>−61%~−68%</strong> [추정]입니다 — 프리셋은 여러 조합 중 성적이 좋았던

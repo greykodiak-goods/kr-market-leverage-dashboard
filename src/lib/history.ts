@@ -44,7 +44,24 @@ export interface HistoryResult {
   droppedBars: number // 결측(null OHLC)으로 버린 봉 수
 }
 
-export type HistoryRange = '5y' | '10y' | 'max'
+// `max` = 2000-01-01부터, `max1999` = 1999-01-01부터(백테스트 **워밍업 전용** 1년).
+// 왜 워밍업이 필요한가: 연쇄 백테스트의 첫 해(2000년)에 이평·모멘텀 창을 채울 과거 봉이
+// 없으면 `smaAt`이 null → `maBreak` 청산이 발동하지 않고, `momentum12_1`도 null이라
+// 후보에서 빠진다. 즉 첫 해만 규칙이 다르게 작동한다(2026-08-02 MODE=presetdiag 실측).
+// 연구 러너(scripts/*.entry.ts)는 처음부터 `since:1999-01-01`을 썼고, 화면·사전계산만
+// 2000-01-01이라 수치가 갈라졌다. **백테스트 시작일은 그대로 2000년**이며 1999년 봉은
+// 지표 창을 채우는 데만 쓰인다(과거 방향 데이터 추가이므로 규칙 1과 무관 —
+// 절단 불변성은 tests/krdual.test.ts가 확인한다).
+export type HistoryRange = '5y' | '10y' | 'max' | 'max1999'
+
+/** period1을 명시해야 하는 범위 — Yahoo는 range=max에서 interval=1d를 무시하고 월봉을 준다. */
+const RANGE_SINCE: Partial<Record<HistoryRange, string>> = {
+  max: '2000-01-01',
+  max1999: '1999-01-01',
+}
+
+/** 백테스트(연쇄 실행) 경로가 쓰는 범위 — 화면·사전계산·연구 러너가 이 하나로 통일된다. */
+export const BACKTEST_HISTORY_RANGE: HistoryRange = 'max1999'
 
 const PROXIES: { name: string; wrap: (url: string) => string }[] = [
   ...(HAS_CUSTOM_PROXY ? [{ name: 'custom-worker', wrap: customProxyWrap }] : []),
@@ -339,11 +356,11 @@ export async function getDailyHistory(symbol: string, range: HistoryRange = '10y
 
   // events=div,split → adjclose 동반 제공(배당 조정 계수 산출용)
   // ⚠️ range=max 는 Yahoo가 interval=1d 를 무시하고 **월봉**을 돌려준다(2026-07-30 실측 —
-  // 월봉 위에서 백테스트가 돌면 결과 전체가 무효다). max 는 period1/period2 명시로 우회한다.
-  const qs =
-    range === 'max'
-      ? `period1=${Math.floor(Date.parse('2000-01-01') / 1000)}&period2=${Math.floor(Date.now() / 1000)}`
-      : `range=${range}`
+  // 월봉 위에서 백테스트가 돌면 결과 전체가 무효다). max·max1999 는 period1/period2 명시로 우회한다.
+  const since = RANGE_SINCE[range]
+  const qs = since
+    ? `period1=${Math.floor(Date.parse(since) / 1000)}&period2=${Math.floor(Date.now() / 1000)}`
+    : `range=${range}`
   const target = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
     symbol,
   )}?${qs}&interval=1d&events=div%2Csplit`
@@ -365,4 +382,94 @@ export async function getDailyHistory(symbol: string, range: HistoryRange = '10y
   }
   if (cached) return { ...cached, stale: true }
   throw new Error(`히스토리 로드 실패 (${symbol}): ${String(lastErr)}`)
+}
+
+// ---- 국내 종목 듀얼 소스 로드 (.KQ / .KS) -----------------------------------
+//
+// 유니버스 목록은 6자리 코드고 Yahoo는 시장 접미사를 요구한다. 코스닥→코스피로 옮겨간
+// 종목(카카오·셀트리온 등)은 **현재 접미사 쪽에 전 기간 이력**이 붙어 있어 한쪽만 봐서는
+// 시작일이 밀린다. 그런데 Yahoo는 존재하지 않는 조합에도 **가짜 짧은 시계열**을 준다 —
+// 2026-08-02 GHA 실측에서 다수 코스닥 종목의 `.KS` 쿼리가 11봉(2026-07-16 시작)짜리
+// 시리즈를 돌려줬다. "첫 성공에서 중단"하면 그 11봉이 채택되고, 시작일이 밀린 탓에
+// `bars[0].date <= {해}-06-30` 편입 판정에서 **142 종목-해가 유니버스에서 통째로 빠졌다**
+// (평균 매핑률 98% → 71%).
+//
+// 그래서 연구 러너 `fetchKrDual`(scripts/spec-backtest.entry.ts — **정본**)의 규약을 그대로 쓴다:
+//   ① `.KQ` → `.KS` **둘 다 시도**  ② **긴 이력을 채택**  ③ **200봉 미만이면 채택 자체를 포기**
+//   ④ 200봉 이상을 만나면 거기서 끊는다(뒤 접미사는 조회하지 않는다 — 왕복 절약).
+//
+// 네트워크·캐시·환경 의존이 없는 **순수 정책 함수**다. 조회 자체는 호출부가 주입하므로
+// 브라우저(getDailyHistory·CORS 프록시)와 노드(스크립트의 직접 fetch) 양쪽에서 그대로 쓴다.
+
+/** 접미사 시도 순서 — 연구 러너와 동일 */
+export const KR_SUFFIXES: readonly string[] = ['.KQ', '.KS']
+/** 이보다 짧은 시계열은 Yahoo의 가짜 응답으로 보고 채택하지 않는다 */
+export const KR_MIN_BARS = 200
+
+/** 화면·산출물에 그대로 붙일 수 있는 한 줄 표기(규칙 3 — 데이터 출처 정직성) */
+export const KR_LOAD_NOTE =
+  '국내 종목은 .KQ/.KS 양쪽을 조회해 긴 이력을 채택하고(200봉 미만은 가짜 응답으로 보고 제외), ' +
+  '지표 워밍업용으로 1999년부터 받되 백테스트 시작은 2000년입니다.'
+
+export interface KrDualAttempt {
+  symbol: string
+  barCount: number
+  /** 조회 실패 사유. 성공이면 '' */
+  error: string
+}
+
+export interface KrDualPick<T> {
+  code: string
+  /** 실제로 채택된 심볼 — '035720.KS' */
+  symbol: string
+  suffix: string
+  barCount: number
+  value: T
+  /** 시도 기록(조회하지 않은 접미사는 들어가지 않는다) — 진단·로그용 */
+  attempts: KrDualAttempt[]
+}
+
+/**
+ * 한 국내 종목 코드의 시세를 `.KQ`/`.KS` 양쪽에서 받아 **긴 쪽**을 채택한다.
+ * 채택 후보가 `minBars` 미만이면 **null**(= 그 코드는 유니버스에 없는 것으로 취급).
+ *
+ * @param fetchOne     심볼 하나를 받아오는 함수(브라우저/노드 각자의 경로를 주입)
+ * @param barCountOf   받아온 값의 봉 수
+ * @param opts.betweenAttempts 접미사 사이에 끼울 대기(유량 제한 완화). 마지막 시도 뒤에는 부르지 않는다.
+ */
+export async function loadKrDual<T>(
+  code: string,
+  fetchOne: (symbol: string) => Promise<T>,
+  barCountOf: (value: T) => number,
+  opts: {
+    suffixes?: readonly string[]
+    minBars?: number
+    betweenAttempts?: () => Promise<void>
+  } = {},
+): Promise<KrDualPick<T> | null> {
+  const suffixes = opts.suffixes ?? KR_SUFFIXES
+  const minBars = opts.minBars ?? KR_MIN_BARS
+  const attempts: KrDualAttempt[] = []
+  let best: { symbol: string; suffix: string; barCount: number; value: T } | null = null
+
+  for (let i = 0; i < suffixes.length; i++) {
+    const suffix = suffixes[i]
+    const symbol = `${code}${suffix}`
+    let enough = false
+    try {
+      const value = await fetchOne(symbol)
+      const barCount = barCountOf(value)
+      attempts.push({ symbol, barCount, error: '' })
+      // 더 긴 이력만 채택한다 — 짧은 가짜 시계열이 먼저 와도 뒤의 긴 쪽이 이긴다.
+      if (!best || barCount > best.barCount) best = { symbol, suffix, barCount, value }
+      if (barCount >= minBars) enough = true // 충분히 길다 — 남은 접미사는 조회하지 않는다
+    } catch (err) {
+      attempts.push({ symbol, barCount: 0, error: String(err) })
+    }
+    if (enough) break
+    if (i < suffixes.length - 1) await opts.betweenAttempts?.()
+  }
+
+  if (!best || best.barCount < minBars) return null
+  return { code, symbol: best.symbol, suffix: best.suffix, barCount: best.barCount, value: best.value, attempts }
 }

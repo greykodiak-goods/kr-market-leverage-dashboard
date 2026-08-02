@@ -35,13 +35,17 @@ import type { DailyBar } from '../../src/features/backtest/types'
 // 사전계산 로더 (scripts/preset-precompute.entry.ts main())
 //   접미사 순서 .KS → .KQ · **첫 성공(1봉 이상)에서 중단** · 길이 하한 없음
 //
+// ⚠️ 2026-08-02 이후: 사전계산·화면은 **연구 규약으로 정렬됐다**(src/lib/history.ts `loadKrDual`).
+//    아래 `PRECOMPUTE_SUFFIX_ORDER`·`pickPrecompute`는 **수정 전 규약을 재현하는 진단용 축**이며
+//    현재 실행 경로가 아니다. 이 모듈은 "무엇이 갈렸었나"를 다시 찍을 수 있어야 하므로 그대로 둔다.
+//
 // 두 규약은 코스닥→코스피 이전 종목(예: 이전 상장 코드)에서 갈릴 수 있다.
 // 그 경우 시작일이 밀리고, 시작일이 밀리면 `bars[0].date <= {해}-06-30` 편입 판정에서
 // **그 해 유니버스에서 통째로 빠진다** — 종목이 빠지는 해가 곧 성적 차이다.
 
 /** 연구 러너가 접미사를 시도하는 순서 */
 export const RESEARCH_SUFFIX_ORDER: readonly string[] = ['.KQ', '.KS']
-/** 사전계산이 접미사를 시도하는 순서 */
+/** 사전계산이 접미사를 시도하던 순서 — **2026-08-02 수정 전 규약**(진단 재현용) */
 export const PRECOMPUTE_SUFFIX_ORDER: readonly string[] = ['.KS', '.KQ']
 /** 연구 러너 `fetchKrDual`의 최소 봉 수 게이트 */
 export const RESEARCH_MIN_BARS = 200
@@ -108,7 +112,7 @@ export function pickResearch(bySuffix: ProbeMap): SuffixProbe | null {
 }
 
 /**
- * 사전계산 로더의 채택 규칙을 그대로 옮긴 것.
+ * 사전계산 로더의 **수정 전** 채택 규칙을 그대로 옮긴 것(2026-08-02 이후 실행 경로가 아니다).
  * .KS → .KQ 순으로 보며 **1봉이라도 받으면 즉시 확정**한다. 길이 비교도, 하한도 없다.
  */
 export function pickPrecompute(bySuffix: ProbeMap): SuffixProbe | null {
