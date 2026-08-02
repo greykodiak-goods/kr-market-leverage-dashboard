@@ -1905,14 +1905,28 @@ async function pit1010() {
   const BASE: Combo = { ma: 15, hb: 20, xm: 60, buf: 2 }
   log('')
   log(`격자 ${combos.length}조합 + 기준선 — 연쇄 실행 중`)
+  // ⚠️ 요약 스칼라만 보관한다 — 전체 PitChainResult(자산곡선 ~6,800점 + 매매 수백 건)를
+  // 400조합 동안 들고 있으면 EC2(1GB)에서 OOM이 난다(2026-08-02 실측: 324/400에서 힙 폭발
+  // → 박스 전체가 SSH 불능까지 감). 연도별 분해가 필요한 소수 조합만 나중에 재실행한다.
   const rows = combos.map((k, i) => {
-    const r = chain(k)
+    const full = chain(k)
+    const r = {
+      totalPct: full.totalPct,
+      cagrPct: full.cagrPct,
+      mddPct: full.mddPct,
+      objective: full.objective,
+      alphaCagrPct: full.alphaCagrPct,
+      benchCagrPct: full.benchCagrPct,
+      benchTotalPct: full.benchTotalPct,
+      tradeCount: full.trades.length,
+      mapped: full.perYear.map((v) => `${v.year} ${v.mapped}/${v.total}`).join(' · '),
+    }
     if ((i + 1) % 12 === 0) log(`… ${i + 1}/${combos.length}`)
     return { k, r }
   })
   const baseRow = rows.find((x) => x.k.ma === BASE.ma && x.k.hb === BASE.hb && x.k.xm === BASE.xm && x.k.buf === BASE.buf)!
   log('')
-  log(`연도별 매핑률: ${baseRow.r.perYear.map((v) => `${v.year} ${v.mapped}/${v.total}`).join(' · ')}`)
+  log(`연도별 매핑률: ${baseRow.r.mapped}`)
   rows.sort((a, b) => (b.r.objective ?? -1) - (a.r.objective ?? -1))
 
   const bcagr = baseRow.r.benchCagrPct ?? 0
@@ -1923,7 +1937,7 @@ async function pit1010() {
   log(
     `기준선(MA15×신고20→60선·버퍼2%): 수익÷MDD ${baseRow.r.objective?.toFixed(1) ?? '—'} · 총 ${f1(baseRow.r.totalPct)}% · CAGR ${f1(
       baseRow.r.cagrPct,
-    )}% · MDD ${f1(baseRow.r.mddPct)}% · 매매 ${baseRow.r.trades.length}`,
+    )}% · MDD ${f1(baseRow.r.mddPct)}% · 매매 ${baseRow.r.tradeCount}`,
   )
   log('')
   log('상위 15 (연도별 상위 10+10 교체 유니버스 · 2000~현재 연쇄):')
@@ -1933,7 +1947,7 @@ async function pit1010() {
     log(
       `| ${i + 1}${x === baseRow ? ' (기준)' : ''} | ${nameOf(x.k)} | **${x.r.objective?.toFixed(1) ?? '—'}** | ${f1(x.r.totalPct)}% | ${f1(
         x.r.cagrPct,
-      )}% | ${f1(x.r.mddPct)}% | ${f1(x.r.alphaCagrPct ?? 0)}%p | ${x.r.trades.length} |`,
+      )}% | ${f1(x.r.mddPct)}% | ${f1(x.r.alphaCagrPct ?? 0)}%p | ${x.r.tradeCount} |`,
     )
   }
   if (!rows.slice(0, 15).includes(baseRow)) {
@@ -1941,13 +1955,13 @@ async function pit1010() {
     log(
       `| ${rank} (기준) | ${nameOf(baseRow.k)} | **${baseRow.r.objective?.toFixed(1) ?? '—'}** | ${f1(baseRow.r.totalPct)}% | ${f1(
         baseRow.r.cagrPct,
-      )}% | ${f1(baseRow.r.mddPct)}% | ${f1(baseRow.r.alphaCagrPct ?? 0)}%p | ${baseRow.r.trades.length} |`,
+      )}% | ${f1(baseRow.r.mddPct)}% | ${f1(baseRow.r.alphaCagrPct ?? 0)}%p | ${baseRow.r.tradeCount} |`,
     )
   }
 
   // 총수익 정렬 표 — "가장 수익률 높은 케이스" (2026-08-02 대표 지시). 매매<100 조합은
   // 몇 번의 운으로 1등 하는 것을 막기 위해 제외하고, 제외 사실을 명시한다.
-  const byTotal = rows.filter((x) => x.r.trades.length >= 100).sort((a, b) => b.r.totalPct - a.r.totalPct)
+  const byTotal = rows.filter((x) => x.r.tradeCount >= 100).sort((a, b) => b.r.totalPct - a.r.totalPct)
   const excludedFew = rows.length - byTotal.length
   log('')
   log(`수익률 최대 상위 10 (매매≥100 필터 — 제외 ${excludedFew}조합):`)
@@ -1957,29 +1971,22 @@ async function pit1010() {
     log(
       `| ${i + 1} | ${nameOf(x.k)} | **${f1(x.r.totalPct)}%** | ${f1(x.r.cagrPct)}% | ${f1(x.r.mddPct)}% | ${x.r.objective?.toFixed(1) ?? '—'} | ${f1(
         x.r.alphaCagrPct ?? 0,
-      )}%p | ${x.r.trades.length} |`,
+      )}%p | ${x.r.tradeCount} |`,
     )
   }
-  const topTotal = byTotal[0]
-  if (topTotal) {
+  // 연도별 분해(거짓 매끈함 방지)는 필요한 조합만 재실행해서 뽑는다(메모리 보호)
+  const yearBreakdown = (label: string, k: Combo) => {
+    const full = chain(k)
     log('')
-    log(`수익률 1위(${nameOf(topTotal.k)}) 연도별 수익 vs 벤치:`)
+    log(`${label}(${nameOf(k)}) 연도별 수익 vs 벤치:`)
     log('| 연도 | 매핑 | 전략 | 벤치 |')
     log('|---|---|---|---|')
-    for (const py of topTotal.r.perYear) {
+    for (const py of full.perYear) {
       log(`| ${py.year} | ${py.mapped}/${py.total}${py.cash ? ' (현금)' : ''} | ${f1(py.strategyPct)}% | ${py.benchPct != null ? f1(py.benchPct) : '—'}% |`)
     }
   }
-
-  // 1위 조합의 연도별 분해 (거짓 매끈함 방지 — 몇 해에 몰려 번 것인지 확인)
-  const top = rows[0]
-  log('')
-  log(`수익÷MDD 1위(${nameOf(top.k)}) 연도별 수익 vs 벤치:`)
-  log('| 연도 | 매핑 | 전략 | 벤치 |')
-  log('|---|---|---|---|')
-  for (const py of top.r.perYear) {
-    log(`| ${py.year} | ${py.mapped}/${py.total}${py.cash ? ' (현금)' : ''} | ${f1(py.strategyPct)}% | ${py.benchPct != null ? f1(py.benchPct) : '—'}% |`)
-  }
+  if (byTotal[0]) yearBreakdown('수익률 1위', byTotal[0].k)
+  yearBreakdown('수익÷MDD 1위', rows[0].k)
   log('')
   log('⚠️ 유니버스 목록은 [추정](KRX 실측 아님 — Open API 키 등록 시 실측 대체 예정). 상폐 종목 가격 부재로')
   log('   특히 2000년대 초 코스닥 매핑률이 낮아 그 구간은 실제보다 후하게 나올 수 있다. 연말 청산 근사 포함.')
