@@ -126,3 +126,10 @@ npm run build   # 타입체크 + 프로덕션 빌드
 ```
 
 배포: `main` 빌드 산출물(`dist/`)을 `gh-pages` 브랜치에 올려 GitHub Pages로 서빙한다.
+
+## 실행 장소 규칙 (2026-08-02 대표 지시)
+
+**EC2(쿠팡 프록시 서버)는 국내 IP·고정 IP·키움 키가 필요한 작업 전용이다** — 모의투자 데몬,
+키움 조회(수급·백필), KRX 조회(pityear)만. Yahoo 전용 백테스트는 `.github/workflows/backtest.yml`
+(GHA 러너)에서 돌린다. `awning-ops:deploy-investing.yml`이 화이트리스트로 강제한다.
+배경: 2026-08-02 Yahoo 전용 400조합 격자를 EC2에서 돌리다 OOM으로 박스 마비(사고기록 참조).
