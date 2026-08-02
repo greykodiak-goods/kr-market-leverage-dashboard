@@ -11,10 +11,20 @@
 //
 // 실계좌 경계(규칙 2): 이 화면은 시뮬레이션 전용. 주문·브로커·자격증명 없음.
 
+// 2026-08-02 유니버스 전면 교체 (대표 지시):
+//   이 화면은 예전에 "오늘의 시총 상위 N"을 표본으로 고정해 돌렸다. 그러면 오늘까지
+//   살아남아 커진 종목만 표본에 들어가 성적이 부풀려진다(승자편향) — 같은 조건식이
+//   고정 80 유니버스에서 총 +42,103%인데 연도별 그 해 상위 10+10으로 바꾸면 +841%로
+//   무너졌다(21차 실측). 그래서 **고정 표본 입력·시총상위 퀵버튼·고정 유니버스 전제
+//   프리셋을 전부 제거**하고, 유니버스는 항상 "그 해 연초 상위 10+10 [추정]" 하나다
+//   (목록 pitUniverse.ts · 연쇄 실행 pitChain.ts — 헤드리스 러너와 같은 코드).
+
 import { useEffect, useMemo, useState } from 'react'
-import { getDailyHistory, type HistoryRange } from '../../lib/history'
+import { getDailyHistory } from '../../lib/history'
 import type { DailyBar } from './types'
-import { runStrategySpec, EXIT_LABELS, type ConditionResult, type CostSettings } from './conditionScreen'
+import { EXIT_LABELS, type CostSettings } from './conditionScreen'
+import { runPitChained, type PitChainResult } from './pitChain'
+import { PIT_UNION, PIT_YEARS } from './pitUniverse'
 import {
   HEROMOON_MOMENTUM,
   SPEC_VERSION,
@@ -32,12 +42,12 @@ import { displaySymbol } from '../../lib/krNames'
 
 // ---- 저장 ------------------------------------------------------------------
 
-const STORE_KEY = 'spec-simulator:v1'
+// v1 저장본에는 고정 표본(symbolsText)과 데이터 범위(range)가 들어 있었다 — 둘 다 사라졌으므로
+// 키를 올려 옛 저장본을 불러오지 않는다(지운 입력이 되살아나는 혼선 방지).
+const STORE_KEY = 'spec-simulator:v2'
 
 interface Saved {
   spec: StrategySpec
-  symbolsText: string
-  range: HistoryRange
   startDate: string
   /** 종료일 — 이 날짜 이후 봉을 잘라내고 실행한다. 없거나 빈 문자열이면 데이터 끝까지.
    *  기존 저장본(v1)에는 없는 필드라 **옵션**으로 둔다(STORE_KEY 버전을 올리지 않는다). */
@@ -47,13 +57,11 @@ interface Saved {
 
 const DEFAULT_COST: CostSettings = { initialCapital: 10_000_000, feePct: 0.015, taxPct: 0.15, slippagePct: 0.1 }
 
-// 기본 표본 — 유동성 있는 국장 종목. 조건식 검증용 표본이지 추천 종목이 아니다.
-const DEFAULT_SYMBOLS =
-  '000660.KS, 005930.KS, 035420.KS, 051910.KS, 005380.KS, 000270.KS, 105560.KS, 055550.KS, 034020.KS, 010140.KS, 196170.KQ, 247540.KQ, 086520.KQ, 328130.KQ'
-
 const BENCH_SYMBOL = '069500.KS' // KODEX 200 — 알파 판정 기준(규칙 5)
-const ETF_SYMBOLS = new Set(['069500.KS', '360750.KS']) // 랭킹 저장소의 ETF — 표본 제외
 const KOSPI_INDEX = '^KS11'
+
+/** 유니버스는 하나뿐이다 — 시세는 전 연도 합집합을 한 번만 받아 모든 해가 나눠 쓴다. */
+const UNIVERSE_LABEL = `연도별 그 해 시총 상위 10+10 [추정] · ${PIT_YEARS[0]}~${PIT_YEARS[PIT_YEARS.length - 1]} · 고유 ${PIT_UNION.length}종목`
 
 // 코스피 지수 5·10일선 정배열일 때만 신규 진입 (레짐 게이트)
 const KOSPI_REGIME: NonNullable<StrategySpec['regime']> = {
@@ -62,121 +70,53 @@ const KOSPI_REGIME: NonNullable<StrategySpec['regime']> = {
 }
 
 // ---- 프리셋 ----------------------------------------------------------------
+//
+// 옛 프리셋(고정 유니버스 전제)은 **전부 삭제**했다. 그 성적표는 "오늘의 시총 상위"라는
+// 승자편향 표본 위에서 나온 숫자라, 유니버스를 정직하게 바꾼 지금 화면에 그대로 두면
+// 서로 다른 전제의 수치를 같은 이름으로 비교하게 된다. 아래 두 개는 **시점 고정 유니버스
+// 전제로 다시 매긴** 조합이다. 어느 쪽도 매수 권유가 아니다(규칙 4).
 
-const PRESET_GOBLIN: StrategySpec = {
-  version: SPEC_VERSION,
-  id: 'goblin-ma5',
-  name: '5일선 기법 (정배열+지수 레짐)',
-  source: '2026-07-30 대표 지정: 코스피 정배열일 때만, 종목 정배열+5일선 돌파',
-  universe: HEROMOON_MOMENTUM.universe,
-  entry: {
-    op: 'and',
-    nodes: [
-      { op: 'cond', id: '정배열', cond: { kind: 'maAlign', fast: 5, slow: 10 } },
-      { op: 'cond', id: '5일선돌파', cond: { kind: 'maCross', period: 5, dir: 'above' } },
-    ],
-  },
-  ranking: { by: 'tradingValue', dir: 'desc' },
-  exits: [{ kind: 'maBreak', maPeriod: 5 }],
-  sizing: { maxPositions: 10, mode: 'equalSlot' },
-  execution: { timing: 'sameClose', orderType: 'market' },
-  regime: KOSPI_REGIME,
+/** 두 프리셋의 공통 골격 — 진입 이평만 다르다. */
+function pitPreset(id: string, name: string, source: string, maPeriod: number): StrategySpec {
+  return {
+    version: SPEC_VERSION,
+    id,
+    name,
+    source,
+    universe: HEROMOON_MOMENTUM.universe, // 종목 목록은 실행 시 그 해 유니버스로 주입된다
+    entry: {
+      op: 'and',
+      nodes: [
+        { op: 'cond', id: `${maPeriod}일선돌파`, cond: { kind: 'maCross', period: maPeriod, dir: 'above' } },
+        { op: 'cond', id: '20일신고가', cond: { kind: 'highBreak', days: 20 } },
+      ],
+    },
+    ranking: { by: 'tradingValue', dir: 'desc' },
+    exits: [{ kind: 'maBreak', maPeriod: 60, pct: 2 }],
+    sizing: { maxPositions: 10, mode: 'equalSlot' },
+    execution: { timing: 'sameClose', orderType: 'market' },
+  }
 }
 
-const PRESET_BEST_U: StrategySpec = {
-  version: SPEC_VERSION,
-  id: 'combo-u',
-  name: '급증×신고가×대금+이탈버퍼 (검증 최적)',
-  source: '2026-07-30 백테스트 4라운드 최적 조합 U — 10y 알파 −0.8%p·MDD −27%',
-  universe: HEROMOON_MOMENTUM.universe,
-  entry: {
-    op: 'and',
-    nodes: [
-      { op: 'cond', cond: { kind: 'candle', bull: true } },
-      { op: 'cond', cond: { kind: 'maCross', period: 5, dir: 'above' } },
-      { op: 'cond', cond: { kind: 'volumeSurge', days: 20, ratio: 1.5 } },
-      { op: 'cond', cond: { kind: 'highBreak', days: 20 } },
-      { op: 'cond', cond: { kind: 'tradingValue', min: 1e10 } },
-    ],
-  },
-  ranking: { by: 'tradingValue', dir: 'desc' },
-  exits: [{ kind: 'maBreak', maPeriod: 5, pct: 2 }],
-  sizing: { maxPositions: 10, mode: 'equalSlot' },
-  execution: { timing: 'sameClose', orderType: 'market' },
-}
+/** 현행 기준선 — 지금까지 페이퍼로 추적해 온 조합. 비교의 기준점으로 남긴다. */
+const PRESET_PIT_BASE = pitPreset(
+  'pit-ma15-high20-slow60',
+  '현행 기준선 — MA15×신고20→60선·버퍼2%',
+  '시점 고정 유니버스(연도별 상위 10+10 [추정]) 전제로 재산출한 기준선 — 고정 유니버스 시절 수치와 직접 비교하지 말 것',
+  15,
+)
 
-// 스윕 54구성 + 손익비 분해(5·6차 백테스트)의 승자 — 전 구간(전반·후반·3y) 알파 양수인 유일 그룹.
-// 핵심은 익절 없이 40일선 −2%까지 이익을 끌고 가는 느린 청산(손익비 5~6.6). 절대 수치는 선택편향 상한선.
-const PRESET_MA20_WINNER: StrategySpec = {
-  version: SPEC_VERSION,
-  id: 'ma20-high20-slow',
-  name: 'MA20 돌파×20일 신고가·느린 청산',
-  source: '2026-07-30 백테스트 5·6차 승자 — 손익비 5~6.6·PF 3~4·전 구간 알파 양수 (선택편향 주의)',
-  universe: HEROMOON_MOMENTUM.universe,
-  entry: {
-    op: 'and',
-    nodes: [
-      { op: 'cond', id: '20일선돌파', cond: { kind: 'maCross', period: 20, dir: 'above' } },
-      { op: 'cond', id: '20일신고가', cond: { kind: 'highBreak', days: 20 } },
-    ],
-  },
-  ranking: { by: 'tradingValue', dir: 'desc' },
-  exits: [{ kind: 'maBreak', maPeriod: 40, pct: 2 }],
-  sizing: { maxPositions: 10, mode: 'equalSlot' },
-  execution: { timing: 'sameClose', orderType: 'market' },
-}
-
-// 14차 도전자 — 진입 이평만 20→15일(신호 ~1주 빠름). 홀드아웃 3구간 전승했으나 다중비교
-// 잔존 위험 + MDD 4~6%p 깊어짐. 페이퍼 3트랙 실측으로 판정 중 — 확정 전 참고용.
-const PRESET_MA15_CHALLENGER: StrategySpec = {
-  ...PRESET_MA20_WINNER,
-  id: 'ma15-high20-slow',
-  name: 'MA15 돌파×20일 신고가·느린 청산 (도전자)',
-  source: '2026-07-30 백테스트 14차 도전자 — 후반 알파 +55.9%p·MDD −26~−28% (다중비교 주의, 페이퍼 판정 중)',
-  entry: {
-    op: 'and',
-    nodes: [
-      { op: 'cond', id: '15일선돌파', cond: { kind: 'maCross', period: 15, dir: 'above' } },
-      { op: 'cond', id: '20일신고가', cond: { kind: 'highBreak', days: 20 } },
-    ],
-  },
-}
-
-// 17차 수익÷MDD 격자 탐색(2011~21 최적화 + 2022~ OOS)의 고원 후보 — 도전자에서 청산만 60일선으로 늦춘 변형.
-const PRESET_MA15_MAR: StrategySpec = {
-  ...PRESET_MA20_WINNER,
-  id: 'ma15-high20-slow60',
-  name: 'MA15×신고가→60일선·버퍼2% (수익÷MDD 후보)',
-  source:
-    '2026-07-31 백테스트 17차 — 2011~21 수익÷MDD 최적화 2위·OOS(2022~) 1위. 곡선맞춤 위험 상존, 페이퍼 ma15x60 트랙으로 판정 중',
-  entry: PRESET_MA15_CHALLENGER.entry,
-  exits: [{ kind: 'maBreak', maPeriod: 60, pct: 2 }],
-}
-
-// 위 승자에 거래량 급증을 얹은 방어 변형 — 알파는 조금 낮고 MDD가 얕다(−22→−19%), 매매도 감소.
-const PRESET_MA20_DEFENSIVE: StrategySpec = {
-  ...PRESET_MA20_WINNER,
-  id: 'ma20-surge-high20-slow',
-  name: 'MA20×급증×신고가·느린 청산 (방어형)',
-  source: '2026-07-30 백테스트 6차 — 승자 변형: MDD 얕음(−18~21%)·매매 감소, 알파 소폭 하락',
-  entry: {
-    op: 'and',
-    nodes: [
-      { op: 'cond', id: '20일선돌파', cond: { kind: 'maCross', period: 20, dir: 'above' } },
-      { op: 'cond', id: '거래량급증', cond: { kind: 'volumeSurge', days: 20, ratio: 1.5 } },
-      { op: 'cond', id: '20일신고가', cond: { kind: 'highBreak', days: 20 } },
-    ],
-  },
-}
+/** 21차 탐색에서 수익÷MDD 1위였던 조합. 탐색 자체가 곡선맞춤이므로 "1위"를 실력으로 읽지 않는다. */
+const PRESET_PIT_TOP = pitPreset(
+  'pit-ma10-high20-slow60',
+  '21차 1위 — MA10×신고20→60선·버퍼2%',
+  '2026-08-02 21차 격자 탐색(연도별 상위 10+10 [추정] 유니버스) 수익÷MDD 1위 — 다중비교로 뽑은 1위라 과최적화 위험이 남아 있다',
+  10,
+)
 
 const PRESETS: { id: string; label: string; spec: StrategySpec }[] = [
-  { id: 'ma20-winner', label: 'MA20×신고가·느린 청산 (백테스트 승자)', spec: PRESET_MA20_WINNER },
-  { id: 'ma15-chal', label: 'MA15×신고가·느린 청산 (도전자 — 검증 중)', spec: PRESET_MA15_CHALLENGER },
-  { id: 'ma15-mar', label: 'MA15×신고가→60일선 (수익÷MDD 후보 — 17차)', spec: PRESET_MA15_MAR },
-  { id: 'ma20-def', label: 'MA20×급증×신고가 (방어형)', spec: PRESET_MA20_DEFENSIVE },
-  { id: 'heromoon', label: '급등주 5일선 돌파 (영웅문 조건식)', spec: HEROMOON_MOMENTUM },
-  { id: 'goblin', label: '5일선 기법 — 정배열+코스피 레짐', spec: PRESET_GOBLIN },
-  { id: 'best-u', label: '급증×신고가×버퍼 (5일선 계열 최적)', spec: PRESET_BEST_U },
+  { id: 'pit-base', label: '현행 기준선 MA15×신고20→60선·버퍼2%', spec: PRESET_PIT_BASE },
+  { id: 'pit-top', label: '21차 1위 MA10×신고20→60선·버퍼2%', spec: PRESET_PIT_TOP },
 ]
 
 function loadSaved(): Saved {
@@ -191,9 +131,7 @@ function loadSaved(): Saved {
     /* 손상 저장본은 기본값으로 */
   }
   return {
-    spec: HEROMOON_MOMENTUM,
-    symbolsText: DEFAULT_SYMBOLS,
-    range: '5y',
+    spec: PRESET_PIT_BASE,
     startDate: '',
     endDate: '',
     cost: DEFAULT_COST,
@@ -542,20 +480,9 @@ const fmtPctGrouped = (v: number, digits = 1) =>
 const fmtPp = (v: number, digits = 1) =>
   `${v >= 0 ? '+' : '−'}${Math.abs(v).toLocaleString('ko-KR', { minimumFractionDigits: digits, maximumFractionDigits: digits })}%p`
 
-/** 두 날짜 사이 연수 — 헤드리스 러너(scripts/spec-backtest)의 정의와 동일 */
-function yearsBetween(a: string, b: string): number {
-  return Math.max(1 / 365, (Date.parse(b) - Date.parse(a)) / (365.25 * 86400e3))
-}
-/** 연환산 수익률(%) — 누적배수와 연수로 계산 */
-function cagr(totalRatio: number, years: number): number {
-  return (Math.pow(Math.max(totalRatio, 1e-9), 1 / years) - 1) * 100
-}
-
 export function SpecSimulator() {
   const [saved] = useState(loadSaved)
   const [spec, setSpec] = useState<StrategySpec>(saved.spec)
-  const [symbolsText, setSymbolsText] = useState(saved.symbolsText)
-  const [range, setRange] = useState<HistoryRange>(saved.range)
   const [startDate, setStartDate] = useState(saved.startDate)
   const [endDate, setEndDate] = useState(saved.endDate ?? '')
   const [cost, setCost] = useState<CostSettings>(saved.cost)
@@ -566,14 +493,10 @@ export function SpecSimulator() {
   // 실행 중 생기는 안내는 **덮어쓰지 않고 쌓는다** — 예전엔 "로드 실패 종목" 안내가
   // 뒤이은 레짐 안내에 지워져 사용자가 못 보고 넘어갔다.
   const [notes, setNotes] = useState<string[]>([])
-  const [result, setResult] = useState<ConditionResult | null>(null)
-  const [benchPct, setBenchPct] = useState<number | null>(null)
-  const [benchEquity, setBenchEquity] = useState<Map<string, number> | null>(null)
+  /** 연도별 유니버스 연쇄 실행 결과 — 이 화면의 모든 수치가 여기서 나온다 */
+  const [result, setResult] = useState<PitChainResult | null>(null)
   /** 벤치마크가 실제로 존재한 구간 — 실행 구간보다 늦게 시작하면 알파가 과대평가된다 */
   const [benchSpan, setBenchSpan] = useState<{ start: string; end: string } | null>(null)
-  /** 결과 계산의 기준 자본 — **실행 시점 값을 고정**한다.
-   *  설정을 나중에 바꿔도 이미 나온 결과표의 수익률이 따라 흔들리면 안 된다. */
-  const [ranCapital, setRanCapital] = useState(saved.cost.initialCapital)
 
   const addNote = (m: string) => setNotes((prev) => (prev.includes(m) ? prev : [...prev, m]))
 
@@ -583,17 +506,18 @@ export function SpecSimulator() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify({ spec, symbolsText, range, startDate, endDate, cost } satisfies Saved))
+      localStorage.setItem(STORE_KEY, JSON.stringify({ spec, startDate, endDate, cost } satisfies Saved))
     } catch {
       /* 저장 실패는 치명적이지 않다 */
     }
-  }, [spec, symbolsText, range, startDate, endDate, cost])
+  }, [spec, startDate, endDate, cost])
 
   const flat = useMemo(() => asFlatAnd(spec.entry), [spec.entry])
-  const issues = useMemo(() => {
-    const symbols = symbolsText.split(',').map((s) => s.trim()).filter(Boolean)
-    return validateSpec({ ...spec, universe: { ...spec.universe, symbols } })
-  }, [spec, symbolsText])
+  // 종목 목록은 실행 시 그 해 유니버스로 주입되므로, 검증에는 대표로 첫 해 목록을 쓴다.
+  const issues = useMemo(
+    () => validateSpec({ ...spec, universe: { ...spec.universe, symbols: PIT_UNION } }),
+    [spec],
+  )
 
   /** 기간 입력 검증 — 실행 전에 막는다 */
   const dateError = useMemo(
@@ -624,23 +548,14 @@ export function SpecSimulator() {
   }, [])
   const dispSym = (sym?: string) => (sym ? displaySymbol(sym, nameMap) : '—')
 
-  // 시총 상위 원클릭 — 5분봉 크론이 매일 실측으로 갱신하는 랭킹 목록(index.json)에서 가져온다
-  async function loadTopSymbols(kind: 'kospi20' | 'kospi40' | 'all') {
-    try {
-      const res = await fetch(`${import.meta.env.BASE_URL}data/intraday/index.json`)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const idx = (await res.json()) as { symbols?: Record<string, unknown> }
-      const syms = Object.keys(idx.symbols ?? {}).filter((s) => !ETF_SYMBOLS.has(s))
-      const ks = syms.filter((s) => s.endsWith('.KS'))
-      const pick = kind === 'kospi20' ? ks.slice(0, 20) : kind === 'kospi40' ? ks.slice(0, 40) : syms
-      if (pick.length === 0) throw new Error('목록이 비어 있습니다')
-      setSymbolsText(pick.join(', '))
-      setNotes([`시총 상위 목록 적용: ${pick.length}종목 (크론이 매일 갱신하는 실측 랭킹)`])
-    } catch (e) {
-      setNotes([`⚠️ 시총 랭킹 목록 로드 실패: ${e instanceof Error ? e.message : String(e)}`])
-    }
-  }
-
+  /**
+   * 실행 — 전 연도 합집합(67종목) 시세를 한 번만 받아 연도별 유니버스 연쇄 백테스트를 돌린다.
+   *
+   * 심볼 매핑: 유니버스 목록은 6자리 코드다. Yahoo는 시장 접미사를 요구하므로 `.KS`를 먼저
+   * 시도하고 실패(또는 빈 응답)하면 `.KQ`로 폴백한다 — 카카오·셀트리온처럼 코스닥에서
+   * 코스피로 옮겨간 종목도 한쪽에서는 잡힌다. 두 쪽 다 실패하면 상장폐지 등으로 가격이
+   * 없는 종목이며, 그 해 매핑률에 그대로 드러난다(생존편향을 숨기지 않는다).
+   */
   async function run() {
     if (busy) return // 중복 클릭 방어 (버튼 disabled와 이중 잠금)
     setBusy(true)
@@ -648,96 +563,94 @@ export function SpecSimulator() {
     setNotes([])
     try {
       if (dateError) throw new Error(dateError)
-      const symbols = symbolsText.split(',').map((s) => s.trim()).filter(Boolean)
-      if (symbols.length === 0) throw new Error('표본 종목이 비어 있습니다')
+      const codes = PIT_UNION
       const histories: Record<string, DailyBar[]> = {}
+      /** 유니버스 코드 → 실제로 시세를 받은 심볼 */
+      const symOf: Record<string, string> = {}
       const failed: string[] = []
-      // 병렬 로딩 — 순차(80회 왕복 직렬)가 시뮬 체감 지연의 주범이었다. 동시 6개:
+      // 병렬 로딩 — 순차(67회 왕복 직렬)가 시뮬 체감 지연의 주범이었다. 동시 6개:
       // 공용 CORS 프록시의 유량 제한을 넘지 않는 선에서 벽시계 시간을 ~1/6로 줄인다.
+      // 범위는 'max' 고정 — 유니버스가 2000년부터라 5y·10y로는 앞 구간이 통째로 빈다.
       {
         let done = 0
-        setProgress(`시세 로딩 0/${symbols.length}…`)
-        const queue = [...symbols]
+        setProgress(`시세 로딩 0/${codes.length}…`)
+        const queue = [...codes]
         const CONCURRENCY = 6
         const worker = async () => {
           for (;;) {
-            const sym = queue.shift()
-            if (!sym) return
-            try {
-              const h = await getDailyHistory(sym, range)
-              if (h.bars.length > 0) histories[sym] = h.bars
-              else failed.push(sym)
-            } catch {
-              failed.push(sym)
+            const code = queue.shift()
+            if (!code) return
+            for (const suffix of ['.KS', '.KQ']) {
+              const sym = `${code}${suffix}`
+              try {
+                const h = await getDailyHistory(sym, 'max')
+                if (h.bars.length > 0) {
+                  histories[sym] = h.bars
+                  symOf[code] = sym
+                  break
+                }
+              } catch {
+                /* 다음 접미사 시도 */
+              }
             }
+            if (!symOf[code]) failed.push(code)
             done++
-            setProgress(`시세 로딩 ${done}/${symbols.length}…`)
+            setProgress(`시세 로딩 ${done}/${codes.length}…`)
           }
         }
         await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker))
       }
-      const okCount = Object.keys(histories).length
+      const okCount = Object.keys(symOf).length
       if (okCount === 0) throw new Error('시세를 하나도 받지 못했습니다 — 네트워크/프록시 상태를 확인하세요')
-      if (failed.length) addNote(`⚠️ 로드 실패로 제외: ${failed.join(', ')} (${okCount}종목으로 실행)`)
+      if (failed.length)
+        addNote(
+          `⚠️ 가격 없음(상장폐지 등)으로 제외: ${failed.join(', ')} — ${okCount}/${codes.length}종목으로 실행합니다. 빠진 종목은 대부분 그 시절 상위였다가 사라진 회사라, 성적이 실제보다 후하게 나옵니다(생존편향 잔존).`,
+        )
 
       // 레짐 게이트가 있으면 지수 시세도 필요하다 (매매 대상 아님 — 판정 전용)
+      const extraSymbols: string[] = []
       if (spec.regime) {
         setProgress(`레짐 지수(${spec.regime.symbol}) 로딩…`)
         try {
-          const rh = await getDailyHistory(spec.regime.symbol, range)
-          if (rh.bars.length > 0) histories[spec.regime.symbol] = rh.bars
-          else addNote('⚠️ 레짐 지수 데이터가 비어 있습니다 — 진입이 발생하지 않습니다')
+          const rh = await getDailyHistory(spec.regime.symbol, 'max')
+          if (rh.bars.length > 0) {
+            histories[spec.regime.symbol] = rh.bars
+            extraSymbols.push(spec.regime.symbol)
+          } else addNote('⚠️ 레짐 지수 데이터가 비어 있습니다 — 진입이 발생하지 않습니다')
         } catch {
           addNote('⚠️ 레짐 지수 로드 실패 — 진입이 발생하지 않습니다 (레짐을 "없음"으로 바꾸거나 재시도)')
         }
       }
 
-      // 종료일 절단 — **엔진은 건드리지 않고 입력 봉만 자른다**(헤드리스 러너와 같은 방식).
-      // 규칙 1(미래참조 금지)의 절단 불변성과 같은 조작이라, 잘라낸 구간 이전 결과는
-      // 자르지 않은 실행과 동일해야 한다.
-      if (endDate) {
-        for (const s of Object.keys(histories)) {
-          const cut = histories[s].filter((b) => b.date <= endDate)
-          if (cut.length === 0) delete histories[s]
-          else histories[s] = cut
-        }
-        const left = Object.keys(histories).filter((s) => s !== spec.regime?.symbol)
-        if (left.length === 0) throw new Error(`종료일(${endDate}) 이전 데이터가 없습니다 — 기간을 다시 확인하세요`)
-        if (left.length < okCount) addNote(`⚠️ 종료일 이전 데이터가 없어 제외된 종목이 있습니다 (${left.length}종목으로 실행)`)
-      }
-
-      setProgress('백테스트 실행…')
-      const tradable = Object.keys(histories).filter((s) => s !== spec.regime?.symbol)
-      const effective: StrategySpec = { ...spec, universe: { ...spec.universe, symbols: tradable } }
-      const res = runStrategySpec(histories, startDate || '0000-00-00', effective, cost)
-      setResult(res)
-      setRanCapital(cost.initialCapital)
-      setTradesPage(0) // 새 실행마다 1페이지부터
-
-      // 벤치마크 — 같은 구간 KODEX 200 단순보유 (규칙 5: 판정은 알파 기준).
-      // res.startDate/endDate는 위에서 잘라낸 봉으로 만든 달력의 양끝이므로,
-      // 종료일을 지정하면 벤치마크·알파도 자동으로 같은 구간으로 잘린다.
+      // 벤치마크 — 같은 연말 경계로 연쇄한 KODEX 200 단순보유 (규칙 5: 판정은 알파 기준)
       setProgress('벤치마크 로딩…')
+      let bench: DailyBar[] | undefined
       try {
-        const bench = await getDailyHistory(BENCH_SYMBOL, range)
-        const inRange = bench.bars.filter((b) => b.date >= res.startDate && b.date <= res.endDate)
-        if (inRange.length >= 2) {
-          const first = inRange[0].c
-          setBenchPct((inRange[inRange.length - 1].c / first - 1) * 100)
-          const m = new Map<string, number>()
-          for (const b of inRange) m.set(b.date, (b.c / first) * cost.initialCapital)
-          setBenchEquity(m)
-          setBenchSpan({ start: inRange[0].date, end: inRange[inRange.length - 1].date })
-        } else {
-          setBenchPct(null)
-          setBenchEquity(null)
-          setBenchSpan(null)
-        }
+        const b = await getDailyHistory(BENCH_SYMBOL, 'max')
+        if (b.bars.length >= 2) {
+          bench = b.bars
+          setBenchSpan({ start: b.bars[0].date, end: b.bars[b.bars.length - 1].date })
+        } else setBenchSpan(null)
       } catch {
-        setBenchPct(null)
-        setBenchEquity(null)
         setBenchSpan(null)
+        addNote('⚠️ 벤치마크(KODEX 200) 로드 실패 — 알파를 계산할 수 없습니다')
       }
+
+      setProgress('연도별 유니버스 연쇄 백테스트 실행…')
+      const chained = runPitChained(
+        histories,
+        (symbols) => ({ ...spec, universe: { ...spec.universe, symbols } }),
+        cost,
+        { resolve: (code) => symOf[code], startDate, endDate, bench, extraSymbols },
+      )
+      if (chained.perYear.length === 0) throw new Error('실행할 연도가 없습니다 — 시작일·종료일을 확인하세요')
+      setResult(chained)
+      setTradesPage(0) // 새 실행마다 1페이지부터
+      const cashYears = chained.perYear.filter((r) => r.cash).map((r) => r.year)
+      if (cashYears.length)
+        addNote(
+          `표본 부족(매핑 5종목 미만)으로 현금 보유 처리한 해: ${cashYears.join(', ')} — 그 해는 매매하지 않고 자산을 그대로 이월했습니다.`,
+        )
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -746,43 +659,26 @@ export function SpecSimulator() {
     }
   }
 
-  // 벤치마크를 자산곡선에 겹친다 (표시용 — 엔진 결과는 그대로 둔다)
-  const chartEquity = useMemo(() => {
-    if (!result) return null
-    if (!benchEquity) return result.equity
-    let lastBench = ranCapital
-    return result.equity.map((p) => {
-      lastBench = benchEquity.get(p.date) ?? lastBench
-      return { ...p, benchmark: lastBench }
-    })
-  }, [result, benchEquity, ranCapital])
+  // 벤치마크는 연쇄 실행기가 같은 연말 경계로 이어붙여 이미 넣어 준다 — 여기서 다시 겹치지 않는다.
+  const chartEquity = result?.equity ?? null
 
   const summary = useMemo(() => {
     if (!result || result.equity.length === 0) return null
-    const finalEq = result.equity[result.equity.length - 1].equity
-    const totalPct = (finalEq / ranCapital - 1) * 100
-    const mdd = result.equity.reduce((m, e) => Math.min(m, e.drawdownPct), 0)
-    const closed = result.trades.filter((t) => t.exitDate != null)
-    const wins = closed.filter((t) => (t.pnlPct ?? 0) > 0).length
-    // 연환산 — 자산곡선 시작·끝 **날짜** 기준 (헤드리스 러너 stats()와 같은 정의).
-    // 총액 %만 보면 장기 구간에서 복리 착시가 생기고, 규칙 5의 판정 기준(연환산 알파)과 어긋난다.
-    const years = yearsBetween(result.startDate, result.endDate)
-    const cagrPct = cagr(finalEq / ranCapital, years)
-    const benchCagrPct = benchPct != null ? cagr(1 + benchPct / 100, years) : null
     return {
-      totalPct,
-      mdd,
-      years,
-      cagrPct,
-      benchCagrPct,
-      alphaCagrPct: benchCagrPct != null ? cagrPct - benchCagrPct : null,
-      alphaTotalPct: benchPct != null ? totalPct - benchPct : null,
-      tradeCount: closed.length,
-      winRate: closed.length ? (wins / closed.length) * 100 : null,
-      avgPnl: closed.length ? closed.reduce((s, t) => s + (t.pnlPct ?? 0), 0) / closed.length : null,
+      totalPct: result.totalPct,
+      mdd: result.mddPct,
+      objective: result.objective,
+      years: result.years,
+      cagrPct: result.cagrPct,
+      benchTotalPct: result.benchTotalPct,
+      benchCagrPct: result.benchCagrPct,
+      alphaCagrPct: result.alphaCagrPct,
+      alphaTotalPct: result.alphaTotalPct,
+      tradeCount: result.tradeCount,
+      winRate: result.winRate,
+      avgPnl: result.avgPnlPct,
     }
-  }, [result, ranCapital, benchPct])
-
+  }, [result])
   /** 벤치마크가 실행 구간보다 늦게 시작하면 그 이전 구간의 알파는 벤치 부재로 과대평가된다.
    *  휴장일 차이로 하루이틀 어긋나는 것까지 경고하면 노이즈라 30일 이상만 잡는다.
    *  (KODEX 200 시세는 실행 구간보다 늦게 시작할 수 있다 — 그 앞 구간은 비교 대상이 없다) */
@@ -832,7 +728,8 @@ export function SpecSimulator() {
       </div>
       <div className="panel-sub">
         영웅문 조건검색으로 찾은 조건식을 옮겨 적고 <strong>즉시 2차 검증</strong>합니다. 신호는 종가 판단 → 익일 시가
-        체결(미래참조 금지), 판정은 알파(벤치마크 대비) 기준.
+        체결(미래참조 금지), 판정은 알파(벤치마크 대비) 기준. 유니버스는{' '}
+        <strong>매년 그 해 시총 상위 10+10 [추정]</strong>으로 교체됩니다 — 종목을 고정할 수 없습니다(승자편향 제거).
       </div>
 
       {/* ---- 매수 조건 ---- */}
@@ -1041,14 +938,6 @@ export function SpecSimulator() {
           </select>
         </label>
         <label>
-          데이터
-          <select value={range} onChange={(e) => setRange(e.target.value as HistoryRange)}>
-            <option value="5y">5년</option>
-            <option value="10y">10년</option>
-            <option value="max">최대</option>
-          </select>
-        </label>
-        <label>
           시작일
           <input
             type="date"
@@ -1079,27 +968,17 @@ export function SpecSimulator() {
 
       <div className="bt-controls bt-settings">
         <label>
-          표본 종목 (쉼표 구분)
-          <InfoTip text="조건식을 검증할 표본입니다. 아래 버튼으로 시가총액 상위 목록(크론이 매일 실측 갱신)을 한 번에 넣을 수 있습니다. 전 종목이 아니라 표본이므로 '등락률 상위 N위'는 표본 내 순위로 계산되고, 상장폐지 종목이 빠진 표본은 성적을 부풀립니다(생존편향)." />
+          유니버스 (고정 불가)
+          <InfoTip text="종목을 직접 고르는 입력은 없앴습니다. 오늘 살아남은 대형주를 표본으로 고정하면 과거 성적이 크게 부풀려지기 때문입니다(승자편향 — 같은 조건식이 고정 80 표본에서 총 +42,103%, 연도별 그 해 상위 10+10에서 +841%). 매년 1월 1일에 그 해 유니버스로 교체하고, 그 해를 독립 실행한 뒤 연말 평가액을 다음 해 자본으로 이월합니다." />
         </label>
-        <div className="bt-actions">
-          <button type="button" className="bt-btn-mini" disabled={busy} onClick={() => loadTopSymbols('kospi20')}>
-            시총 상위: 코스피 20
-          </button>
-          <button type="button" className="bt-btn-mini" disabled={busy} onClick={() => loadTopSymbols('kospi40')}>
-            코스피 40
-          </button>
-          <button type="button" className="bt-btn-mini" disabled={busy} onClick={() => loadTopSymbols('all')}>
-            코스피+코스닥 78
-          </button>
+        <div className="bt-note" style={{ width: '100%' }}>
+          <strong>{UNIVERSE_LABEL}</strong> <span className="badge sample">[추정] 목록 · KRX 실측 아님</span>
+          <div style={{ marginTop: 4, fontSize: 12 }}>
+            매년 1/1 그 해 목록으로 교체 → 연 단위 독립 실행 → 연말 평가액 이월(연말 청산 근사). 상장폐지 종목은
+            가격이 없어 빠지므로 <strong>생존편향이 완전히 사라지지는 않습니다</strong> — 아래 연도별 표의 매핑률로
+            확인하세요. 매핑 5종목 미만인 해는 현금 보유로 처리합니다.
+          </div>
         </div>
-        <textarea
-          value={symbolsText}
-          onChange={(e) => setSymbolsText(e.target.value)}
-          rows={2}
-          style={{ width: '100%', fontFamily: 'monospace', fontSize: 12 }}
-          placeholder="000660.KS, 005930.KS, …"
-        />
         <div className="bt-controls bt-settings" style={{ padding: 0, border: 'none' }}>
           <label>
             수수료(%)
@@ -1197,7 +1076,7 @@ export function SpecSimulator() {
         <div className="bt-controls">
           <strong>
             스펙 JSON — 이 문서가 조건식의 정본입니다
-            <InfoTip text="시뮬레이터가 실행하는 것도, (미래에 대표 승인 후) 실시간 평가기가 실행하는 것도 이 JSON입니다. 복사해 두면 조건식을 잃지 않습니다. OR/NOT 트리·표본 지정 등 화면에 없는 고급 기능도 JSON으로 편집할 수 있습니다." />
+            <InfoTip text="시뮬레이터가 실행하는 것도, (미래에 대표 승인 후) 실시간 평가기가 실행하는 것도 이 JSON입니다. 복사해 두면 조건식을 잃지 않습니다. OR/NOT 트리 등 화면에 없는 고급 기능도 JSON으로 편집할 수 있습니다. 단 universe.symbols는 실행 시 그 해 유니버스로 덮어써지므로 여기서 종목을 고정할 수 없습니다." />
           </strong>
           <textarea
             value={jsonText}
@@ -1227,13 +1106,13 @@ export function SpecSimulator() {
               value={fmtPctGrouped(summary.totalPct)}
               unit={` · 연 ${fmtPct(summary.cagrPct)}`}
               changeText={
-                benchPct != null && summary.benchCagrPct != null
-                  ? `벤치마크(KODEX 200) 총 ${fmtPctGrouped(benchPct)} · 연 ${fmtPct(summary.benchCagrPct)}`
+                summary.benchTotalPct != null && summary.benchCagrPct != null
+                  ? `벤치마크(KODEX 200) 총 ${fmtPctGrouped(summary.benchTotalPct)} · 연 ${fmtPct(summary.benchCagrPct)}`
                   : '벤치마크 로드 실패'
               }
               changeLabel=""
-              direction={benchPct != null && summary.totalPct > benchPct ? 'up' : 'down'}
-              info="총액 %는 구간이 길수록 복리로 부풀어 보입니다 — 실제 체감은 연환산(CAGR)으로 보세요. 같은 구간 KODEX 200 단순보유와 비교하고, 장이 좋아 번 것은 실력으로 치지 않습니다(판정은 알파 기준)."
+              direction={summary.benchTotalPct != null && summary.totalPct > summary.benchTotalPct ? 'up' : 'down'}
+              info="연도별 유니버스를 갈아끼우며 연 단위로 이어붙인 누적 수익입니다. 총액 %는 구간이 길수록 복리로 부풀어 보이므로 실제 체감은 연환산(CAGR)으로 보세요. 벤치마크도 같은 연말 경계로 연쇄해 비교합니다."
             />
             <KpiCard
               label="초과수익(알파, 연환산)"
@@ -1256,13 +1135,21 @@ export function SpecSimulator() {
               changeText="고점 대비 최대 하락"
               changeLabel=""
               direction="flat"
-              info="수익률보다 먼저, 이 낙폭을 실제로 견딜 수 있는지 확인하세요."
+              info="연도별 곡선을 이어붙인 전체 기간 기준입니다. 수익률보다 먼저, 이 낙폭을 실제로 견딜 수 있는지 확인하세요."
+            />
+            <KpiCard
+              label="수익 ÷ MDD"
+              value={summary.objective != null ? summary.objective.toFixed(1) : '—'}
+              changeText="총수익% ÷ |MDD%|"
+              changeLabel=""
+              direction="flat"
+              info="같은 수익이라도 덜 아프게 번 쪽을 고르기 위한 보조 지표입니다. 이 값을 최대화하도록 조합을 고르는 행위 자체가 곡선맞춤이므로, 구간을 나눠도 값이 유지되는지 함께 보세요(규칙 5)."
             />
             <KpiCard
               label="승률 / 매매"
               value={summary.winRate != null ? `${summary.winRate.toFixed(0)}%` : '—'}
               unit={summary.tradeCount ? ` / ${summary.tradeCount}회` : ''}
-              changeText={`평균 손익 ${summary.avgPnl != null ? fmtPct(summary.avgPnl, 2) : '—'} · 미청산 ${result.openAtEnd}`}
+              changeText={`평균 손익 ${summary.avgPnl != null ? fmtPct(summary.avgPnl, 2) : '—'} · 연말 이월(미청산) ${result.openAtEnd}`}
               changeLabel=""
               direction="flat"
             />
@@ -1277,6 +1164,47 @@ export function SpecSimulator() {
           )}
 
           {chartEquity && <EquityChart equity={chartEquity} benchmarkLabel="KODEX 200 단순보유" />}
+
+          {/* 연도별 분해 — 몇 해에 몰려 번 것인지, 그 해 유니버스가 얼마나 채워졌는지 그대로 본다.
+              매핑률이 낮은 해는 상장폐지 종목이 빠진 만큼 성적이 후하게 나온다(생존편향 잔존). */}
+          {result.perYear.length > 0 && (
+            <div className="bt-table-wrap">
+              <div className="bt-chart-caption">
+                연도별 분해 — 매핑률(그 해 목록 중 가격이 있는 종목){' '}
+                {result.mappedAvgPct != null && <>· 평균 {result.mappedAvgPct.toFixed(0)}%</>} · 매핑률이 낮은 해일수록
+                생존편향이 크게 남습니다
+              </div>
+              <table>
+                <thead>
+                  <tr>
+                    <th>연도</th>
+                    <th>매핑률</th>
+                    <th>전략</th>
+                    <th>벤치(KODEX 200)</th>
+                    <th>초과</th>
+                    <th>매매</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.perYear.map((r) => (
+                    <tr key={r.year}>
+                      <td>{r.year}</td>
+                      <td>
+                        {r.mapped}/{r.total}
+                        {r.cash && <span className="badge sample" style={{ marginLeft: 4 }}>현금</span>}
+                      </td>
+                      <td className={r.strategyPct >= 0 ? 'pos' : 'neg'}>{fmtPct(r.strategyPct)}</td>
+                      <td className={(r.benchPct ?? 0) >= 0 ? 'pos' : 'neg'}>{r.benchPct != null ? fmtPct(r.benchPct) : '—'}</td>
+                      <td className={r.benchPct != null && r.strategyPct - r.benchPct >= 0 ? 'pos' : 'neg'}>
+                        {r.benchPct != null ? fmtPp(r.strategyPct - r.benchPct) : '—'}
+                      </td>
+                      <td>{r.trades}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
           {/* 매도 규칙별 발동 통계 */}
           {result.exitBreakdown.length > 0 && (
@@ -1400,11 +1328,15 @@ export function SpecSimulator() {
       )}
 
       <div className="bt-disclaimer">
-        시뮬레이션 전용 — 주문·실계좌·브로커 API와 연결되어 있지 않습니다. 표본 종목으로만 검증하므로 전 종목
-        조건검색과 결과가 다르며, 상장폐지 종목이 빠진 표본은 성적을 부풀립니다(생존편향). 데이터: Yahoo Finance
-        일봉(비공식 엔드포인트 · 정확성 미보증). 장중 조건(분봉)은 일봉 백테스트로 검증되지 않습니다. 백테스트
-        성적은 과최적화·체결 가정의 한계를 가지며 미래 수익을 보장하지 않습니다. 본 화면은 정보·참고용이며
-        투자자문이 아닙니다. 매수/매도 권유가 아니며 모든 투자 판단·손익 책임은 이용자 본인에게 있습니다.
+        유니버스는 <strong>각 해 연초 시가총액 상위 코스피10+코스닥10 [추정]</strong>입니다 — KRX 실측이 아니며
+        (Open API 키 등록 시 실측으로 대체 예정) 목록 자체가 틀렸을 수 있습니다. 상장폐지 종목은 가격 데이터가
+        없어 빠지므로 <strong>일부 생존편향이 잔존</strong>하고(연도별 매핑률 참조), 매년 말 평가액을 다음 해로
+        이월하는 <strong>연말 청산 근사</strong>가 들어갑니다. 시뮬레이션 전용 — 주문·실계좌·브로커 API와 연결되어
+        있지 않습니다. 전 종목이 아니라 연 20종목 표본이므로 실제 조건검색과 결과가 다릅니다. 데이터: Yahoo Finance
+        일봉(비공식 엔드포인트 · 정확성 미보증 · 환율 미반영). 장중 조건(분봉)은 일봉 백테스트로 검증되지 않습니다.
+        백테스트 성적은 과최적화·체결 가정의 한계를 가지며 미래 수익을 보장하지 않습니다. 손실 경로는 MDD 카드가
+        그 조합이 견뎌야 했던 최대 하락입니다. 본 화면은 정보·참고용이며 <strong>투자자문이 아닙니다</strong>.
+        매수/매도 권유가 아니며 모든 투자 판단·손익 책임은 이용자 본인에게 있습니다.
       </div>
     </div>
   )
