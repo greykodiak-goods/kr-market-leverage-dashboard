@@ -19,6 +19,10 @@
 // MODE=usxsmom80 — 같은 실험을 **미국 상위 80** 유니버스로(2026-08-02 대표 지시). 26차의
 //                  "연 20종목이라 분위가 묽다"는 한계가 원인이었는지를 상위 8 = 상위 10%로 재검증.
 // MODE=combo    — 기준선 + xsmom 반반 결합. 상관·낙폭 완화 폭을 잰다.
+// MODE=overlay  — 위 승자(B=XSM 상위5+게이트 · C=결합 50:50) **위에** 리스크 오버레이 4종을
+//                 얹어 수익÷MDD를 높일 수 있는지 본다(2026-08-02 대표 지시). 베이스 재탐색 없음 —
+//                 바뀌는 것은 노출뿐이다: 시장 레짐 게이트 · 변동성 타게팅 · 월중 크래시 스톱 ·
+//                 결합 역변동성 가중.
 //   판정 기준선은 셋 다 **MA25×신고10→80선**(23차 격자 수익÷MDD 1위)을 같은 유니버스·
 //   같은 비용으로 **재실행한** 수치다. 다른 표의 숫자를 옮겨 적지 않는다.
 //
@@ -1971,9 +1975,10 @@ export function verdictTable(rows: StratRow[]): number {
   return winners
 }
 
-export function perYearTable(rows: StratRow[]) {
+/** `title`은 한 모드가 계열별로 표를 나눠 찍을 때만 바꾼다(기본값 = 기존 모드 출력 그대로). */
+export function perYearTable(rows: StratRow[], title = '연도별 수익 분해 (거짓 매끈함 방지)') {
   log('')
-  log('## 연도별 수익 분해 (거짓 매끈함 방지)')
+  log(`## ${title}`)
   log(`| 연도 | ${rows.map((r) => r.label).join(' | ')} |`)
   log(`|---|${rows.map(() => '---').join('|')}|`)
   const years = rows[0].perYear.map((p) => p.y)
@@ -2114,6 +2119,25 @@ export interface RankSimOpts {
    * **현금**으로 남는다(아래 분모 고정 주석 참조). 없으면 게이트 없음.
    */
   keep?: (row: RankRow) => boolean
+  /**
+   * 리스크 오버레이 — 그 달의 **노출 비중** w∈[0,1] (MODE=overlay).
+   * 리밸런스일(월 첫 거래일)에만 읽어 슬롯 금액을 `eq×w/denom`으로 줄이고, 남는 몫은
+   * 현금으로 둔다. **분모(denom)는 건드리지 않는다** — 분모를 같이 줄이면 남은 종목에
+   * 레버리지를 거는 셈이라 A/B가 오염된다(게이트와 같은 이유). w=0이면 그 달은 슬리브
+   * 전체가 현금이다(시장 레짐 게이트). 상한 1 — 레버리지는 만들지 않는다.
+   *
+   * ⚠️ 규칙 1: 이 함수는 리밸런스일 **이전에 확정된** 정보만으로 값을 정해야 한다.
+   *    (호출부가 지키는 계약이며, `tests/overlay.test.ts`가 절단 불변성으로 집행한다.)
+   * 지정하지 않으면 슬롯 계산식 자체가 기존 경로 그대로다(골든 지문 불변).
+   */
+  exposure?: (date: string) => number
+  /**
+   * 월중 크래시 스톱 — 그 달 매수가(월초 시가) 대비 `stopPct`% 이탈하면 **그 슬롯만**
+   * 즉시 청산하고 다음 리밸런스까지 현금으로 둔다(다른 종목으로 메우지 않는다).
+   * 갭 관통 시 기준가가 아니라 **시가**로 체결한다 — 규칙 1-4, 유리한 쪽으로 가정하지 않는다.
+   * 없거나 0 이하면 스톱 없음.
+   */
+  stopPct?: number
 }
 
 /**
@@ -2136,6 +2160,9 @@ export function simulateRankYear(
   const book = newBook(cost.initialCapital)
   const equity: { date: string; equity: number }[] = []
   const fills: FillEvent[] = []
+  /** 크래시 스톱 기준가 = 그 달 매수가(월초 시가). 스톱이 꺼져 있으면 항상 비어 있다. */
+  const entryRef = new Map<string, number>()
+  const stopOn = (opts.stopPct ?? 0) > 0
   const closeAt = (date: string) => (s: string) => {
     const bi = idxOf[s]?.get(date)
     return bi != null ? histories[s][bi].c : null
@@ -2174,7 +2201,8 @@ export function simulateRankYear(
       const picked = ranked.slice(0, denom)
       const targets = opts.keep ? picked.filter(opts.keep) : picked
       const targetSet = new Set(targets.map((r) => r.sym))
-      const slot = eq / denom
+      // 오버레이가 없으면 식 자체가 예전 그대로다(부동소수점까지 동일 — 골든 지문 보호).
+      const slot = opts.exposure ? (eq * Math.min(1, Math.max(0, opts.exposure(date)))) / denom : eq / denom
 
       // 1) 목표 밖 전량 매도 (봉이 없으면 못 판다 — 다음 기회로 이월)
       for (const s of [...book.positions.keys()]) {
@@ -2198,6 +2226,38 @@ export function simulateRankYear(
         const budget = Math.min(slot - held * px, book.cash)
         if (budget <= 0) continue
         buy(r.sym, px, budget)
+      }
+      // 4) 크래시 스톱 기준가 갱신 — 이 달의 "매수가"는 **오늘 시가**다.
+      //    오늘 봉이 없어 손도 못 댄 종목은 지난달 기준가를 그대로 둔다(스톱을 꺼 주지 않는다).
+      if (stopOn) {
+        for (const s of [...entryRef.keys()]) if (!book.positions.has(s)) entryRef.delete(s)
+        for (const s of book.positions.keys()) {
+          const px = openPx.get(s)
+          if (px != null && px > 0) entryRef.set(s, px)
+        }
+      }
+    }
+    // ---- 월중 크래시 스톱 (규칙 1-4: 갭 관통은 시가로 체결) --------------------
+    //
+    // 스톱 주문은 그 달 리밸런스 시점에 이미 걸어 둔 조건부 주문이다 — 판단에 쓰는 값은
+    // 기준가(월초 시가)와 오늘 봉의 저가·시가뿐이고, 오늘 종가나 이후 봉은 보지 않는다.
+    // 리밸런스 당일에도 검사한다(시가에 샀으니 그날 장중 −X% 이탈이 실제로 가능하다).
+    if (stopOn && entryRef.size > 0) {
+      const th = 1 - opts.stopPct! / 100
+      for (const [s, ref] of [...entryRef]) {
+        const p = book.positions.get(s)
+        if (!p) {
+          entryRef.delete(s)
+          continue
+        }
+        const bi = idxOf[s]?.get(date)
+        if (bi == null) continue // 오늘 봉이 없으면 체결 자체가 불가 — 다음 기회로
+        const bar = histories[s][bi]
+        const stop = ref * th
+        if (!(bar.l <= stop)) continue
+        // 시가가 이미 기준선 아래로 갭 관통했으면 기준가가 아니라 **시가**(더 불리한 쪽)로 체결
+        sell(s, bar.o <= stop ? bar.o : stop, p.qty)
+        entryRef.delete(s)
       }
     }
     equity.push({ date, equity: bookMark(book, closeAt(date)) })
@@ -4154,6 +4214,527 @@ async function combo() {
 }
 
 // ============================================================================
+// MODE=overlay — 검증된 승자 위에 얹는 리스크 오버레이 4종
+// ============================================================================
+//
+// 2026-08-02 대표 지시: "지금 프리셋에 있는 조건들을 좀 더 개선해서 수익률/MDD 수치
+// 높일 수 없나?"
+//
+// 방침: **신규 계열을 더 파지 않는다.** 분자(수익)를 키우는 재탐색은 같은 데이터에
+// 변형을 더 던지는 일이라 곡선맞춤 위험이 그대로 커진다. 대신 이미 25·26차에서 검증이
+// 끝난 승자 두 개를 **베이스로 고정**하고, 분모(낙폭)를 깎는 오버레이만 얹는다.
+//
+//   B = XSM 상위5+게이트        (25차 승자 · 횡단면 모멘텀)
+//   C = 결합 50:50 (기준선 + B) (26차 승자 · 낙폭 완화형)
+//
+// 베이스는 **손대지 않는다** — 파라미터를 다시 고르는 순간 "오버레이의 효과"와
+// "재탐색의 이득"이 섞여 무엇이 개선했는지 알 수 없게 된다.
+//
+// ── 오버레이 4종 (총 변형 8개) ──────────────────────────────────────────────
+//   1. 시장 레짐 게이트(듀얼 모멘텀) — 벤치 모멘텀이 꺾인 달은 B 슬리브 전체를 현금.
+//      변형 2개: {12-1 모멘텀 음수, 10개월 이평 이탈}
+//   2. 변동성 타게팅 — 전략 자체의 직전 60일 실현 변동성이 목표를 넘으면 노출을
+//      목표/실현으로 축소. **상한 100%**(레버리지 금지). 목표 2개: {15%, 20%}
+//   3. 월중 크래시 스톱 — 월초 시가 대비 −X% 이탈한 슬롯만 월말까지 현금. X 2개: {15%, 20%}
+//   4. 결합 위험가중 — C의 50:50을 두 슬리브 6개월 실현 변동성 **역수 비례**로. 1개
+//      + C의 B 슬리브에 1번 게이트를 얹은 변형 1개.
+//
+//   각 오버레이는 베이스 위에 **하나씩만** 얹는다(조합 폭발 금지 — 오버레이를 겹치면
+//   변형 수가 곱으로 늘어 다중검정 위양성이 폭발한다).
+//
+// ── 판정 기준 (대표 지시 2026-08-02) ────────────────────────────────────────
+//   ① **수익÷MDD가 베이스보다 개선** ② 전·후반 **모두 알파 양(+)** ③ CAGR 하락 폭 명시.
+//   수익이 줄어도 비율이 크게 오르면 개선으로 본다 — 다만 **하락 폭을 숨기지 않는다.**
+//
+// ── 규칙 1(미래참조 금지) 준수 ─────────────────────────────────────────────
+//   · 레짐 판정: 12-1은 리밸런스 달의 **한 달 전 1일 직전** 종가까지만, 10개월 이평은
+//     리밸런스 달 **이전에 끝난** 달들의 월말 종가만 본다.
+//   · 변동성 타게팅: 노출은 **베이스 곡선의 직전 60거래일**(리밸런스일 미만) 일수익률
+//     표본표준편차로 정한다. 전 구간 표준편차를 쓰지 않는다(규칙 1-5).
+//   · 결합 위험가중: 가중은 리밸런스일 **미만** 인덱스의 직전 126거래일 수익률만 본다.
+//   · 크래시 스톱: 기준가는 그 달 시가, 판정은 그날 저가, 갭 관통은 **시가** 체결(규칙 1-4).
+//   · 집행자는 `tests/overlay.test.ts`의 절단 불변성 + 창 경계 조작 케이스다.
+//
+// ⚠️ 메모리: 변형 곡선은 요약·위기연도 스칼라를 뽑는 즉시 버린다. 끝까지 들고 있는 곡선은
+//    A·B·게이트B·C 넷뿐이다(2026-08-02 OOM 재발 방지).
+
+/** 오버레이가 얹히는 승자 B — 26차 결합과 **같은** 파라미터를 쓴다(베이스 고정). */
+export const OVERLAY_B: WfCand = COMBO_XSMOM
+/** 변동성 타게팅 목표(연환산 %) */
+export const OVL_VOL_TARGETS = [15, 20] as const
+/** 변동성 타게팅 관측창(거래일) */
+export const OVL_VOL_WIN = 60
+/** 월중 크래시 스톱 폭(%) */
+export const OVL_STOP_PCTS = [15, 20] as const
+/** 결합 위험가중 관측창(거래일 ≈ 6개월) */
+export const OVL_RP_WIN = 126
+/** 10개월 이평 레짐의 월 수 */
+export const OVL_MA_MONTHS = 10
+/** 벤치 시작 이전 구간을 메우는 레짐 폴백 지수 — 코스피 종합 */
+export const REGIME_FALLBACK = '^KS11'
+/** 위기 연도 — 오버레이가 정확히 언제 도움이 됐는지 보는 구간 */
+export const CRISIS_YEARS = [2008, 2020, 2022] as const
+
+// ---- 곡선 유틸 ---------------------------------------------------------------
+
+/** 곡선에서 `date` **미만**(strictly before)인 점의 개수 = 그 시점 확정 구간의 오른쪽 경계. */
+export function curveIdxBefore(curve: { date: string; equity: number }[], date: string): number {
+  let lo = 0
+  let hi = curve.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (curve[mid].date < date) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}
+
+/** 곡선에서 `date` **미만** 마지막 값. 없으면 null. (`valueAsOf`는 이하 — 여기선 미만이 필요하다) */
+export function valueBefore(curve: { date: string; equity: number }[], date: string): number | null {
+  const n = curveIdxBefore(curve, date)
+  return n > 0 ? curve[n - 1].equity : null
+}
+
+/** 월말 종가(그 달 마지막 값) 목록 — `ym` 오름차순. */
+export function monthEndCloses(curve: { date: string; equity: number }[]): { ym: string; close: number }[] {
+  const last = new Map<string, number>()
+  for (const p of curve) last.set(ymOf(p.date), p.equity)
+  return [...last.keys()].sort().map((ym) => ({ ym, close: last.get(ym)! }))
+}
+
+/**
+ * 일수익률 표본표준편차 — `vals`의 인덱스 `end` **미만**만, 최대 `win`개 수익률.
+ * 오른쪽 경계가 `end` 미만이라 판정일 당일 수익률은 들어가지 않는다(규칙 1).
+ * 표본이 `minN` 미만이면 null(= 사후지식 없이 기본값을 쓰라는 신호).
+ */
+export function stdevReturns(vals: number[], end: number, win: number, minN = 20): number | null {
+  const hi = Math.min(end, vals.length)
+  const lo = Math.max(1, hi - win)
+  const rets: number[] = []
+  for (let i = lo; i < hi; i++) {
+    const a = vals[i - 1]
+    if (a > 0) rets.push(vals[i] / a - 1)
+  }
+  if (rets.length < minN) return null
+  let mean = 0
+  for (const r of rets) mean += r
+  mean /= rets.length
+  let v = 0
+  for (const r of rets) v += (r - mean) * (r - mean)
+  v /= rets.length - 1
+  return Math.sqrt(v)
+}
+
+/** 연환산 실현 변동성(%). 거래일 252일 가정. 표본 부족이면 null. */
+export function realizedVolPct(vals: number[], end: number, win: number): number | null {
+  const sd = stdevReturns(vals, end, win)
+  return sd == null ? null : sd * Math.sqrt(252) * 100
+}
+
+// ---- 오버레이 1: 시장 레짐 게이트 --------------------------------------------
+
+/**
+ * 벤치 시작 이전 구간을 폴백 지수로 메운 **연속** 레짐 시계열.
+ * 두 지수의 레벨을 그냥 이어 붙이면 이음매에서 가짜 급등락이 생기므로, 앞 구간은
+ * 폴백의 **수익률만** 쓰고 이음매 값을 벤치 첫 값에 맞춘다(이음매 하루 수익 = 0).
+ * 폴백이 없거나 짧으면 벤치만 그대로 돌려준다.
+ */
+export function spliceRegimeCurve(primary: DailyBar[], fallback: DailyBar[]): { date: string; equity: number }[] {
+  const p = primary.filter((b) => b.c > 0)
+  const f = fallback.filter((b) => b.c > 0)
+  if (p.length < 2) return f.map((b) => ({ date: b.date, equity: b.c }))
+  if (f.length < 1) return p.map((b) => ({ date: b.date, equity: b.c }))
+  const cut = p[0].date
+  const head = f.filter((b) => b.date < cut)
+  if (head.length < 2) return p.map((b) => ({ date: b.date, equity: b.c }))
+  const scale = p[0].c / head[head.length - 1].c
+  const out = head.map((b) => ({ date: b.date, equity: b.c * scale }))
+  for (const b of p) out.push({ date: b.date, equity: b.c })
+  return out
+}
+
+/**
+ * 레짐 곡선의 12-1 모멘텀. `momentum12_1`과 **같은 창**이다(시작 = 12개월 전 달 1일 직전,
+ * 끝 = 1개월 전 달 1일 직전). 두 기준일이 모두 `date`보다 과거라 미래참조가 불가능하다.
+ */
+export function regimeMom12_1(curve: { date: string; equity: number }[], date: string): number | null {
+  const pe = valueBefore(curve, shiftMonthStart(date, -1))
+  const ps = valueBefore(curve, shiftMonthStart(date, -12))
+  if (pe == null || ps == null || !(ps > 0)) return null
+  return pe / ps - 1
+}
+
+/**
+ * 10개월 이평 레짐 — `date`가 속한 달 **이전에 끝난** 달들의 월말 종가만 본다.
+ * 마지막 월말 종가 > 직전 10개 월말 평균이면 위험선호(true). 표본 부족이면 null.
+ * 리밸런스 달의 진행 중인 월말은 아직 확정되지 않았으므로 창에서 뺀다(규칙 1-3와 같은 취지).
+ */
+export function regimeMaRiskOn(ends: { ym: string; close: number }[], ym: string, months: number): boolean | null {
+  const past = ends.filter((e) => e.ym < ym)
+  if (past.length < months) return null
+  const win = past.slice(-months)
+  let s = 0
+  for (const e of win) s += e.close
+  return win[win.length - 1].close > s / months
+}
+
+export type RegimeKind = 'mom12_1' | 'ma10m'
+
+/**
+ * 월별 노출 함수 — 위험선호 1 / 위험회피 0.
+ * **판정 불가(데이터 부족)면 1**이다. 사후지식 없이 기본값을 쓰는 원칙이며(워크포워드와
+ * 같은 취지), 초기 구간을 임의로 현금화해 성적을 만들지 않기 위해서다.
+ */
+export function makeRegimeExposure(
+  curve: { date: string; equity: number }[],
+  kind: RegimeKind,
+  months = OVL_MA_MONTHS,
+): (date: string) => number {
+  const ends = monthEndCloses(curve)
+  const memo = new Map<string, number>()
+  return (date: string) => {
+    const ym = ymOf(date)
+    const hit = memo.get(ym)
+    if (hit != null) return hit
+    let on: boolean | null
+    if (kind === 'mom12_1') {
+      // ym만으로 창이 결정된다 — 달 안 어느 거래일에 불려도 같은 값이다
+      const m = regimeMom12_1(curve, `${ym}-01`)
+      on = m == null ? null : m >= 0
+    } else {
+      on = regimeMaRiskOn(ends, ym, months)
+    }
+    const w = on === false ? 0 : 1
+    memo.set(ym, w)
+    return w
+  }
+}
+
+// ---- 오버레이 2: 변동성 타게팅 ------------------------------------------------
+
+/**
+ * 노출 = min(1, 목표변동성 / 실현변동성). 실현이 목표 이하면 그대로 1이다 —
+ * **레버리지를 만들지 않는다**(목표/실현 > 1인 구간에서 노출을 1보다 키우면 그건
+ * 다른 전략이지 리스크 오버레이가 아니다).
+ *
+ * 실현 변동성은 **베이스(무보정) 곡선**에서 잰다. 축소된 곡선에서 재면 자기 자신을
+ * 참조하는 순환이 되고, 실무에서도 "기초자산의 변동성을 재서 포지션을 줄인다"가 표준이다.
+ * 베이스 곡선은 시장 데이터의 결정적 함수이며 리밸런스일 **미만** 구간만 읽으므로
+ * 절단 불변성이 유지된다(2패스 구조 — 1패스로 베이스, 2패스로 축소본).
+ */
+export function makeVolTargetExposure(
+  base: { date: string; equity: number }[],
+  targetPct: number,
+  win = OVL_VOL_WIN,
+): (date: string) => number {
+  const vals = base.map((p) => p.equity)
+  const memo = new Map<string, number>()
+  return (date: string) => {
+    const hit = memo.get(date)
+    if (hit != null) return hit
+    const rv = realizedVolPct(vals, curveIdxBefore(base, date), win)
+    const w = rv == null || !(rv > targetPct) ? 1 : targetPct / rv
+    memo.set(date, w)
+    return w
+  }
+}
+
+// ---- 오버레이 4: 결합 위험가중 (역변동성) -------------------------------------
+
+/**
+ * 역변동성 가중 wA — 두 슬리브의 직전 `win` 거래일 실현 변동성 역수 비례.
+ * 창은 인덱스 `i` **미만**만 보므로 리밸런스일 당일 수익률이 들어가지 않는다.
+ * 한쪽이라도 표본이 모자라면 **0.5**(= 사후지식 없는 기본값 = 기존 50:50).
+ */
+export function invVolWeight(ea: number[], eb: number[], i: number, win: number): number {
+  const sa = stdevReturns(ea, i, win)
+  const sb = stdevReturns(eb, i, win)
+  if (sa == null || sb == null || !(sa > 0) || !(sb > 0)) return 0.5
+  const ia = 1 / sa
+  const ib = 1 / sb
+  return ia / (ia + ib)
+}
+
+/**
+ * 월 첫 거래일마다 가중을 **역변동성 비례**로 다시 잡는 결합.
+ * `blendMonthlyRebalanced`와 뼈대가 같고 가중만 고정 → 동적으로 바뀐 것이다.
+ * 가중은 항상 합 1이고 둘 다 0~1이라 레버리지가 생길 수 없다.
+ * 반환 곡선은 시작 1.0 배수다.
+ */
+export function blendRiskParity(
+  a: { date: string; equity: number }[],
+  b: { date: string; equity: number }[],
+  win = OVL_RP_WIN,
+): { date: string; equity: number }[] {
+  const { dates, ea, eb } = alignCurves(a, b)
+  if (dates.length < 1) return []
+  let wA = 0.5
+  let vA = wA
+  let vB = 1 - wA
+  const out: number[] = [vA + vB]
+  let curYm = ymOf(dates[0])
+  for (let i = 1; i < dates.length; i++) {
+    const ym = ymOf(dates[i])
+    if (ym !== curYm) {
+      curYm = ym
+      wA = invVolWeight(ea, eb, i, win)
+      const v = vA + vB
+      vA = v * wA
+      vB = v * (1 - wA)
+    }
+    const ra = ea[i - 1] > 0 ? ea[i] / ea[i - 1] : 1
+    const rb = eb[i - 1] > 0 ? eb[i] / eb[i - 1] : 1
+    vA *= ra
+    vB *= rb
+    out.push(vA + vB)
+  }
+  return dates.map((date, i) => ({ date, equity: out[i] }))
+}
+
+// ---- 위기 연도 · 판정 표 -------------------------------------------------------
+
+export interface CrisisStat {
+  y: number
+  /** 그 해 수익(%) — **곡선 기준**(연말 청산비용 근사 미반영) */
+  ret: number | null
+  /** 그 해 안의 고점 대비 최대 낙폭(%) */
+  mdd: number | null
+}
+
+/** 위기 연도 스칼라만 뽑는다 — 뽑고 나면 곡선은 버려도 된다(메모리). */
+export function crisisStats(
+  curve: { date: string; equity: number }[],
+  years: readonly number[] = CRISIS_YEARS,
+): CrisisStat[] {
+  return years.map((y) => {
+    const has = curve.some((p) => yearOf(p.date) === y)
+    if (!has) return { y, ret: null, mdd: null }
+    const end = valueAsOf(curve, `${y}-12-31`)
+    const prev = valueAsOf(curve, `${y - 1}-12-31`) ?? curve[0].equity
+    const ret = end != null && prev != null && prev > 0 ? (end / prev - 1) * 100 : null
+    return { y, ret, mdd: yearMaxDrawdown(curve, y) }
+  })
+}
+
+export function crisisTable(rows: { label: string; crisis: CrisisStat[] }[], years: readonly number[] = CRISIS_YEARS) {
+  log('')
+  log('## 위기 연도 해부 — 오버레이가 **언제** 도움이 됐나')
+  log(`| 곡선 | ${years.map((y) => `${y} 수익 | ${y} 연중MDD`).join(' | ')} |`)
+  log(`|---|${years.map(() => '---|---').join('|')}|`)
+  for (const r of rows) {
+    const cells = r.crisis
+      .map((cs) => `${cs.ret != null ? `${f1(cs.ret)}%` : '—'} | ${cs.mdd != null ? `${f1(cs.mdd)}%` : '—'}`)
+      .join(' | ')
+    log(`| ${r.label} | ${cells} |`)
+  }
+  log('연중MDD는 **그 해 안의** 고점 기준이라 전 구간 MDD와 다르다(위기의 국소 깊이를 본다).')
+  log('연수익은 곡선 기준이라 연말 청산비용 근사가 빠져 있다 — 연도별 분해표와 소수점이 다를 수 있다.')
+}
+
+/**
+ * 오버레이 판정 — 대표 지시 기준 3항.
+ *   ① 수익÷MDD가 베이스보다 개선  ② 전·후반 **모두** 알파 양(+)  ③ CAGR 하락 폭 명시
+ * 수익이 줄어도 비율이 크게 오르면 개선이다. **하락 폭은 열로 항상 드러낸다.**
+ * 채택된 변형 수를 돌려준다.
+ */
+export function overlayVerdictTable(base: StratRow, rows: StratRow[]): number {
+  log('')
+  log(`## 판정 — 베이스 \`${base.label}\` 대비 (기준: 수익÷MDD 개선 + 전·후반 알파 양수)`)
+  log('| 변형 | 수익÷MDD | Δ비율 | MDD | ΔMDD | CAGR | **ΔCAGR** | 전반 알파 | 후반 알파 | 판정 |')
+  log('|---|---|---|---|---|---|---|---|---|---|')
+  let adopted = 0
+  for (const r of rows) {
+    const objUp = base.full.obj != null && r.full.obj != null && r.full.obj > base.full.obj
+    const alphaOk = (r.alphaA ?? -1) > 0 && (r.alphaB ?? -1) > 0
+    const ok = objUp && alphaOk
+    if (ok) adopted++
+    const dObj = base.full.obj != null && r.full.obj != null ? f1(r.full.obj - base.full.obj) : '—'
+    log(
+      `| ${r.label} | ${r.full.obj?.toFixed(1) ?? '—'} | ${dObj} | ${f1(r.full.mdd)}% | ` +
+        `${f1(r.full.mdd - base.full.mdd)}%p | ${f1(r.full.cagr)}% | ${f1(r.full.cagr - base.full.cagr)}%p | ` +
+        `${pctOrDash(r.alphaA)} | ${pctOrDash(r.alphaB)} | ${ok ? '✅' : objUp ? '△ 비율만' : '❌'} |`,
+    )
+  }
+  log('△ = 수익÷MDD는 올랐지만 전·후반 알파 조건을 못 채운 것. 비율만 보고 채택하면 규칙 5 위반이다.')
+  log('**ΔCAGR이 음수인 변형은 수익을 깎아 낙폭을 산 것이다** — 그 값을 보고도 받아들일 수 있어야 채택이다.')
+  return adopted
+}
+
+/** 오버레이 전용 다중검정 경고 — 판정 기준이 달라 기존 노트를 그대로 쓸 수 없다. */
+function overlayMultipleTestingNote(n: number, adopted: number) {
+  log('')
+  log('## 다중검정 경고')
+  log(`같은 데이터에 오버레이 변형 ${n}개를 얹어 베이스와 비교했고, 그중 ${adopted}개가 판정 기준을 통과했다.`)
+  log('오버레이는 **베이스를 재탐색하지 않는다**는 점에서 신규 계열 발굴보다 위양성 위험이 작지만,')
+  log('그렇다고 0은 아니다 — 목표 변동성 15/20, 스톱 15/20처럼 파라미터를 2개씩만 둔 것도 그 때문이다.')
+  if (adopted === 0)
+    log('통과가 0개면 다중검정을 따질 것도 없다 — 이 오버레이들은 이 데이터에서 베이스를 개선하지 못했다.')
+  else
+    log(
+      `순수 우연이라도 한 변형이 두 구간 모두 알파 양수일 확률을 ≈25%로 보면, ${n}개 중 ${adopted}개 이상이 ` +
+        `그럴 확률은 약 ${(binomTail(n, adopted, 0.25) * 100).toFixed(0)}%다 — 이 값이 크면 표본 잡음이다.`,
+    )
+  log('⚠️ **사후선택 경고**: 여기서 가장 좋아 보이는 변형 하나를 골라 프리셋에 올리는 순간, 그 선택 자체가')
+  log('   곡선맞춤이다. 채택하려면 ① 판정 3항을 다 만족하고 ② 위기 연도 표에서 도움이 된 시점이 설명되며')
+  log('   ③ 파라미터 이웃값(15↔20)에서도 방향이 같아야 한다 — 한쪽만 좋으면 그건 고원이 아니라 봉우리다.')
+}
+
+async function overlay() {
+  log('# MODE=overlay — 승자 전략에 리스크 오버레이를 얹어 수익÷MDD를 높일 수 있는가')
+  log('')
+  log('대표 지시(2026-08-02): "지금 프리셋에 있는 조건들을 좀 더 개선해서 수익률/MDD 수치 높일 수 없나?"')
+  log('')
+  log('**베이스는 손대지 않는다.** 파라미터를 다시 고르면 "오버레이의 효과"와 "재탐색의 이득"이 섞여')
+  log('무엇이 개선했는지 알 수 없게 된다. 여기서 바뀌는 것은 **노출(얼마나 담느냐)뿐**이고,')
+  log('종목 선택 규칙은 25·26차 승자 그대로다.')
+  log('')
+  log(`· B = XSM ${wfLabel(OVERLAY_B)} (25차 승자)`)
+  log(`· C = 결합 50:50 (${BASELINE_LABEL} + B) (26차 승자)`)
+  log('')
+  const { years, histories, bench } = await loadPitHistories()
+  const yearly = buildYearly(histories, years)
+  if (yearly.every((v) => v.syms.length < 5)) {
+    log('❌ 시세 로드 실패로 실행할 해가 없다 — 중단')
+    return
+  }
+  const benchEq = benchCurve(bench)
+  log(`연도별 매핑률: ${yearly.map((v) => `${v.y} ${v.mapped}`).join(' · ')}`)
+
+  // ---- 레짐 시계열 (벤치 + 폴백) ---------------------------------------------
+  let regime = benchEq
+  let usedFallback = false
+  let regimeNote = `${BENCH} 단독 (${bench[0]?.date ?? '—'} 시작 — 그 이전 달은 판정 불가 = 게이트 미작동)`
+  try {
+    const ks = await fetchDaily(REGIME_FALLBACK, 'since:1999-01-01')
+    const spliced = spliceRegimeCurve(bench, ks)
+    if (spliced.length > benchEq.length) {
+      regime = spliced
+      usedFallback = true
+      regimeNote =
+        `${BENCH} + ${REGIME_FALLBACK}(코스피 종합) 폴백 — ${bench[0]?.date ?? '—'} 이전 구간은 ` +
+        `${REGIME_FALLBACK}의 **수익률만** 이어 붙였다(이음매 레벨 정합, 하루 수익 0 삽입).`
+    }
+  } catch (e) {
+    log(`⚠️ ${REGIME_FALLBACK} 로드 실패 — 레짐은 벤치 구간만으로 판정한다 (${String(e)})`)
+  }
+  log(`레짐 판정 시계열: ${regimeNote}`)
+  if (usedFallback)
+    log(`⚠️ ${REGIME_FALLBACK}는 가격지수라 배당이 빠져 있다 — 레짐 **방향** 판정에만 쓰고 수익 계산에는 쓰지 않는다.`)
+
+  // ---- 베이스 두 개 -----------------------------------------------------------
+  const chainA = runSpecChain(yearly, baselineSpec, COST)
+  const chainB = runCustomChain(
+    yearly,
+    (v) => simulateXsMomYear(v.hist, `${v.y}-01-01`, v.syms, COST, OVERLAY_B),
+    COST,
+    OVERLAY_B.slots,
+  )
+  const curveC = blendCurves(chainA.equity, chainB.equity, 0.5)
+
+  /** B 위에 오버레이 옵션만 갈아 끼워 같은 연쇄로 돌린다 — 랭킹·게이트·슬롯은 그대로. */
+  const runB = (extra: { exposure?: (date: string) => number; stopPct?: number }) =>
+    runCustomChain(
+      yearly,
+      (v) =>
+        simulateRankYear(v.hist, `${v.y}-01-01`, v.syms, COST, {
+          slots: OVERLAY_B.slots,
+          rank: xsmomRank,
+          keep: (r) => r.aux >= 0,
+          ...extra,
+        }),
+      COST,
+      OVERLAY_B.slots,
+    )
+
+  const baseB = summarizeStrat(`B 베이스 · XSM ${wfLabel(OVERLAY_B)}`, chainB, benchEq)
+  const baseC = curveStrat('C 베이스 · 결합 50:50', curveC, benchEq, years)
+  const crisis: { label: string; crisis: CrisisStat[] }[] = [
+    { label: baseB.label, crisis: crisisStats(chainB.equity) },
+    { label: baseC.label, crisis: crisisStats(curveC) },
+  ]
+
+  // ---- 오버레이 1: 시장 레짐 게이트 -------------------------------------------
+  const bRows: StratRow[] = []
+  const gateChain = runB({ exposure: makeRegimeExposure(regime, 'mom12_1') })
+  const gRow = summarizeStrat('B+G1 시장게이트(12-1 모멘텀 음수 → 현금)', gateChain, benchEq)
+  bRows.push(gRow)
+  crisis.push({ label: gRow.label, crisis: crisisStats(gateChain.equity) })
+  {
+    const ch = runB({ exposure: makeRegimeExposure(regime, 'ma10m') })
+    bRows.push(summarizeStrat(`B+G2 시장게이트(${OVL_MA_MONTHS}개월 이평 이탈 → 현금)`, ch, benchEq))
+    crisis.push({ label: bRows[bRows.length - 1].label, crisis: crisisStats(ch.equity) })
+  }
+
+  // ---- 오버레이 2: 변동성 타게팅 ----------------------------------------------
+  for (const t of OVL_VOL_TARGETS) {
+    const ch = runB({ exposure: makeVolTargetExposure(chainB.equity, t) })
+    bRows.push(summarizeStrat(`B+V${t} 변동성 타게팅 목표 ${t}% (${OVL_VOL_WIN}일 창)`, ch, benchEq))
+    crisis.push({ label: bRows[bRows.length - 1].label, crisis: crisisStats(ch.equity) })
+  }
+
+  // ---- 오버레이 3: 월중 크래시 스톱 -------------------------------------------
+  for (const x of OVL_STOP_PCTS) {
+    const ch = runB({ stopPct: x })
+    bRows.push(summarizeStrat(`B+S${x} 월중 크래시 스톱 −${x}%`, ch, benchEq))
+    crisis.push({ label: bRows[bRows.length - 1].label, crisis: crisisStats(ch.equity) })
+  }
+
+  // ---- 오버레이 4: 결합 위험가중 · 결합 게이트 --------------------------------
+  const cRows: StratRow[] = []
+  {
+    const rp = blendRiskParity(chainA.equity, chainB.equity)
+    cRows.push(curveStrat(`C+RP 결합 역변동성 가중 (${OVL_RP_WIN}거래일 ≈ 6개월)`, rp, benchEq, years))
+    crisis.push({ label: cRows[0].label, crisis: crisisStats(rp) })
+  }
+  {
+    const cg = blendCurves(chainA.equity, gateChain.equity, 0.5)
+    cRows.push(curveStrat('C+G1 결합 50:50 (B 슬리브에 시장게이트 12-1)', cg, benchEq, years))
+    crisis.push({ label: cRows[1].label, crisis: crisisStats(cg) })
+  }
+
+  // ---- 표 ---------------------------------------------------------------------
+  const perfA = perfOf(chainA.equity)
+  log('')
+  log('## 성적 — 베이스 vs 오버레이 변형')
+  stratTable([baseB, ...bRows, baseC, ...cRows])
+  log('')
+  log(
+    `참고: 결합의 다른 한쪽인 A 단독(${BASELINE_LABEL}) = 총 ${f1(perfA.total)}% · CAGR ${f1(perfA.cagr)}% · ` +
+      `MDD ${f1(perfA.mdd)}% · 수익÷MDD ${perfA.obj?.toFixed(1) ?? '—'}.`,
+  )
+  log('※ 결합 행(C 계열)의 "매매·승률"이 0/—인 것은 매매가 없다는 뜻이 아니라 두 슬리브 곡선의 합성이라')
+  log('  매매 원장이 한쪽에 귀속되지 않기 때문이다(26차와 같은 이유).')
+
+  const adoptedB = overlayVerdictTable(baseB, bRows)
+  const adoptedC = overlayVerdictTable(baseC, cRows)
+  crisisTable(crisis)
+
+  perYearTable([baseB, ...bRows], '연도별 수익 분해 — B 계열 (거짓 매끈함 방지)')
+  perYearTable([baseC, ...cRows], '연도별 수익 분해 — C 계열')
+
+  overlayMultipleTestingNote(bRows.length + cRows.length, adoptedB + adoptedC)
+
+  log('')
+  log('## 이 실험의 구조적 한계')
+  log('· **리밸런스 비용**: B 계열 오버레이(게이트·변동성 타게팅·스톱)는 실제 장부에서 팔고 사므로')
+  log('  수수료·거래세·슬리피지가 **반영돼 있다**. 반면 C 계열(결합)은 두 슬리브 곡선의 합성이라')
+  log('  **슬리브 간 이체 비용이 0으로 가정**돼 있다 — 26차와 같은 낙관적 상한이며, 역변동성 가중은')
+  log('  50:50보다 가중이 더 자주 움직이므로 그 미반영 비용이 **더 크다**. C+RP의 개선폭은 상한으로 읽어라.')
+  log('· **변동성 타게팅은 2패스**다 — 노출을 정하는 변동성은 베이스(무보정) 곡선에서 잰다. 축소된')
+  log('  곡선에서 재면 자기 참조 순환이 되고, 실무 표준도 "기초자산 변동성을 재서 포지션을 줄인다"다.')
+  log('  다만 그래서 **실현 변동성이 목표에 정확히 맞지는 않는다**(사후 실현치는 목표보다 낮게 나온다).')
+  log('· **레짐 게이트는 지연된다** — 12-1도 10개월 이평도 월 단위 신호라 급락의 첫 달은 그대로 맞는다.')
+  log('  2020년처럼 한 달 만에 바닥을 찍고 되돌린 구간에서는 오히려 반등을 놓칠 수 있다(위기 표 확인).')
+  log('· **크래시 스톱은 봉 내부를 모른다** — 저가가 기준선을 스쳤는지 관통했는지를 일봉으로는 못 가른다.')
+  log('  갭 관통을 시가로 체결해 보수적으로 잡았지만, 장중 변동이 큰 종목에서는 실제보다 낙관적일 수 있다.')
+  log('· 오버레이는 **분모(낙폭)를 깎는 도구**다. 분자(수익)를 키우지 않으므로 CAGR은 대체로 내려간다.')
+  log('  판정표의 ΔCAGR 열이 그 대가이며, 그 값을 보고도 받아들일 수 있을 때만 채택이다.')
+  log('· 유니버스·비용·벤치·연쇄 규약은 25·26차와 동일하다. 다른 표의 숫자를 옮겨 적지 않았다.')
+  unverifiedNote()
+  disclaimer()
+}
+
+// ============================================================================
 
 const MODES: Record<string, () => Promise<void>> = {
   seasonal,
@@ -4168,6 +4749,7 @@ const MODES: Record<string, () => Promise<void>> = {
   usxsmom,
   usxsmom80,
   combo,
+  overlay,
 }
 
 // 런처(scripts/idea-lab.mjs)만 IDEA_LAB_RUN=1을 넘긴다. 테스트가 이 모듈을
