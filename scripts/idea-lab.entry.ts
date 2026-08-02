@@ -22,6 +22,19 @@
 //   판정 기준선은 셋 다 **MA25×신고10→80선**(23차 격자 수익÷MDD 1위)을 같은 유니버스·
 //   같은 비용으로 **재실행한** 수치다. 다른 표의 숫자를 옮겨 적지 않는다.
 //
+// ── 발굴 깔때기 1~2관문 — 미검증 랭킹 4계열 일괄 스크리너 ────────────────────
+// MODE=screen   — lowvol · hi52 · strev · volrank 네 계열을 **한 번에** 1~2관문에 태운다.
+//   계열 단위 탐색 원칙: 이미 판정이 끝난 계열(추세돌파 ✅ · xsmom ✅ · 변동성돌파 ❌ ·
+//   RSI 평균회귀 ❌ · 계절성 ❌ · 월패턴 ❌ · 페어 ❌)은 다시 돌리지 않는다. 여기 있는 네 계열은
+//   이 리포에서 **처음** 돌아가는 것들이다.
+//   전부 xsmom과 **같은 깔때기**를 지난다 — 월 첫 거래일 시가 리밸런스 · 상위 N 동일가중 ·
+//   연도별 PIT 10+10 유니버스 교체 연쇄 · 같은 비용 · 같은 벤치(KODEX 200) · 같은 기준선
+//   재실행. 계열마다 바뀌는 것은 **랭킹 함수 하나뿐**이며, 그 구조를 `simulateRankYear`가
+//   강제한다(xsmom도 이 러너에 얹혀 있어 두 경로가 갈라질 수 없다).
+//   변형은 계열당 3개(N=5 · N=10 · N=5+게이트)로 묶어 둔다 — 이것은 정밀 격자가 아니라
+//   "3관문으로 보낼 계열이 있는가"를 가리는 스크리닝이다. 변형을 늘릴수록 다중검정
+//   위양성이 늘어난다는 것이 24~27차에서 반복 확인된 사실이다.
+//
 // ── 규칙 1(미래참조 금지) 준수 방법 ────────────────────────────────────────
 //   · 모든 통계는 **확장 윈도우**다. 전체 구간 평균·표준편차·최대최소를 임계값
 //     산출에 쓰지 않는다(그 자체가 미래 정보). 월 필터·셀 선정은 "그 해 1월 초까지의
@@ -2010,8 +2023,12 @@ export function shiftMonthStart(date: string, k: number): string {
   return `${String(yy).padStart(4, '0')}-${String(mm).padStart(2, '0')}-01`
 }
 
-/** `date` **미만**(strictly before) 마지막 봉의 종가. 없으면 null. 이분 탐색. */
-export function lastCloseBefore(bars: DailyBar[], date: string): number | null {
+/**
+ * `date` **미만**(strictly before)인 봉의 개수 = 그 시점까지 확정된 봉의 오른쪽 경계 인덱스.
+ * 랭킹 창은 전부 이 경계로 자른다 — `bars[idxBefore(bars, D) .. ]`는 D 시점에 아직
+ * 모르는 미래이므로 어떤 계열도 읽지 않는다(규칙 1-1). 이분 탐색.
+ */
+export function idxBefore(bars: DailyBar[], date: string): number {
   let lo = 0
   let hi = bars.length
   while (lo < hi) {
@@ -2019,7 +2036,13 @@ export function lastCloseBefore(bars: DailyBar[], date: string): number | null {
     if (bars[mid].date < date) lo = mid + 1
     else hi = mid
   }
-  return lo > 0 ? bars[lo - 1].c : null
+  return lo
+}
+
+/** `date` **미만**(strictly before) 마지막 봉의 종가. 없으면 null. */
+export function lastCloseBefore(bars: DailyBar[], date: string): number | null {
+  const n = idxBefore(bars, date)
+  return n > 0 ? bars[n - 1].c : null
 }
 
 /**
@@ -2035,44 +2058,79 @@ export function momentum12_1(bars: DailyBar[], date: string): number | null {
   return pe / ps - 1
 }
 
-export interface MomRow {
+// ---- 랭킹 계열 공용 러너 -----------------------------------------------------
+//
+// xsmom·lowvol·hi52·strev·volrank는 **랭킹 함수 하나만** 다르고 나머지(월 첫 거래일 시가
+// 리밸런스·상위 N 동일가중·슬롯 분모 고정·게이트는 현금)는 전부 같다. 그 공통부를 여기
+// 한 군데 두고 계열은 `RankFn`만 갈아 끼운다 — 계열마다 시뮬을 복사하면 미묘하게 갈라져
+// "서로 다른 전략을 비교하는" 사고가 난다(그래서 xsmom도 이 러너 위에 올려 두었다).
+
+export interface RankRow {
   sym: string
-  mom: number
+  /**
+   * 랭킹 점수 — **클수록 상위**. 계열이 부호를 맞춰 넣는다(저변동성·단기반전처럼
+   * "작을수록 좋은" 지표는 음수로 뒤집어 넣는다). 러너는 항상 상위 N을 담는다.
+   */
+  score: number
+  /**
+   * 게이트 판정용 보조 스칼라 — 계열이 의미를 정의한다(xsmom=절대모멘텀 · hi52=근접도 ·
+   * strev=직전 1개월 수익 원값 · volrank=급증비 · lowvol=절대모멘텀). 랭킹 자체에는
+   * 관여하지 않고 `keep`만 읽는다.
+   */
+  aux: number
 }
 
-/** 모멘텀 내림차순, 동점은 심볼 오름차순(결정적). */
-export function xsmomRank(histories: Record<string, DailyBar[]>, universe: string[], date: string): MomRow[] {
-  const rows: MomRow[] = []
+export type RankFn = (histories: Record<string, DailyBar[]>, universe: string[], date: string) => RankRow[]
+
+/**
+ * 종목별 점수를 매겨 **score 내림차순 · 동점은 심볼 오름차순**(결정적)으로 세운다.
+ * `scoreOf`가 null을 주면 후보에서 뺀다(창을 채울 데이터가 없는 종목).
+ */
+export function rankUniverse(
+  histories: Record<string, DailyBar[]>,
+  universe: string[],
+  date: string,
+  scoreOf: (bars: DailyBar[], date: string) => { score: number; aux: number } | null,
+): RankRow[] {
+  const rows: RankRow[] = []
   for (const s of universe) {
     const bars = histories[s]
     if (!bars?.length) continue
-    const m = momentum12_1(bars, date)
-    if (m == null) continue
-    rows.push({ sym: s, mom: m })
+    const v = scoreOf(bars, date)
+    if (v == null) continue
+    rows.push({ sym: s, score: v.score, aux: v.aux })
   }
-  rows.sort((x, y) => (y.mom !== x.mom ? y.mom - x.mom : x.sym < y.sym ? -1 : x.sym > y.sym ? 1 : 0))
+  rows.sort((x, y) => (y.score !== x.score ? y.score - x.score : x.sym < y.sym ? -1 : x.sym > y.sym ? 1 : 0))
   return rows
 }
 
-export interface XsMomOpts {
+export interface RankSimOpts {
   /** 보유 종목 수 N */
   slots: number
-  /** 절대 모멘텀 게이트 — 12-1 수익 < 0인 종목은 그 슬롯을 **현금**으로 둔다 */
-  gate: boolean
+  /** 계열의 랭킹 함수 */
+  rank: RankFn
+  /**
+   * 상위 N을 **뽑은 뒤** 거르는 게이트. 걸러진 슬롯은 다른 종목으로 메우지 않고
+   * **현금**으로 남는다(아래 분모 고정 주석 참조). 없으면 게이트 없음.
+   */
+  keep?: (row: RankRow) => boolean
 }
 
 /**
- * 한 해치 횡단면 모멘텀 시뮬. 월 첫 거래일 **시가**에 리밸런스한다.
+ * 한 해치 랭킹 전략 시뮬. 월 첫 거래일 **시가**에 리밸런스한다.
  * 슬롯 분모는 게이트와 무관하게 `min(N, 후보수)`로 고정한다 — 그래야 게이트 A/B가
  * "같은 슬롯 중 몇 개를 현금으로 돌렸나"의 비교가 된다(분모를 같이 줄이면 게이트가
  * 남은 종목에 레버리지를 거는 셈이라 비교가 오염된다).
+ *
+ * 미래참조(규칙 1): 랭킹 창은 계열 랭킹 함수가 전부 **리밸런스 달 시작 이전** 확정 봉으로
+ * 자른다. 리밸런스일 D의 시가는 **체결에만** 쓰고 판정에는 쓰지 않는다.
  */
-export function simulateXsMomYear(
+export function simulateRankYear(
   histories: Record<string, DailyBar[]>,
   startDate: string,
   symbols: string[],
   cost: CostSettings,
-  opts: XsMomOpts,
+  opts: RankSimOpts,
 ): CustomYearRun {
   const { universe, calendar, idxOf } = makeSimCtx(histories, symbols, startDate)
   const book = newBook(cost.initialCapital)
@@ -2111,10 +2169,10 @@ export function simulateXsMomYear(
         eq += p.qty * (px != null && px > 0 ? px : p.lastClose)
       }
       // 후보: 랭킹 산출 가능 + 오늘 실제로 거래되는 종목만(체결 불가 종목을 담지 않는다)
-      const ranked = xsmomRank(histories, universe, date).filter((r) => (openPx.get(r.sym) ?? 0) > 0)
+      const ranked = opts.rank(histories, universe, date).filter((r) => (openPx.get(r.sym) ?? 0) > 0)
       const denom = Math.max(1, Math.min(opts.slots, ranked.length))
       const picked = ranked.slice(0, denom)
-      const targets = opts.gate ? picked.filter((r) => r.mom >= 0) : picked
+      const targets = opts.keep ? picked.filter(opts.keep) : picked
       const targetSet = new Set(targets.map((r) => r.sym))
       const slot = eq / denom
 
@@ -2145,6 +2203,43 @@ export function simulateXsMomYear(
     equity.push({ date, equity: bookMark(book, closeAt(date)) })
   }
   return { equity, closed: book.closed, wins: book.wins, openAtEnd: book.positions.size, fills }
+}
+
+/** 12-1 모멘텀 랭킹 행. `mom`은 `score`·`aux`와 같은 값이다(기존 호출부 호환). */
+export type MomRow = RankRow & { mom: number }
+
+/** 모멘텀 내림차순, 동점은 심볼 오름차순(결정적). */
+export function xsmomRank(histories: Record<string, DailyBar[]>, universe: string[], date: string): MomRow[] {
+  return rankUniverse(histories, universe, date, (bars, d) => {
+    const m = momentum12_1(bars, d)
+    return m == null ? null : { score: m, aux: m }
+  }).map((r) => ({ ...r, mom: r.score }))
+}
+
+export interface XsMomOpts {
+  /** 보유 종목 수 N */
+  slots: number
+  /** 절대 모멘텀 게이트 — 12-1 수익 < 0인 종목은 그 슬롯을 **현금**으로 둔다 */
+  gate: boolean
+}
+
+/**
+ * 한 해치 횡단면 모멘텀 시뮬 — 공용 러너에 12-1 랭킹만 끼운 것이다.
+ * (25차에서 검증이 끝난 경로라 결과가 바뀌면 안 된다. `tests/screen.test.ts`의
+ * 골든 지문 테스트가 리팩토링 전 산출물과의 바이트 동일성을 집행한다.)
+ */
+export function simulateXsMomYear(
+  histories: Record<string, DailyBar[]>,
+  startDate: string,
+  symbols: string[],
+  cost: CostSettings,
+  opts: XsMomOpts,
+): CustomYearRun {
+  return simulateRankYear(histories, startDate, symbols, cost, {
+    slots: opts.slots,
+    rank: xsmomRank,
+    keep: opts.gate ? (r) => r.aux >= 0 : undefined,
+  })
 }
 
 async function xsmom() {
@@ -2195,6 +2290,402 @@ async function xsmom() {
   log('  분위가 안 갈린다"일 수 있다.')
   log('· 연도별 유니버스 교체 구조라 매년 1월 초 전량 재편입 + 12월 말 정산 근사가 들어간다.')
   log('· 12개월치 시세가 없는 종목은 그 시점 후보에서 빠진다(신규 편입 종목은 1년 뒤부터 랭킹 대상).')
+  unverifiedNote()
+  disclaimer()
+}
+
+// ============================================================================
+// MODE=screen — 미검증 랭킹 4계열 일괄 스크리너 (발굴 깔때기 1~2관문)
+// ============================================================================
+//
+// 네 계열 전부 xsmom과 **같은 깔때기**(월 첫 거래일 시가 리밸런스 · 상위 N 동일가중 ·
+// 연도별 PIT 10+10 교체 연쇄 · 같은 비용·벤치·기준선)를 지난다. 계열이 바꾸는 것은
+// `RankFn` 하나뿐이고, 그 제약을 `simulateRankYear`가 구조적으로 강제한다.
+//
+// ── 랭킹 창의 오른쪽 경계 = **리밸런스 달의 1일**(규칙 1) ─────────────────────
+// 리밸런스일 D는 그 달의 첫 거래일이므로 `date < shiftMonthStart(D, 0)`으로 자르면
+// **직전 달 마지막 확정 종가까지**만 남는다. 당일 봉은 물론 그 달 어떤 봉도 창에 못 들어온다.
+// 52주 최고가·변동성·거래대금 창이 전부 이 경계를 공유하며, 각 계열마다 "그 경계 이후를
+// 3배로 조작해도 점수가 불변"인 테스트가 `tests/screen.test.ts`에 붙어 있다.
+//
+// ── 계열 정의 ────────────────────────────────────────────────────────────────
+//   lowvol  : 직전 12개월 **일수익률 표준편차가 낮은** 상위 N (저변동성 이상현상)
+//   hi52    : 직전 종가 ÷ 직전 52주 최고가가 **높은** 상위 N (George & Hwang 2004)
+//   strev   : 직전 1개월 수익률이 **낮은**(가장 많이 빠진) 상위 N (단기 반전)
+//   volrank : 직전 5일 평균 거래대금 ÷ 직전 60일 평균 거래대금이 **높은** 상위 N (거래량 급증)
+//
+// ⚠️ 메모리: 변형별 자산곡선은 요약 즉시 버리고 스칼라만 남긴다(pit1010 400조합 OOM 교훈).
+
+/** 랭킹 창 기본 길이(개월) — lowvol·hi52가 공유한다. 52주 ≈ 12개월. */
+export const SCREEN_WINDOW_MONTHS = 12
+/** 12개월 창이 실제로 채워졌다고 볼 최소 봉 수. 거래정지·희소 종목을 후보에서 뺀다. */
+export const SCREEN_MIN_BARS = 120
+/** volrank 단기·장기 창(거래일). */
+export const VOLRANK_FAST = 5
+export const VOLRANK_SLOW = 60
+/** 계열 채택 판정에 요구하는 최소 청산완료 매매 수 — 이보다 적으면 표본 소실로 본다. */
+export const SCREEN_MIN_TRADES = 20
+
+/**
+ * 랭킹 창 [12개월 전 달 1일, 리밸런스 달 1일)의 봉 구간 [lo, hi).
+ * `lo === 0`(= 창 시작 이전 봉이 아예 없음)이면 12개월치가 없는 종목이므로 null —
+ * `momentum12_1`이 12개월치 없는 종목을 빼는 것과 같은 규약이다.
+ */
+function monthWindow(bars: DailyBar[], date: string, months: number, minBars: number) {
+  const hi = idxBefore(bars, shiftMonthStart(date, 0))
+  const lo = idxBefore(bars, shiftMonthStart(date, -months))
+  if (lo === 0 || hi - lo < minBars) return null
+  return { lo, hi }
+}
+
+/**
+ * 직전 12개월 **일수익률 표준편차**(모표준편차). 창 안의 연속 종가 쌍만 쓴다 —
+ * 창 밖(미래) 종가를 끌어와 첫 수익률을 만들지 않는다.
+ */
+export function lowVolStdev(
+  bars: DailyBar[],
+  date: string,
+  months = SCREEN_WINDOW_MONTHS,
+  minBars = SCREEN_MIN_BARS,
+): number | null {
+  const w = monthWindow(bars, date, months, minBars)
+  if (!w) return null
+  const rets: number[] = []
+  for (let i = w.lo + 1; i < w.hi; i++) {
+    const p0 = bars[i - 1].c
+    const p1 = bars[i].c
+    if (!(p0 > 0) || !(p1 > 0)) return null
+    rets.push(p1 / p0 - 1)
+  }
+  if (rets.length < minBars - 1) return null
+  let sum = 0
+  for (const r of rets) sum += r
+  const mean = sum / rets.length
+  let ss = 0
+  for (const r of rets) ss += (r - mean) * (r - mean)
+  return Math.sqrt(ss / rets.length)
+}
+
+/**
+ * 52주 신고가 근접도 = (창 오른쪽 끝 확정 종가) ÷ (창 안 최고 고가). 1에 가까울수록
+ * 신고가 부근이다. 최고가 창은 **당일은 물론 리밸런스 달 전체를 제외**한다(규칙 1-3).
+ */
+export function hi52Ratio(
+  bars: DailyBar[],
+  date: string,
+  months = SCREEN_WINDOW_MONTHS,
+  minBars = SCREEN_MIN_BARS,
+): number | null {
+  const w = monthWindow(bars, date, months, minBars)
+  if (!w) return null
+  const px = bars[w.hi - 1].c
+  if (!(px > 0)) return null
+  let peak = 0
+  for (let i = w.lo; i < w.hi; i++) if (bars[i].h > peak) peak = bars[i].h
+  if (!(peak > 0)) return null
+  return px / peak
+}
+
+/**
+ * 직전 1개월(직전 달) 수익률 = (직전 달 마지막 확정 종가) ÷ (그 전 달 마지막 확정 종가) − 1.
+ * 두 기준일 모두 리밸런스 달 시작 이전이라 미래참조가 원천적으로 불가능하다.
+ * 단기 반전은 이 값이 **낮을수록** 상위이므로 랭킹 점수는 부호를 뒤집어 쓴다.
+ */
+export function shortRevReturn(bars: DailyBar[], date: string): number | null {
+  const pe = lastCloseBefore(bars, shiftMonthStart(date, 0))
+  const ps = lastCloseBefore(bars, shiftMonthStart(date, -1))
+  if (pe == null || ps == null || !(ps > 0)) return null
+  return pe / ps - 1
+}
+
+/**
+ * 거래량 급증비 = 직전 `fast`일 평균 거래대금 ÷ 직전 `slow`일 평균 거래대금.
+ * 두 창 모두 리밸런스 달 시작 이전 봉으로만 만든다 — 당일 거래대금은 장이 끝나야
+ * 확정되므로 진입 판단에 넣으면 그 자체가 미래참조다(volbrk와 같은 규약).
+ * 거래대금은 종가×거래량 근사다(체결가별 대금이 아니라 일봉 근사).
+ */
+export function volSurgeRatio(
+  bars: DailyBar[],
+  date: string,
+  fast = VOLRANK_FAST,
+  slow = VOLRANK_SLOW,
+): number | null {
+  const hi = idxBefore(bars, shiftMonthStart(date, 0))
+  if (hi < slow || fast > slow || fast <= 0) return null
+  let slowSum = 0
+  for (let i = hi - slow; i < hi; i++) slowSum += bars[i].c * bars[i].v
+  let fastSum = 0
+  for (let i = hi - fast; i < hi; i++) fastSum += bars[i].c * bars[i].v
+  const slowAvg = slowSum / slow
+  if (!(slowAvg > 0)) return null
+  return fastSum / fast / slowAvg
+}
+
+// ---- 계열별 RankFn — 부호를 여기서 맞춘다(러너는 항상 상위 N을 담는다) --------
+
+/** 저변동성: 표준편차가 **작을수록** 상위 → 점수는 −σ. 보조값은 절대모멘텀(게이트용). */
+export const lowVolRank: RankFn = (h, u, d) =>
+  rankUniverse(h, u, d, (bars, date) => {
+    const sd = lowVolStdev(bars, date)
+    if (sd == null) return null
+    const m = momentum12_1(bars, date)
+    return { score: -sd, aux: m ?? Number.NEGATIVE_INFINITY }
+  })
+
+/** 52주 신고가 근접도: 클수록 상위. 보조값 = 근접도 자신(임계 게이트용). */
+export const hi52Rank: RankFn = (h, u, d) =>
+  rankUniverse(h, u, d, (bars, date) => {
+    const r = hi52Ratio(bars, date)
+    return r == null ? null : { score: r, aux: r }
+  })
+
+/** 단기 반전: 직전 1개월 수익이 **작을수록** 상위 → 점수는 −수익. 보조값 = 수익 원값. */
+export const shortRevRank: RankFn = (h, u, d) =>
+  rankUniverse(h, u, d, (bars, date) => {
+    const r = shortRevReturn(bars, date)
+    return r == null ? null : { score: -r, aux: r }
+  })
+
+/** 거래량 급증: 급증비가 클수록 상위. 보조값 = 급증비 자신(임계 게이트용). */
+export const volRankRank: RankFn = (h, u, d) =>
+  rankUniverse(h, u, d, (bars, date) => {
+    const r = volSurgeRatio(bars, date)
+    return r == null ? null : { score: r, aux: r }
+  })
+
+// ---- 계열·변형 정의 ----------------------------------------------------------
+
+export interface ScreenVariant {
+  /** 표에 찍히는 변형 이름(계열명 뒤에 붙는다) */
+  label: string
+  slots: number
+  /** 상위 N을 뽑은 뒤 거르는 게이트. 걸러진 슬롯은 현금. */
+  keep?: (row: RankRow) => boolean
+}
+
+export interface ScreenFamily {
+  key: string
+  name: string
+  /** 계열 정의 한 줄 — 보고서와 코드가 **같은 문장**을 쓰게 강제한다 */
+  def: string
+  /** 왜 이 계열을 보는가(학계 근거) */
+  basis: string
+  rank: RankFn
+  variants: ScreenVariant[]
+}
+
+/** hi52 게이트 임계 — 52주 최고가 대비 10% 이내. */
+export const HI52_GATE = 0.9
+/** volrank 게이트 임계 — 5일 평균 거래대금이 60일 평균의 1.5배 이상. */
+export const VOLRANK_GATE = 1.5
+
+/**
+ * 계열당 변형 3개(N=5 · N=10 · N=5+게이트)로 고정한다. 게이트는 계열마다 **그 계열의
+ * 보조값**에 거는 자연스러운 임계 하나뿐이다 — 게이트를 계열마다 여러 개 달면 그게 곧
+ * 격자 탐색이 되고, 1~2관문에서 격자를 돌리면 3관문에 보낼 계열을 잡음으로 고르게 된다.
+ */
+export const SCREEN_FAMILIES: ScreenFamily[] = [
+  {
+    key: 'lowvol',
+    name: '저변동성 랭킹',
+    def: '직전 12개월 일수익률 표준편차가 **낮은** 상위 N 동일가중',
+    basis: '저변동성 이상현상(low-vol anomaly) — 위험이 낮은 쪽이 위험조정 후 더 벌었다는 학계 관측',
+    rank: lowVolRank,
+    variants: [
+      { label: '상위 5', slots: 5 },
+      { label: '상위 10', slots: 10 },
+      { label: '상위 5 + 절대모멘텀 게이트', slots: 5, keep: (r) => r.aux >= 0 },
+    ],
+  },
+  {
+    key: 'hi52',
+    name: '52주 신고가 근접도 랭킹',
+    def: '직전 확정 종가 ÷ 직전 52주 최고가가 **높은** 상위 N 동일가중',
+    basis: 'George & Hwang(2004) — 52주 신고가 근접도가 모멘텀 수익의 상당 부분을 설명한다',
+    rank: hi52Rank,
+    variants: [
+      { label: '상위 5', slots: 5 },
+      { label: '상위 10', slots: 10 },
+      { label: `상위 5 + 근접도 ${HI52_GATE} 이상`, slots: 5, keep: (r) => r.aux >= HI52_GATE },
+    ],
+  },
+  {
+    key: 'strev',
+    name: '단기(1개월) 반전 랭킹',
+    def: '직전 1개월 수익률이 **낮은**(가장 많이 빠진) 상위 N 동일가중',
+    basis: '단기 반전(short-term reversal) — xsmom이 12-1로 최근 1개월을 빼는 이유가 이 효과다',
+    rank: shortRevRank,
+    variants: [
+      { label: '상위 5', slots: 5 },
+      { label: '상위 10', slots: 10 },
+      { label: '상위 5 + 실제 하락분만', slots: 5, keep: (r) => r.aux <= 0 },
+    ],
+  },
+  {
+    key: 'volrank',
+    name: '거래량 급증 랭킹',
+    def: `직전 ${VOLRANK_FAST}일 평균 거래대금 ÷ 직전 ${VOLRANK_SLOW}일 평균 거래대금이 **높은** 상위 N 동일가중`,
+    basis: '거래량 급증이 정보 유입·관심 집중의 대리변수라는 관측(거래대금은 종가×거래량 근사)',
+    rank: volRankRank,
+    variants: [
+      { label: '상위 5', slots: 5 },
+      { label: '상위 10', slots: 10 },
+      { label: `상위 5 + 급증비 ${VOLRANK_GATE}배 이상`, slots: 5, keep: (r) => r.aux >= VOLRANK_GATE },
+    ],
+  },
+]
+
+// ---- 계열 종합 판정 ----------------------------------------------------------
+
+export interface FamilyVerdict {
+  key: string
+  name: string
+  /** 계열 안에서 알파가 가장 높은 변형 */
+  best: StratRow
+  /** 전·후반 **둘 다** 기준선 총수익을 넘었나 */
+  bothHalves: boolean
+  /** 전·후반 **둘 다** 알파가 양(+)인가 */
+  bothAlpha: boolean
+  /** 표본이 남아 있나 */
+  enoughTrades: boolean
+  /** 위 셋을 모두 만족해야 3관문 진행 권고 */
+  advance: boolean
+  /** 탈락 사유(진행 권고면 빈 문자열) */
+  reason: string
+}
+
+/**
+ * 계열 하나를 판정한다. **알파 최고 변형**을 계열 대표로 세우고(규칙 5 — 절대 수익이
+ * 아니라 초과분), 그 대표가 채택 3조건을 모두 통과할 때만 다음 관문을 권고한다.
+ * 대표를 사후에 고르는 것 자체가 선택편향이라, 이 값은 "계열의 상한"으로만 읽어야 한다.
+ */
+export function judgeFamily(fam: ScreenFamily, base: StratRow, rows: StratRow[]): FamilyVerdict {
+  // 알파를 못 잰 변형(벤치 구간 부재)은 최하위로 민다. **뺄셈으로 비교하지 않는다** —
+  // 둘 다 −Infinity면 차가 NaN이라 모든 비교가 거짓이 되고 대표가 첫 줄로 굳는다(실제로 그랬다).
+  const key = (r: StratRow) => r.alphaFull ?? Number.NEGATIVE_INFINITY
+  const tieKey = (r: StratRow) => r.full.obj ?? Number.NEGATIVE_INFINITY
+  let best = rows[0]
+  for (const r of rows.slice(1)) {
+    const a = key(r)
+    const b = key(best)
+    if (a > b || (a === b && tieKey(r) > tieKey(best))) best = r
+  }
+  const bothHalves = best.a.total - base.a.total > 0 && best.b.total - base.b.total > 0
+  const bothAlpha = (best.alphaA ?? -1) > 0 && (best.alphaB ?? -1) > 0
+  const enoughTrades = best.closed >= SCREEN_MIN_TRADES
+  const reasons: string[] = []
+  if (!bothHalves) reasons.push('전·후반 중 한쪽이 기준선 미달')
+  if (!bothAlpha) reasons.push('전·후반 중 한쪽 알파 음(−)')
+  if (!enoughTrades) reasons.push(`매매 ${best.closed}건(<${SCREEN_MIN_TRADES})으로 표본 부족`)
+  return {
+    key: fam.key,
+    name: fam.name,
+    best,
+    bothHalves,
+    bothAlpha,
+    enoughTrades,
+    advance: bothHalves && bothAlpha && enoughTrades,
+    reason: reasons.join(' · '),
+  }
+}
+
+export function familyVerdictTable(vs: FamilyVerdict[]) {
+  log('')
+  log('## 4계열 종합 판정표 (다음 관문 진행 여부)')
+  log('| 계열 | 최고 변형(알파 기준) | 전 구간 알파 | 전반 알파 | 후반 알파 | 전·후반 모두 통과? | 매매 | 다음 관문 진행 |')
+  log('|---|---|---|---|---|---|---|---|')
+  for (const v of vs)
+    log(
+      `| ${v.name} | ${v.best.label} | ${pctOrDash(v.best.alphaFull)} | ${pctOrDash(v.best.alphaA)} | ` +
+        `${pctOrDash(v.best.alphaB)} | ${v.bothHalves && v.bothAlpha ? '✅' : '❌'} | ${v.best.closed} | ` +
+        `${v.advance ? '✅ 3관문 진행' : `❌ 종료 — ${v.reason}`} |`,
+    )
+  log('')
+  log('"최고 변형"은 **사후에 고른 것**이라 그 자체로 낙관 편향이 있다 — 계열의 상한으로만 읽고,')
+  log('진행 권고가 붙은 계열도 3관문(워크포워드·파라미터 안정성·교차시장)에서 다시 떨어질 수 있다.')
+}
+
+async function screen() {
+  log('# MODE=screen — 미검증 랭킹 4계열 일괄 스크리너 (발굴 깔때기 1~2관문)')
+  log('')
+  log('발굴을 계열 단위로 진행한다. 이미 판정이 끝난 계열(추세돌파 ✅ · 횡단면 모멘텀 ✅ ·')
+  log('변동성 돌파 ❌ · RSI 평균회귀 ❌ · 계절성 ❌ · 월패턴 ❌ · 페어 ❌)은 재실행하지 않고,')
+  log('이 리포에서 **처음 돌아가는 4계열**만 같은 깔때기에 한 번에 태운다.')
+  log('')
+  log('| 계열 | 정의 | 근거 |')
+  log('|---|---|---|')
+  for (const fam of SCREEN_FAMILIES) log(`| ${fam.key} — ${fam.name} | ${fam.def} | ${fam.basis} |`)
+  log('')
+  log('공통 규약(계열 간 비교가 성립하도록 **랭킹 함수 말고는 전부 동일**하게 고정):')
+  log('· 매월 첫 거래일 **시가** 리밸런스 · 상위 N 동일가중 · 슬롯 분모는 게이트와 무관하게 고정')
+  log('· 연도별 PIT 상위 10+10 [추정] 교체 유니버스 연쇄 · 구간 끝 청산비용 근사')
+  log(`· 비용 수수료 ${COST.feePct}% · 거래세 ${COST.taxPct}% · 슬리피지 ${COST.slippagePct}%(왕복 약 0.38%)`)
+  log(`· 벤치 ${BENCH}(KODEX 200) 대비 알파 · ${BASELINE_LABEL}을 같은 조건으로 재실행해 대조`)
+  log('· 랭킹 창은 전부 **리밸런스 달 1일 이전** 확정 봉으로 자른다(규칙 1 — 당일·당월 제외)')
+  log('')
+  const { years, histories, bench } = await loadPitHistories()
+  const yearly = buildYearly(histories, years)
+  if (yearly.every((v) => v.syms.length < 5)) {
+    log('❌ 시세 로드 실패로 실행할 해가 없다 — 중단')
+    return
+  }
+  const benchEq = benchCurve(bench)
+  log(`연도별 매핑률: ${yearly.map((v) => `${v.y} ${v.mapped}`).join(' · ')}`)
+  log(`벤치 ${BENCH} 데이터 시작 ${bench[0]?.date ?? '—'} — 알파는 이 날짜 이후 겹치는 구간에서만 계산한다.`)
+
+  const baseRow = summarizeStrat(BASELINE_LABEL, runSpecChain(yearly, baselineSpec, COST), benchEq)
+  const rows: StratRow[] = [baseRow]
+  const verdicts: FamilyVerdict[] = []
+
+  for (const fam of SCREEN_FAMILIES) {
+    const famRows: StratRow[] = []
+    for (const v of fam.variants) {
+      // 변형별 자산곡선은 이 블록 안에서만 살아 있다 — 요약 후 즉시 회수된다(메모리)
+      const chain = runCustomChain(
+        yearly,
+        (y) => simulateRankYear(y.hist, `${y.y}-01-01`, y.syms, COST, { slots: v.slots, rank: fam.rank, keep: v.keep }),
+        COST,
+        v.slots,
+      )
+      const row = summarizeStrat(`${fam.key} ${v.label}`, chain, benchEq)
+      famRows.push(row)
+      rows.push(row)
+    }
+    verdicts.push(judgeFamily(fam, baseRow, famRows))
+  }
+
+  log('')
+  log('## 성적 (기준선을 같은 유니버스·같은 비용으로 재실행한 값과 나란히)')
+  stratTable(rows)
+  baselineCrossCheck(yearly)
+  const winners = verdictTable(rows)
+
+  // 연도별 분해는 기준선 + 계열 대표만 — 13열을 다 찍으면 표가 읽히지 않는다
+  perYearTable([baseRow, ...verdicts.map((v) => v.best)])
+  multipleTestingNote(rows.length - 1, winners)
+  familyVerdictTable(verdicts)
+
+  const advancing = verdicts.filter((v) => v.advance)
+  log('')
+  log(
+    advancing.length === 0
+      ? '→ 이번 스크리닝에서 3관문으로 보낼 계열은 **없다**. 네 계열 모두 여기서 종료한다.'
+      : `→ 3관문 진행 권고: ${advancing.map((v) => v.name).join(' · ')} (${advancing.length}/${verdicts.length}계열)`,
+  )
+
+  log('')
+  log('## 이 실험의 구조적 한계')
+  log('· 유니버스가 연 20종목뿐이라 "상위 5/10"은 사실상 상위 25~50% 분위다 — 학계의 상위 10%')
+  log('  분위 랭킹보다 신호가 훨씬 묽다. 알파가 안 나와도 "그 이상현상이 죽었다"가 아니라')
+  log('  "이 유니버스에서는 분위가 안 갈린다"일 수 있다. 특히 저변동성·거래량 계열은 대형주 20종목')
+  log('  안에서 분산이 작아 랭킹이 잡음에 가까워질 수 있다.')
+  log('· 왕복 비용 약 0.38%가 월 리밸런스에 그대로 얹힌다. strev(단기 반전)는 회전율이 가장 높은')
+  log('  계열이라 이 비용을 못 넘기면 이론 알파가 있어도 실전에서 사라진다 — 이번 관문의 핵심 질문이다.')
+  log('· 거래대금은 **종가×거래량 근사**이며 실제 체결대금이 아니다. 유동성·호가 잔량도 반영하지 않아')
+  log('  volrank 상위 종목이 실제로 그 가격에 담기는지는 확인되지 않았다.')
+  log('· 연도별 유니버스 교체 구조라 매년 1월 초 전량 재편입 + 12월 말 정산 근사가 들어간다.')
+  log('· 12개월 창을 못 채우는 종목은 그 시점 후보에서 빠진다(신규 편입 종목은 1년 뒤부터 랭킹 대상).')
+  log(`· 변형 ${rows.length - 1}개를 같은 데이터에 돌렸다 — 다중검정 경고를 판정표보다 먼저 읽을 것.`)
   unverifiedNote()
   disclaimer()
 }
@@ -3670,6 +4161,7 @@ const MODES: Record<string, () => Promise<void>> = {
   pairprem,
   flow,
   xsmom,
+  screen,
   volbrk,
   rsirev,
   xswf,
