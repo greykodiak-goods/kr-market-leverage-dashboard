@@ -148,6 +148,10 @@ body {
   border-radius: 12px;
   padding: 16px 18px;
   box-shadow: var(--shadow);
+  /* 그리드 칸이 내용 폭에 밀려 늘어나지 않게 한다 — 카드 수가 늘면(성과 지표 세트)
+     설명 문구가 길어져 좁은 화면에서 행이 통째로 넘치던 것을 막는다. */
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .kpi-card .label {
@@ -175,6 +179,8 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
+  /* 설명 문구가 길어도 카드 밖으로 밀려나지 않게 줄바꿈을 허용한다 */
+  flex-wrap: wrap;
 }
 
 /* 카드 주의 배지 — 예: 벤치마크가 실행 구간을 다 덮지 못함 */

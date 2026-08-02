@@ -58,6 +58,17 @@ import {
   usePrecomputedPresets,
   type PrecomputedPreset,
 } from './precomputed'
+// 표준 성과 지표(변동성·샤프·소르티노·손익비·PF·최장 낙폭 기간) — 순수 계산은 전부 여기 있다.
+// 이 화면은 **표시만** 한다(규칙 1: 사후 요약이므로 판정에 되먹임되지 않는다).
+import {
+  computeCurveStats,
+  computeLedgerStats,
+  fmtRatio,
+  fmtDuration,
+  fmtYears,
+  type LedgerStats,
+  type PerfStatFields,
+} from './perfStats'
 import { KpiCard } from '../../components/KpiCard'
 import { EquityChart, type EquityRow } from './EquityChart'
 import { InfoTip } from '../../components/InfoTip'
@@ -520,6 +531,145 @@ const fmtPctGrouped = (v: number, digits = 1) =>
 const fmtPp = (v: number, digits = 1) =>
   `${v >= 0 ? '+' : '−'}${Math.abs(v).toLocaleString('ko-KR', { minimumFractionDigits: digits, maximumFractionDigits: digits })}%p`
 
+// ---- 표준 성과 지표 카드 (실행 결과·사전계산 **공용**) ---------------------------
+//
+// 대표 지시(2026-08-02): "나오는 지표들 다 넣어주고 지표 설명 아이콘도 추가해줘".
+// 두 화면이 같은 컴포넌트를 쓰므로 정의·설명이 갈라질 수 없다. 계산은 perfStats.ts,
+// 여기서는 **표시와 설명(ⓘ)만** 한다. 계산 불가는 0이 아니라 '—'다(규칙 3).
+
+/** 원장이 이 결과에 귀속될 때만 채워지는 상세(평균 손익·손익 합) — 사전계산 경로엔 없다. */
+interface LedgerDetail {
+  avgWinPct: number | null
+  avgLossPct: number | null
+  grossProfit: number
+  grossLoss: number
+  winCount: number
+  lossCount: number
+}
+
+function ledgerDetailOf(l: LedgerStats): LedgerDetail {
+  return {
+    avgWinPct: l.avgWinPct,
+    avgLossPct: l.avgLossPct,
+    grossProfit: l.grossProfit,
+    grossLoss: l.grossLoss,
+    winCount: l.winCount,
+    lossCount: l.lossCount,
+  }
+}
+
+function PerfStatCards({
+  stats,
+  detail,
+  ledgerAttributed,
+  legacyNote,
+}: {
+  stats: Partial<PerfStatFields>
+  /** 실행 결과에서만 채워진다(사전계산 산출물엔 스칼라만 있다) */
+  detail?: LedgerDetail | null
+  /** 결합(곡선 합성)처럼 매매 원장이 귀속되지 않는 결과면 false — 0건이라는 뜻이 아니다 */
+  ledgerAttributed: boolean
+  /** 옛 스키마 산출물이라 값 자체가 없을 때 카드에 적을 설명 */
+  legacyNote?: string
+}) {
+  const missing = legacyNote ?? '계산할 수 없습니다'
+  const ledgerBlockedText = '결합 곡선에는 매매 원장이 없습니다 — A·B 단독 실행에서 확인하세요'
+  return (
+    <>
+      <KpiCard
+        label="연환산 변동성"
+        value={stats.volAnnPct != null ? `${stats.volAnnPct.toFixed(1)}%` : '—'}
+        unit=" / 연"
+        changeText={stats.volAnnPct != null ? '일수익률 표준편차 × √252' : missing}
+        changeLabel=""
+        direction="flat"
+        info="하루하루의 수익률이 평균에서 얼마나 흩어졌는지(표준편차)를 재서 1년치로 환산한(×√252) 값입니다. 20%면 '1년 수익률이 평균 ±20% 안에 들어올 때가 대략 3분의 2'라는 거친 눈금으로 읽습니다. 함정: 위아래를 구분하지 않아 급등도 변동성으로 잡히고, 드물게 오는 폭락(꼬리 위험)은 이 한 숫자에 담기지 않습니다. 체감 고통은 최대 낙폭(MDD)·최장 낙폭 기간과 함께 보세요."
+      />
+      <KpiCard
+        label="샤프 비율"
+        value={fmtRatio(stats.sharpe)}
+        changeText={
+          stats.sharpe != null
+            ? '(연평균 수익률 − 무위험 0%) ÷ 연환산 변동성'
+            : stats.volAnnPct != null
+              ? '변동성이 0이라 나눌 수 없습니다'
+              : missing
+        }
+        changeLabel=""
+        direction="flat"
+        badge="무위험 0% 가정"
+        badgeTitle="무위험수익률을 상수 0%로 두고 계산했습니다 — 외부 금리 데이터에 의존하지 않기 위한 단순화입니다. 실제 국고채 수익률(예: 연 3%)만큼 이 값은 낮아집니다."
+        info="연평균 수익률(CAGR)에서 무위험수익률을 뺀 뒤 연환산 변동성으로 나눈 값입니다. '흔들림 1단위를 감수하고 얼마를 벌었나'로 읽으며, 수익이 같다면 덜 흔들린 쪽이 높게 나옵니다. ⚠️ 여기서는 무위험수익률을 0%로 가정합니다 — 실제 국고채 수익률만큼 낮아집니다. 함정: 분모가 오르는 흔들림까지 벌점으로 세기 때문에 크게 오른 구간이 있으면 오히려 낮아 보일 수 있습니다. 또 이 값이 높은 조합을 골라내는 행위 자체가 곡선맞춤이라, 구간을 나눠도 유지되는지 함께 보세요(규칙 5)."
+      />
+      <KpiCard
+        label="소르티노 비율"
+        value={fmtRatio(stats.sortino)}
+        changeText={stats.sortino != null ? '(연평균 수익률 − 무위험 0%) ÷ 하방 변동성' : missing}
+        changeLabel=""
+        direction="flat"
+        badge="무위험 0% 가정"
+        badgeTitle="샤프와 같은 가정입니다 — 무위험수익률 0%. 실제 국고채 수익률만큼 낮아집니다."
+        info="샤프의 분모를 '떨어진 날의 흔들림'만으로 바꾼 값입니다(음(−)의 일수익률만 제곱평균해 연환산). 오르는 변동은 벌점이 아니라고 보기 때문에, 위로 크게 튀는 전략은 샤프보다 소르티노가 높게 나옵니다. 샤프와 같은 무위험수익률 0% 가정입니다. 함정: 하락한 날이 적은 짧은 구간에서는 분모 표본이 작아 값이 과장됩니다. 하락일이 하나도 없으면 계산하지 않고 '—'로 둡니다."
+      />
+      <KpiCard
+        label="손익비 (Payoff)"
+        value={ledgerAttributed ? fmtRatio(stats.payoffRatio) : '합성'}
+        changeText={
+          !ledgerAttributed
+            ? ledgerBlockedText
+            : stats.payoffRatio != null
+              ? detail
+                ? `평균 이익 ${detail.avgWinPct != null ? fmtPct(detail.avgWinPct, 2) : '—'} ÷ 평균 손실 ${detail.avgLossPct != null ? fmtPct(detail.avgLossPct, 2) : '—'}`
+                : '평균 이익% ÷ |평균 손실%|'
+              : detail && detail.lossCount === 0
+                ? '손실 매매가 0건이라 나눌 수 없습니다 (∞로 채우지 않습니다)'
+                : missing
+        }
+        changeLabel=""
+        direction="flat"
+        info="청산이 끝난 매매만 모아 '이익 매매의 평균 수익률'을 '손실 매매의 평균 손실률(절대값)'로 나눈 값입니다. 2라면 한 번 벌 때 잃을 때의 두 배를 벌었다는 뜻입니다. 승률과 짝으로 봐야 합니다 — 승률이 낮아도 손익비가 크면 합계는 남을 수 있고, 승률이 높아도 손익비가 1보다 많이 작으면 한 번의 손실이 여러 번의 이익을 지웁니다. 손실 매매가 0건이면 나눌 수 없어 '—'입니다(∞로 채우지 않습니다). 미청산 포지션은 확정 손익이 아니라 제외했습니다."
+      />
+      <KpiCard
+        label="Profit Factor"
+        value={ledgerAttributed ? fmtRatio(stats.profitFactor) : '합성'}
+        changeText={
+          !ledgerAttributed
+            ? ledgerBlockedText
+            : stats.profitFactor != null
+              ? detail
+                ? `이익합 ${fmtWon(detail.grossProfit)}원 ÷ 손실합 ${fmtWon(detail.grossLoss)}원`
+                : '이익 매매 손익 합 ÷ |손실 매매 손익 합|'
+              : detail && detail.lossCount === 0
+                ? '손실 매매가 0건이라 나눌 수 없습니다 (∞로 채우지 않습니다)'
+                : missing
+        }
+        changeLabel=""
+        direction="flat"
+        info="이익 매매의 손익 합(원)을 손실 매매의 손익 합(원, 절대값)으로 나눈 값입니다. 손익비가 '한 번당 평균'을 본다면 이쪽은 '기간 전체 금액'을 봅니다. 1이면 번 돈과 잃은 돈이 같고(수수료·세금·슬리피지 반영 후), 1보다 크면 남았다는 뜻입니다. 함정: 큰 이익 한 건이 값을 통째로 끌어올릴 수 있으므로 매매 건수와 함께 보세요 — 표본이 수십 건 이하면 우연일 가능성이 큽니다. 손실 매매가 0건이면 '—'입니다."
+      />
+      <KpiCard
+        label="최장 낙폭 기간"
+        value={fmtDuration(stats.maxDdDays)}
+        unit={stats.maxDdDays != null ? ` · ${fmtYears(stats.maxDdDays)}` : ''}
+        changeText={
+          stats.maxDdDays == null
+            ? missing
+            : stats.maxDdStart && stats.maxDdEnd
+              ? `${stats.maxDdStart} 고점 → ${stats.maxDdEnd}${stats.maxDdRecovered === false ? ' (아직 회복 못함)' : ' 회복'}`
+              : stats.maxDdRecovered === false
+                ? '마지막 날까지 회복하지 못했습니다'
+                : '고점 회복까지 걸린 최장 기간'
+        }
+        changeLabel=""
+        direction="flat"
+        badge={stats.maxDdRecovered === false ? '⚠️ 미회복 구간 포함' : undefined}
+        badgeTitle="마지막 날까지 직전 고점을 회복하지 못한 구간이 최장 기간입니다 — 즉 지금도 물려 있는 상태로 셌습니다."
+        info="자산곡선이 최고점을 찍은 뒤 그 최고점을 다시 회복하기까지 걸린 가장 긴 시간입니다. 최대 낙폭(MDD)이 '얼마나 깊이 빠졌나'라면 이 값은 '얼마나 오래 물려 있었나' — 돈이 아니라 시간의 고통입니다. 깊이가 얕아도 회복에 몇 년이 걸리면 그동안 계좌는 계속 마이너스로 보이고, 중도 이탈은 대개 여기서 일어납니다. 마지막 날까지 회복하지 못한 구간도 포함해 셉니다(진행 중이라고 빼면 '지금 물려 있는 기간'이 통계에서 사라집니다)."
+      />
+    </>
+  )
+}
+
 /**
  * 사전계산 결과 화면 — 프리셋을 고르는 즉시 뜨는 요약이다.
  *
@@ -620,6 +770,13 @@ function PrecomputedResult({
           changeLabel=""
           direction="flat"
           info="사전계산은 파일 크기를 줄이려고 요약 수치와 곡선만 담습니다. 매매 이력·연도별 분해·스크리닝은 직접 실행해야 나옵니다."
+        />
+        {/* 표준 성과 지표 — 실행 결과 화면과 **같은 카드**다. 산출물에는 스칼라만 있으므로
+            평균 손익·손익 합 같은 상세(detail)는 넘기지 않는다(직접 실행에서만 나온다). */}
+        <PerfStatCards
+          stats={pc}
+          ledgerAttributed={pc.tradeCount != null}
+          legacyNote="옛 사전계산 산출물(schema 1)이라 이 지표가 들어 있지 않습니다 — 「직접 다시 돌리기」로 확인하세요"
         />
       </div>
       <EquityChart equity={rows} benchmarkLabel="KODEX 200 단순보유" />
@@ -1016,6 +1173,31 @@ export function SpecSimulator() {
       avgPnl: result.avgPnlPct,
     }
   }, [result])
+
+  /**
+   * 표준 성과 지표 — **이미 확정된** 자산곡선·매매 원장의 사후 요약이다(규칙 1: 판정에
+   * 되먹임되지 않는다). CAGR은 화면이 이미 쓰는 값을 그대로 넘겨 두 카드가 다른 정의로
+   * 갈라지지 않게 한다. 결합(combo)은 곡선 합성이라 원장이 귀속되지 않으므로 원장 지표는
+   * 계산하지 않고 '합성'으로 표시한다(0건이라는 뜻이 아니다).
+   */
+  const perf = useMemo(() => {
+    if (!result || result.equity.length < 2) return null
+    const curve = computeCurveStats(result.equity, result.cagrPct)
+    const attributed = kind !== 'combo'
+    const ledger = attributed ? computeLedgerStats(result.trades) : null
+    const stats: Partial<PerfStatFields> = {
+      volAnnPct: curve.volAnnPct,
+      sharpe: curve.sharpe,
+      sortino: curve.sortino,
+      maxDdDays: curve.longestDrawdown?.days ?? null,
+      maxDdRecovered: curve.longestDrawdown?.recovered ?? null,
+      maxDdStart: curve.longestDrawdown?.startDate ?? null,
+      maxDdEnd: curve.longestDrawdown?.endDate ?? null,
+      payoffRatio: ledger?.payoffRatio ?? null,
+      profitFactor: ledger?.profitFactor ?? null,
+    }
+    return { stats, detail: ledger ? ledgerDetailOf(ledger) : null, attributed }
+  }, [result, kind])
   /** 벤치마크가 실행 구간보다 늦게 시작하면 그 이전 구간의 알파는 벤치 부재로 과대평가된다.
    *  휴장일 차이로 하루이틀 어긋나는 것까지 경고하면 노이즈라 30일 이상만 잡는다.
    *  (KODEX 200 시세는 실행 구간보다 늦게 시작할 수 있다 — 그 앞 구간은 비교 대상이 없다) */
@@ -1661,7 +1843,12 @@ export function SpecSimulator() {
                 changeText={`평균 손익 ${summary.avgPnl != null ? fmtPct(summary.avgPnl, 2) : '—'} · 연말 이월(미청산) ${result.openAtEnd}`}
                 changeLabel=""
                 direction="flat"
+                info="청산이 끝난 매매 중 이익으로 끝난 비율입니다(미청산 포지션은 확정 손익이 아니라 제외 — 연말 이월 건수를 함께 적어 둡니다). 승률만으로는 성과를 알 수 없습니다: 조금씩 여러 번 벌고 한 번에 크게 잃으면 승률 80%도 손실로 끝납니다. 옆의 손익비·Profit Factor와 반드시 함께 보세요. 매매 수가 적으면(수십 건 이하) 승률은 우연의 산물일 수 있습니다."
               />
+            )}
+            {/* 표준 성과 지표 — 사전계산 화면과 **같은 카드**(정의·설명이 갈라질 수 없다) */}
+            {perf && (
+              <PerfStatCards stats={perf.stats} detail={perf.detail} ledgerAttributed={perf.attributed} />
             )}
           </div>
 

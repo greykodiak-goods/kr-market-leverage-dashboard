@@ -20,8 +20,17 @@ import type { CostSettings } from './conditionScreen'
 import type { StrategyKind } from './presets'
 import type { EquityRow } from './EquityChart'
 
-/** 화면이 읽을 수 있는 산출물 스키마 버전. 다르면 무시한다. */
-export const PRECOMPUTE_SCHEMA = 1
+/** 굽는 쪽이 지금 쓰는 산출물 스키마 버전(2 = 표준 성과 지표 세트 추가). */
+export const PRECOMPUTE_SCHEMA = 2
+
+/**
+ * 화면이 **읽을 수 있는** 스키마 버전들. 모르는 버전이면 없는 셈 친다(우아한 강등).
+ *
+ * 1 → 2는 **필드 추가만** 했으므로 옛 산출물도 그대로 읽는다. 다만 schema 1 파일에는
+ * 신규 지표(변동성·샤프·소르티노·최장 낙폭 기간·손익비·PF)가 없으므로 그 카드는
+ * `undefined`로 남아 화면에서 '—'가 된다 — 없는 값을 0으로 채우지 않는다(규칙 3).
+ */
+export const SUPPORTED_PRECOMPUTE_SCHEMAS: readonly number[] = [1, 2]
 
 /** [날짜, 자산(원), 벤치마크(원)] */
 export type CurveTuple = [string, number, number]
@@ -44,6 +53,26 @@ export interface PrecomputedPreset {
   endDate: string
   initialCapital: number
   curve: CurveTuple[]
+
+  // ---- schema 2에서 추가된 표준 성과 지표 (schema 1 산출물에는 없다 → undefined) ----
+  // 전부 **다운샘플 전 원곡선·원장**에서 잰 값이다. 아래 저장된 주 1점 곡선에서 다시 재면
+  // 변동성이 낮아지고 낙폭 기간이 짧아 보인다 — 그래서 화면은 이 스칼라를 쓴다.
+  /** 연환산 변동성(%) */
+  volAnnPct?: number | null
+  /** 샤프 비율 — 무위험수익률 0% 가정 */
+  sharpe?: number | null
+  /** 소르티노 비율 — 무위험수익률 0% 가정 */
+  sortino?: number | null
+  /** 최장 낙폭 기간(달력 일수) */
+  maxDdDays?: number | null
+  /** 그 구간을 곡선 마지막 날까지 회복했는지 */
+  maxDdRecovered?: boolean | null
+  maxDdStart?: string | null
+  maxDdEnd?: string | null
+  /** 손익비(평균이익% ÷ |평균손실%|) — 결합은 원장 귀속 불가라 null */
+  payoffRatio?: number | null
+  /** Profit Factor(이익합 ÷ |손실합|) — 결합은 원장 귀속 불가라 null */
+  profitFactor?: number | null
 }
 
 export interface PrecomputedFile {
@@ -62,14 +91,19 @@ export interface PrecomputedIndex {
   curveInterval: 'weekly'
   cost: CostSettings
   note: string
+  /** 이 산출물의 스키마 버전 — 화면이 "옛 산출물이라 신규 지표가 없다"를 말할 때 쓴다 */
+  schema: number
   byId: Record<string, PrecomputedPreset>
 }
 
-/** 응답이 우리가 아는 모양인지 최소한만 확인한다(모르는 모양이면 없는 셈 친다). */
-function toIndex(raw: unknown): PrecomputedIndex | null {
+/**
+ * 응답이 우리가 아는 모양인지 최소한만 확인한다(모르는 모양이면 없는 셈 친다).
+ * 알려진 스키마 버전이면 **필드가 빠져 있어도** 받아들인다 — 빠진 신규 지표는 화면에서 '—'다.
+ */
+export function toPrecomputedIndex(raw: unknown): PrecomputedIndex | null {
   const f = raw as PrecomputedFile | null
   if (!f || typeof f !== 'object') return null
-  if (f.schema !== PRECOMPUTE_SCHEMA) return null
+  if (!SUPPORTED_PRECOMPUTE_SCHEMAS.includes(f.schema)) return null
   if (!Array.isArray(f.presets)) return null
   const byId: Record<string, PrecomputedPreset> = {}
   for (const p of f.presets) {
@@ -83,6 +117,7 @@ function toIndex(raw: unknown): PrecomputedIndex | null {
     curveInterval: 'weekly',
     cost: f.cost,
     note: typeof f.note === 'string' ? f.note : '',
+    schema: f.schema,
     byId,
   }
 }
@@ -98,7 +133,7 @@ export function usePrecomputedPresets(): PrecomputedIndex | null {
     fetch(`${import.meta.env.BASE_URL}data/presets-precomputed.json`)
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
-        if (alive) setIdx(toIndex(j))
+        if (alive) setIdx(toPrecomputedIndex(j))
       })
       .catch(() => {
         /* 없으면 없는 대로 — 예전 화면 그대로 동작한다 */

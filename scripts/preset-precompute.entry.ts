@@ -31,6 +31,7 @@ import type { CostSettings } from '../src/features/backtest/conditionScreen'
 import { annualize, runPitChained, yearsBetween, type PitChainResult } from '../src/features/backtest/pitChain'
 import { runXsmomChained } from '../src/features/backtest/xsmomChain'
 import { blendChainResults } from '../src/features/backtest/comboBlend'
+import { perfStatFields, type PerfStatFields } from '../src/features/backtest/perfStats'
 import { PIT_UNION, PIT_YEARS, pitCodes } from '../src/features/backtest/pitUniverse'
 import { BENCH_SYMBOL, DEFAULT_COST, PRESETS, type Preset, type StrategyKind } from '../src/features/backtest/presets'
 import type { StrategySpec } from '../src/features/backtest/strategySpec'
@@ -41,8 +42,12 @@ import { KR_LOAD_NOTE, KR_MIN_BARS, loadKrDual } from '../src/lib/history'
 const root = process.env.REPO_ROOT ?? process.cwd()
 const OUT_PATH = join(root, 'public', 'data', 'presets-precomputed.json')
 
-/** 산출물 스키마 버전 — 화면이 모르는 버전이면 무시하고 우아하게 강등한다. */
-export const PRECOMPUTE_SCHEMA = 1
+/**
+ * 산출물 스키마 버전 — 화면이 모르는 버전이면 무시하고 우아하게 강등한다.
+ * 2 (2026-08-02): 표준 성과 지표 세트(변동성·샤프·소르티노·최장 낙폭 기간·손익비·PF) **추가**.
+ * 필드 추가만이라 화면(precomputed.ts)은 schema 1 산출물도 계속 읽는다(신규 지표만 '—').
+ */
+export const PRECOMPUTE_SCHEMA = 2
 
 /**
  * 화면의 `getDailyHistory(sym, BACKTEST_HISTORY_RANGE)`와 **같은 구간**을 받는다.
@@ -112,7 +117,7 @@ export interface CurvePoint {
 /** 파일 크기를 줄이려고 곡선은 배열 튜플로 굽는다: [날짜, 자산, 벤치마크] */
 export type CurveTuple = [string, number, number]
 
-export interface PrecomputedPreset {
+export interface PrecomputedPreset extends PerfStatFields {
   id: string
   label: string
   kind: StrategyKind
@@ -250,7 +255,12 @@ export function summarizePreset(
     benchmark: p.benchmark,
   }))
   const sampled = downsampleWeekly(raw)
+  // 표준 성과 지표(schema 2)는 **다운샘플 전 원곡선·원장**에서 잰다 — 주 1점으로 줄인 곡선에서
+  // 재면 일수익률이 주수익률이 되어 변동성 연환산(×√252)이 통째로 어긋난다.
+  // 결합(combo)은 곡선 합성이라 원장이 귀속되지 않으므로 원장 지표는 null로 둔다(0건이 아니다).
+  const perf = perfStatFields(raw, result.trades, result.cagrPct, preset.kind !== 'combo')
   return {
+    ...perf,
     id: preset.id,
     label: preset.label,
     kind: preset.kind,
@@ -286,6 +296,7 @@ export function buildPayload(
       '시뮬레이터 프리셋을 화면과 같은 엔진·같은 비용으로 미리 돌린 [추정] 산출물이다. ' +
       '곡선은 주 1점으로 줄였고(최저점·최종일 보존), 요약 수치는 줄이기 전 원곡선에서 쟀다. ' +
       '유니버스는 연도별 시총 상위 10+10 [추정]이며 상장폐지 종목의 가격 부재로 생존편향이 남아 있다. ' +
+      '샤프·소르티노는 무위험수익률 0% 가정이라 실제 국고채 수익률만큼 낮아진다. ' +
       `${KR_LOAD_NOTE} ` +
       '매수 권유가 아니다.',
     presets,
@@ -405,6 +416,9 @@ async function main(): Promise<void> {
       `· ${preset.id.padEnd(14)} 총 ${row.totalPct.toFixed(0)}% · CAGR ${row.cagrPct.toFixed(1)}% · ` +
         `10y ${row.cagr10yPct != null ? `${row.cagr10yPct.toFixed(1)}%` : '—'} · MDD ${row.mddPct.toFixed(1)}% · ` +
         `알파 ${row.alphaCagrPct != null ? `${row.alphaCagrPct.toFixed(1)}%p` : '—'} · ` +
+        `변동성 ${row.volAnnPct != null ? `${row.volAnnPct.toFixed(1)}%` : '—'} · ` +
+        `샤프 ${row.sharpe != null ? row.sharpe.toFixed(2) : '—'} · ` +
+        `최장낙폭 ${row.maxDdDays != null ? `${row.maxDdDays}일${row.maxDdRecovered === false ? '(미회복)' : ''}` : '—'} · ` +
         `곡선 ${result.equity.length}→${row.curve.length}점 · ${((Date.now() - t0) / 1000).toFixed(1)}s`,
     )
   }
