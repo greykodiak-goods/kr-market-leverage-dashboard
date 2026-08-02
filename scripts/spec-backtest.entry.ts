@@ -1881,20 +1881,22 @@ async function pit1010() {
 
   type Combo = { ma: number; hb: number; xm: number; buf: number }
   const combos: Combo[] = []
-  for (const ma of [10, 15, 20])
-    for (const hb of [20, 60])
-      for (const xm of [40, 60, 80])
-        for (const buf of [0, 2]) combos.push({ ma, hb, xm, buf })
-  const nameOf = (k: Combo) => `MA${k.ma}×신고${k.hb}→${k.xm}선${k.buf ? `·버퍼${k.buf}%` : ''}`
-  const specOf = (k: Combo, symbols: string[]): StrategySpec =>
-    baseSpec({
-      entry: {
-        op: 'and',
-        nodes: [c(`${k.ma}일선돌파`, { kind: 'maCross', period: k.ma, dir: 'above' }), c(`${k.hb}일신고가`, { kind: 'highBreak', days: k.hb })],
-      },
+  // PIT_GRID=wide 면 400조합 확장 격자(수익률 최대 탐색 — 2026-08-02 대표 지시), 기본은 21차 36조합
+  const wide = process.env.PIT_GRID === 'wide'
+  for (const ma of wide ? [5, 10, 15, 20, 25] : [10, 15, 20])
+    for (const hb of wide ? [0, 10, 20, 40, 60] : [20, 60])
+      for (const xm of wide ? [20, 40, 60, 80] : [40, 60, 80])
+        for (const buf of wide ? [0, 1, 2, 3] : [0, 2]) combos.push({ ma, hb, xm, buf })
+  const nameOf = (k: Combo) => `MA${k.ma}${k.hb ? `×신고${k.hb}` : ''}→${k.xm}선${k.buf ? `·버퍼${k.buf}%` : ''}`
+  const specOf = (k: Combo, symbols: string[]): StrategySpec => {
+    const nodes = [c(`${k.ma}일선돌파`, { kind: 'maCross', period: k.ma, dir: 'above' })]
+    if (k.hb) nodes.push(c(`${k.hb}일신고가`, { kind: 'highBreak', days: k.hb }))
+    return baseSpec({
+      entry: { op: 'and', nodes },
       exits: [{ kind: 'maBreak', maPeriod: k.xm, pct: k.buf }],
       universe: { ...baseSpec({}).universe, symbols },
     })
+  }
 
   // 연쇄 로직은 src/features/backtest/pitChain 의 runPitChained 하나뿐이다 —
   // 화면(SpecSimulator)과 이 러너가 같은 함수를 부르므로 수치가 갈릴 수 없다.
@@ -1943,10 +1945,36 @@ async function pit1010() {
     )
   }
 
+  // 총수익 정렬 표 — "가장 수익률 높은 케이스" (2026-08-02 대표 지시). 매매<100 조합은
+  // 몇 번의 운으로 1등 하는 것을 막기 위해 제외하고, 제외 사실을 명시한다.
+  const byTotal = rows.filter((x) => x.r.trades.length >= 100).sort((a, b) => b.r.totalPct - a.r.totalPct)
+  const excludedFew = rows.length - byTotal.length
+  log('')
+  log(`수익률 최대 상위 10 (매매≥100 필터 — 제외 ${excludedFew}조합):`)
+  log('| # | 조건식 | **총수익** | CAGR | MDD | 수익÷MDD | 알파(연) | 매매 |')
+  log('|---|---|---|---|---|---|---|---|')
+  for (const [i, x] of byTotal.slice(0, 10).entries()) {
+    log(
+      `| ${i + 1} | ${nameOf(x.k)} | **${f1(x.r.totalPct)}%** | ${f1(x.r.cagrPct)}% | ${f1(x.r.mddPct)}% | ${x.r.objective?.toFixed(1) ?? '—'} | ${f1(
+        x.r.alphaCagrPct ?? 0,
+      )}%p | ${x.r.trades.length} |`,
+    )
+  }
+  const topTotal = byTotal[0]
+  if (topTotal) {
+    log('')
+    log(`수익률 1위(${nameOf(topTotal.k)}) 연도별 수익 vs 벤치:`)
+    log('| 연도 | 매핑 | 전략 | 벤치 |')
+    log('|---|---|---|---|')
+    for (const py of topTotal.r.perYear) {
+      log(`| ${py.year} | ${py.mapped}/${py.total}${py.cash ? ' (현금)' : ''} | ${f1(py.strategyPct)}% | ${py.benchPct != null ? f1(py.benchPct) : '—'}% |`)
+    }
+  }
+
   // 1위 조합의 연도별 분해 (거짓 매끈함 방지 — 몇 해에 몰려 번 것인지 확인)
   const top = rows[0]
   log('')
-  log(`1위(${nameOf(top.k)}) 연도별 수익 vs 벤치:`)
+  log(`수익÷MDD 1위(${nameOf(top.k)}) 연도별 수익 vs 벤치:`)
   log('| 연도 | 매핑 | 전략 | 벤치 |')
   log('|---|---|---|---|')
   for (const py of top.r.perYear) {
