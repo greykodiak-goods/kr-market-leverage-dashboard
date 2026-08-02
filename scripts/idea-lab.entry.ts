@@ -25,6 +25,12 @@
 //                 결합 역변동성 가중.
 //   판정 기준선은 셋 다 **MA25×신고10→80선**(23차 격자 수익÷MDD 1위)을 같은 유니버스·
 //   같은 비용으로 **재실행한** 수치다. 다른 표의 숫자를 옮겨 적지 않는다.
+// MODE=asset    — 자산군 분산 반증 실험(2026-08-02 대표 지시 "②(자산군 분산) 진행하자").
+//                 31차 재채점 칼마 1위(결합 50:50+게이트 = 0.599)를 채권(TLT)·금(GLD) 원화
+//                 환산 슬리브가 **깨는지** 본다. 안 깨지면 그것도 결과다.
+//   ⚠️ 이 모드만 판정 지표가 **칼마(CAGR÷|MDD|)**다 — GLD(2004-11 상장) 때문에 구간을 잘라야
+//      하는데, 총수익÷MDD는 구간이 짧아진 것만으로 떨어져 분산의 효과와 섞이기 때문이다.
+//      그래서 **베이스도 같은 구간으로 다시 재서** 나란히 놓는다(전 구간 값은 참고 행으로만).
 //
 // ── 발굴 깔때기 1~2관문 — 미검증 랭킹 4계열 일괄 스크리너 ────────────────────
 // MODE=screen   — lowvol · hi52 · strev · volrank 네 계열을 **한 번에** 1~2관문에 태운다.
@@ -301,6 +307,76 @@ export function perfOf(equity: { date: string; equity: number }[], from = '', to
   const total = (ratio - 1) * 100
   const mddAbs = Math.abs(mdd)
   return { total, cagr: (Math.pow(ratio, 1 / years) - 1) * 100, mdd, obj: mddAbs > 0.01 ? total / mddAbs : null, years }
+}
+
+/**
+ * 칼마 비율 = **CAGR ÷ |MDD|**. `Perf.obj`(총수익÷MDD)와 **다른 지표다** — obj는 구간이
+ * 길수록 분자가 복리로 커져 긴 구간에 유리하게 기운다. 칼마는 분자를 연환산해 그 편향을
+ * 없앤다. 그래서 **구간을 통일한 비교**에서는 칼마를 판정 지표로 쓴다(MODE=asset).
+ * MDD가 사실상 0이면(낙폭 없는 곡선) 비율이 발산하므로 null.
+ */
+export function calmarOf(p: Perf): number | null {
+  const mddAbs = Math.abs(p.mdd)
+  return mddAbs > 0.01 ? p.cagr / mddAbs : null
+}
+
+/** 곡선을 [from, to] 구간으로 자른다(양끝 포함). 구간 통일 비교의 전제. */
+export function clipCurve(
+  curve: { date: string; equity: number }[],
+  from: string,
+  to: string,
+): { date: string; equity: number }[] {
+  return curve.filter((p) => p.date >= from && p.date <= to)
+}
+
+/**
+ * 여러 곡선이 **모두 존재하는** 구간 [최늦은 시작, 가장 이른 끝]. 하나라도 비었거나
+ * 교집합이 없으면 null.
+ *
+ * 구간이 다른 칼마를 나란히 놓는 순간 그 표는 거짓이다 — 2004년에 시작한 곡선과 2000년에
+ * 시작한 곡선은 겪은 위기의 수가 다르다. 그래서 베이스까지 **같은 구간으로 다시 재려고**
+ * 이 함수를 쓴다.
+ */
+export function commonSpan(curves: { date: string; equity: number }[][]): [string, string] | null {
+  if (curves.length === 0 || curves.some((c) => c.length < 1)) return null
+  let start = curves[0][0].date
+  let end = curves[0][curves[0].length - 1].date
+  for (const c of curves) {
+    if (c[0].date > start) start = c[0].date
+    if (c[c.length - 1].date < end) end = c[c.length - 1].date
+  }
+  return start > end ? null : [start, end]
+}
+
+/**
+ * 3자 월별 리밸런스 결합 — **2단 `blendCurves`로 합성한다.**
+ *
+ * 의미론이 진짜 3자 결합과 **동일한 이유**: `blendMonthlyRebalanced`는 달이 바뀌는 첫
+ * 거래일에 총자산을 목표 가중으로 되돌리고 달 안에서는 각 슬리브가 제 수익률대로 표류한다.
+ * 안쪽 결합(b:c = wB:wC)을 하나의 슬리브로 보면 그 슬리브의 월초 구성은 항상
+ * wB/(wB+wC) : wC/(wB+wC)이고, 바깥 결합이 그 슬리브에 (wB+wC)를 배정하므로 월초 전체
+ * 구성은 정확히 wA : wB : wC가 된다. 두 결합이 **같은 월 경계**에서 리밸런스하므로
+ * 달 안 표류도 3자 동시 결합과 같다. (집행자: `tests/asset.test.ts`의 독립 3자 구현 대조)
+ *
+ * 가중치는 내부에서 합 1로 정규화한다. wB+wC가 0이면 a 그대로(정규화한 배수 곡선).
+ */
+export function blend3Curves(
+  a: { date: string; equity: number }[],
+  b: { date: string; equity: number }[],
+  c: { date: string; equity: number }[],
+  wA: number,
+  wB: number,
+  wC: number,
+): { date: string; equity: number }[] {
+  const sum = wA + wB + wC
+  if (!(sum > 0)) return []
+  const [nA, nB, nC] = [wA / sum, wB / sum, wC / sum]
+  if (!(nB + nC > 0)) {
+    const base = a.length && a[0].equity > 0 ? a[0].equity : 1
+    return a.map((p) => ({ date: p.date, equity: p.equity / base }))
+  }
+  const inner = blendCurves(b, c, nB / (nB + nC))
+  return blendCurves(a, inner, nA)
 }
 
 /** 이항 상측 꼬리 P(X ≥ k), X~Bin(n,p) — 다중검정 기대 위양성 계산용 */
@@ -1919,17 +1995,23 @@ export function summarizeStrat(
 
 const pctOrDash = (v: number | null) => (v == null ? '—' : `${f1(v)}%p`)
 
-export function stratTable(rows: StratRow[], halfYear = HALF_YEAR) {
+/**
+ * `calmar: true`면 **수익÷MDD 오른쪽에 칼마 열을 하나 더** 끼운다(MODE=asset의 판정 지표).
+ * 기본값은 `false`라 기존 모드의 출력은 **바이트 단위로 그대로**다 — 새 모드 때문에 옛 표가
+ * 바뀌면 이전 회차 보고서와 대조가 불가능해진다.
+ */
+export function stratTable(rows: StratRow[], halfYear = HALF_YEAR, opts: { calmar?: boolean } = {}) {
+  const cal = opts.calmar === true
   log(
-    `| 전략 | 총수익 | CAGR | MDD | **수익÷MDD** | 매매(청산완료) | 승률 | 알파(CAGR) | ` +
+    `| 전략 | 총수익 | CAGR | MDD | **수익÷MDD** | ${cal ? '**칼마(CAGR÷MDD)** | ' : ''}매매(청산완료) | 승률 | 알파(CAGR) | ` +
       `전반(~${halfYear - 1}) 총/MDD/알파 | 후반(${halfYear}~) 총/MDD/알파 |`,
   )
-  log('|---|---|---|---|---|---|---|---|---|---|')
+  log(`|---|---|---|---|---|${cal ? '---|' : ''}---|---|---|---|---|`)
   for (const r of rows) {
     const wr = r.closed > 0 ? `${((r.wins / r.closed) * 100).toFixed(0)}%` : '—'
     log(
       `| ${r.label} | ${f1(r.full.total)}% | ${f1(r.full.cagr)}% | ${f1(r.full.mdd)}% | ` +
-        `${r.full.obj?.toFixed(1) ?? '—'} | ${r.closed} | ${wr} | ${pctOrDash(r.alphaFull)} | ` +
+        `${r.full.obj?.toFixed(1) ?? '—'} | ${cal ? `${calmarOf(r.full)?.toFixed(3) ?? '—'} | ` : ''}${r.closed} | ${wr} | ${pctOrDash(r.alphaFull)} | ` +
         `${f1(r.a.total)}% / ${f1(r.a.mdd)}% / ${pctOrDash(r.alphaA)} | ` +
         `${f1(r.b.total)}% / ${f1(r.b.mdd)}% / ${pctOrDash(r.alphaB)} |`,
     )
@@ -4735,6 +4817,297 @@ async function overlay() {
 }
 
 // ============================================================================
+// MODE=asset — 자산군 분산(채권·금)이 칼마를 더 올리는가 (반증 실험)
+// ============================================================================
+//
+// 대표 지시(2026-08-02): "②(자산군 분산) 진행하자 — 반증 미개척지 찾자."
+//
+// 31차 재채점에서 칼마 1위는 **결합 50:50 + B슬리브 시장게이트(12-1) = 0.599**였다.
+// 이 실험의 질문은 하나다: **채권·금을 섞으면 그 0.599가 깨지는가.**
+// "더 좋아지길 바라는" 실험이 아니라 **깨지는지 보는** 반증 실험이므로, 안 깨지면
+// 그것도 결과다(분산이 이 조합에서는 값을 못 얹는다는 증거).
+//
+// ⚠️ 이번 판정 지표는 **칼마(CAGR÷|MDD|)**다 — 기존 표의 `수익÷MDD`(obj)가 아니다.
+//    obj는 분자가 총수익이라 구간이 길수록 복리로 부풀어 **긴 구간에 유리하게 기운다.**
+//    자산군 분산은 GLD(2004-11 상장) 때문에 구간을 잘라야 하므로, 구간 길이에 둔감한
+//    칼마가 아니면 "구간이 짧아져서 나빠진 것"과 "분산이 나빠서 나빠진 것"이 섞인다.
+//
+// 구간 정직성이 이 모드의 생명이다:
+//   · GLD가 2004-11에 시작하므로 **모든 행을 그 겹치는 구간으로 통일**한다.
+//   · 베이스(E1·E2 단독)도 **같은 구간으로 다시 재서** 나란히 놓는다. 전 구간(2000~)
+//     베이스 값을 그대로 옮겨 적고 분산 변형과 비교하면 그 표는 거짓이다 — 2000~2004의
+//     닷컴 붕괴 뒷자락을 한쪽만 겪은 채 칼마를 견주는 꼴이 된다.
+//   · 전 구간 값은 **참고 행으로만** 남긴다.
+
+/** 분산 슬리브 — 미 장기국채(2002-07~) · 금(2004-11~). 둘 다 Yahoo · 원화 환산. */
+export const ASSET_TLT = 'TLT'
+export const ASSET_GLD = 'GLD'
+
+/**
+ * 자산군 분산 판정 — 대표 지시 기준 3항.
+ *   ① **칼마**가 같은 구간 베이스보다 개선  ② 전·후반 모두 벤치 대비 알파 양(+)
+ *   ③ ΔCAGR을 열로 드러낸다(수익을 얼마나 깎았는지 숨기지 않는다)
+ * 채택된 변형 수를 돌려준다. `overlayVerdictTable`과 판정 지표가 달라 별도 함수다.
+ */
+export function assetVerdictTable(base: StratRow, rows: StratRow[]): number {
+  const bc = calmarOf(base.full)
+  log('')
+  log(`## 판정 — 베이스 \`${base.label}\` 대비 (기준: **칼마** 개선 + 전·후반 알파 양수)`)
+  log('| 변형 | 칼마 | Δ칼마 | MDD | ΔMDD | CAGR | **ΔCAGR** | 전반 알파 | 후반 알파 | 판정 |')
+  log('|---|---|---|---|---|---|---|---|---|---|')
+  let adopted = 0
+  for (const r of rows) {
+    const rc = calmarOf(r.full)
+    const calUp = bc != null && rc != null && rc > bc
+    const alphaOk = (r.alphaA ?? -1) > 0 && (r.alphaB ?? -1) > 0
+    const ok = calUp && alphaOk
+    if (ok) adopted++
+    log(
+      `| ${r.label} | ${rc?.toFixed(3) ?? '—'} | ${bc != null && rc != null ? f2(rc - bc) : '—'} | ` +
+        `${f1(r.full.mdd)}% | ${f1(r.full.mdd - base.full.mdd)}%p | ${f1(r.full.cagr)}% | ` +
+        `${f1(r.full.cagr - base.full.cagr)}%p | ${pctOrDash(r.alphaA)} | ${pctOrDash(r.alphaB)} | ` +
+        `${ok ? '✅' : calUp ? '△ 칼마만' : '❌'} |`,
+    )
+  }
+  log('△ = 칼마는 올랐지만 전·후반 알파 조건을 못 채운 것. 칼마만 보고 채택하면 규칙 5 위반이다.')
+  log('**ΔCAGR이 음수인 변형은 수익을 깎아 낙폭을 산 것이다** — 분산의 대가가 바로 이 열이고,')
+  log('그 값을 보고도 받아들일 수 있을 때만 채택이다. 칼마가 올랐다는 말은 "덜 벌었지만 덜 아팠다"일 수 있다.')
+  return adopted
+}
+
+/** 자산군 분산 전용 다중검정 경고 — 31차 재채점에 **이어지는** 연속 탐색임을 명시한다. */
+function assetMultipleTestingNote(n: number, adopted: number) {
+  log('')
+  log('## 다중검정 경고')
+  log(`같은 데이터에 분산 변형 ${n}개를 돌려 같은 구간 베이스와 비교했고, 그중 ${adopted}개가 판정 기준을 통과했다.`)
+  log('⚠️ **이것은 독립 실험이 아니다.** 25·26차(슬리브 선정) → 30차(오버레이) → 31차(재채점)를')
+  log('   거쳐 **이미 이 데이터에서 이긴 조합** 위에 다시 변형을 얹고 있다. 누적 탐색 횟수 기준으로 보면')
+  log('   여기서 나오는 p값은 **낙관적으로 편향돼 있다** — 이 표 하나만 보고 유의성을 논하지 마라.')
+  if (adopted === 0)
+    log('통과가 0개면 다중검정을 따질 것도 없다 — 이 데이터에서 채권·금 분산은 베이스의 칼마를 개선하지 못했다.')
+  else
+    log(
+      `순수 우연이라도 한 변형이 두 구간 모두 알파 양수일 확률을 ≈25%로 보면, ${n}개 중 ${adopted}개 이상이 ` +
+        `그럴 확률은 약 ${(binomTail(n, adopted, 0.25) * 100).toFixed(0)}%다 — 이 값이 크면 표본 잡음이다.`,
+    )
+  log('⚠️ **사후선택 경고**: 비중 20%가 40%보다 좋았다는 이유로 20%를 고르는 순간 그 선택이 곡선맞춤이다.')
+  log('   채택하려면 ① 판정 3항을 다 만족하고 ② 위기 연도 표에서 **왜** 도움이 됐는지가 설명되며')
+  log('   ③ 이웃 비중(20↔40)에서도 방향이 같아야 한다. 한 비중만 좋으면 고원이 아니라 봉우리다.')
+}
+
+/** 달러 자산 → 원화 곡선. 로드 실패 시 null(그 자산을 쓰는 행만 빠지고 모드는 계속 돈다). */
+async function loadKrwAsset(symbol: string, fx: DailyBar[]): Promise<{ curve: { date: string; equity: number }[]; bars: number } | null> {
+  try {
+    const bars = await fetchDaily(symbol, 'since:1999-01-01')
+    await sleep(120)
+    const curve = toKrwCurve(bars, fx)
+    if (curve.length < 2) {
+      log(`⚠️ ${symbol} 원화 환산 실패 — 환율 구간이 겹치지 않는다. 이 자산 행은 생략.`)
+      return null
+    }
+    return { curve, bars: bars.length }
+  } catch (e) {
+    log(`⚠️ ${symbol} 로드 실패 — 이 자산 행은 생략 (${String(e)})`)
+    return null
+  }
+}
+
+async function asset() {
+  log('# MODE=asset — 자산군 분산(채권·금)이 칼마를 더 올리는가 (반증 실험)')
+  log('')
+  log('대표 지시(2026-08-02): "②(자산군 분산) 진행하자 — 반증 미개척지 찾자."')
+  log('')
+  log('31차 재채점 칼마 1위 = **결합 50:50 + B슬리브 시장게이트(12-1) = 0.599**.')
+  log('질문은 "분산이 좋은가"가 아니라 **"그 0.599가 채권·금으로 깨지는가"**다.')
+  log('안 깨지면 그것도 결과다 — 이 조합에서는 분산이 값을 못 얹는다는 증거로 남는다.')
+  log('')
+  log('**판정 지표는 칼마(CAGR÷|MDD|)다** — 기존 표의 `수익÷MDD`가 아니다. GLD 때문에 구간을')
+  log('잘라야 하는데, 총수익 기반 비율은 구간이 짧아진 것만으로도 떨어져 분산의 효과와 섞인다.')
+  log('')
+  const { years, histories, bench } = await loadPitHistories()
+  const yearly = buildYearly(histories, years)
+  if (yearly.every((v) => v.syms.length < 5)) {
+    log('❌ 시세 로드 실패로 실행할 해가 없다 — 중단')
+    return
+  }
+  const benchEq = benchCurve(bench)
+  log(`연도별 매핑률: ${yearly.map((v) => `${v.y} ${v.mapped}`).join(' · ')}`)
+
+  // ---- 레짐 시계열 (E1의 게이트용 — overlay와 동일 규약) ----------------------
+  let regime = benchEq
+  let regimeNote = `${BENCH} 단독 (${bench[0]?.date ?? '—'} 시작 — 그 이전 달은 판정 불가 = 게이트 미작동)`
+  try {
+    const ks = await fetchDaily(REGIME_FALLBACK, 'since:1999-01-01')
+    const spliced = spliceRegimeCurve(bench, ks)
+    if (spliced.length > benchEq.length) {
+      regime = spliced
+      regimeNote =
+        `${BENCH} + ${REGIME_FALLBACK}(코스피 종합) 폴백 — ${bench[0]?.date ?? '—'} 이전 구간은 ` +
+        `${REGIME_FALLBACK}의 **수익률만** 이어 붙였다(이음매 레벨 정합).`
+    }
+  } catch (e) {
+    log(`⚠️ ${REGIME_FALLBACK} 로드 실패 — 레짐은 벤치 구간만으로 판정한다 (${String(e)})`)
+  }
+  log(`레짐 판정 시계열: ${regimeNote}`)
+
+  // ---- 주식 슬리브 두 개 (30차 overlay와 **같은 산출 경로**) ------------------
+  const chainA = runSpecChain(yearly, baselineSpec, COST)
+  const chainB = runCustomChain(
+    yearly,
+    (v) => simulateXsMomYear(v.hist, `${v.y}-01-01`, v.syms, COST, OVERLAY_B),
+    COST,
+    OVERLAY_B.slots,
+  )
+  const gateChain = runCustomChain(
+    yearly,
+    (v) =>
+      simulateRankYear(v.hist, `${v.y}-01-01`, v.syms, COST, {
+        slots: OVERLAY_B.slots,
+        rank: xsmomRank,
+        keep: (r) => r.aux >= 0,
+        exposure: makeRegimeExposure(regime, 'mom12_1'),
+      }),
+    COST,
+    OVERLAY_B.slots,
+  )
+  const e1Full = blendCurves(chainA.equity, gateChain.equity, 0.5)
+  const e2Full = blendCurves(chainA.equity, chainB.equity, 0.5)
+  log('')
+  log(`· E1 = 결합 50:50 + B슬리브 시장게이트(12-1) — 31차 칼마 1위 (${spanOf(e1Full).join(' ~ ')})`)
+  log(`· E2 = 결합 50:50 (게이트 없음) — 현 프리셋 (${spanOf(e2Full).join(' ~ ')})`)
+
+  // ---- 분산 자산 (원화 환산) ---------------------------------------------------
+  let fx: DailyBar[] = []
+  try {
+    fx = await fetchDaily(FX_KRW, 'since:1999-01-01')
+    await sleep(120)
+  } catch (e) {
+    log(`❌ 환율(${FX_KRW}) 로드 실패 — 원화 환산이 불가능하므로 중단한다 (${String(e)})`)
+    return
+  }
+  const tlt = await loadKrwAsset(ASSET_TLT, fx)
+  const gld = await loadKrwAsset(ASSET_GLD, fx)
+  if (!tlt) {
+    log('❌ TLT 로드 실패 — 채권 슬리브 없이는 이 실험이 성립하지 않는다. 중단.')
+    return
+  }
+  log('')
+  log(`분산 자산: ${ASSET_TLT} ${tlt.bars}봉 (${spanOf(tlt.curve).join(' ~ ')})` + (gld ? ` · ${ASSET_GLD} ${gld.bars}봉 (${spanOf(gld.curve).join(' ~ ')})` : ` · ${ASSET_GLD} **없음**`))
+  log(`${FX_NOTE} · 환율 ${fx.length}봉`)
+
+  // ---- 구간 통일 ---------------------------------------------------------------
+  const span = commonSpan(gld ? [e1Full, e2Full, tlt.curve, gld.curve] : [e1Full, e2Full, tlt.curve])
+  if (!span) {
+    log('❌ 네 곡선이 겹치는 구간이 없다 — 중단')
+    return
+  }
+  const [FROM, TO] = span
+  const E1 = clipCurve(e1Full, FROM, TO)
+  const E2 = clipCurve(e2Full, FROM, TO)
+  const T = clipCurve(tlt.curve, FROM, TO)
+  const G = gld ? clipCurve(gld.curve, FROM, TO) : null
+  const BM = clipCurve(benchEq, FROM, TO)
+  const yrs = years.filter((y) => y >= Number(FROM.slice(0, 4)))
+  log('')
+  log(`## 비교 구간 통일 — **${FROM} ~ ${TO}**`)
+  log(`${G ? `${ASSET_GLD}가 ${spanOf(gld!.curve)[0]}에 시작해` : `${ASSET_TLT}가 ${spanOf(tlt.curve)[0]}에 시작해`} 이 구간이 네 곡선의 교집합이다.`)
+  log('**베이스도 이 구간으로 다시 쟀다.** 전 구간 베이스 값을 그대로 옮겨 적고 분산 변형과 견주면')
+  log('그 비교는 거짓이다 — 한쪽만 2000~2004 닷컴 붕괴 뒷자락을 겪은 채 칼마를 나란히 놓는 꼴이 된다.')
+  {
+    const p1 = perfOf(e1Full)
+    const p2 = perfOf(e2Full)
+    log('')
+    log('참고(비교에 쓰지 않는 값) — **전 구간** 베이스:')
+    log(`· E1 전 구간 ${spanOf(e1Full).join('~')}: CAGR ${f1(p1.cagr)}% · MDD ${f1(p1.mdd)}% · 칼마 ${calmarOf(p1)?.toFixed(3) ?? '—'}`)
+    log(`· E2 전 구간 ${spanOf(e2Full).join('~')}: CAGR ${f1(p2.cagr)}% · MDD ${f1(p2.mdd)}% · 칼마 ${calmarOf(p2)?.toFixed(3) ?? '—'}`)
+    log('이 두 줄은 **아래 표의 어느 행과도 직접 비교하면 안 된다**(구간이 다르다).')
+  }
+
+  // ---- 변형 (≤10) ---------------------------------------------------------------
+  const crisis: { label: string; crisis: CrisisStat[] }[] = []
+  const baseE1 = curveStrat('E1 베이스 · 결합 50:50 + 게이트(12-1)', E1, BM, yrs)
+  const baseE2 = curveStrat('E2 베이스 · 결합 50:50', E2, BM, yrs)
+  crisis.push({ label: baseE1.label, crisis: crisisStats(E1) })
+  crisis.push({ label: baseE2.label, crisis: crisisStats(E2) })
+
+  /** 변형 곡선은 요약·위기 스칼라를 뽑는 즉시 버린다(2026-08-02 OOM 재발 방지). */
+  const add = (rows: StratRow[], label: string, curve: { date: string; equity: number }[]) => {
+    if (curve.length < 2) {
+      log(`⚠️ "${label}" — 합성 곡선이 비었다(구간 불일치). 이 행은 생략.`)
+      return
+    }
+    rows.push(curveStrat(label, curve, BM, yrs))
+    crisis.push({ label, crisis: crisisStats(curve) })
+  }
+
+  const e1Rows: StratRow[] = []
+  add(e1Rows, 'E1 + TLT 20% (주식 80)', blendCurves(E1, T, 0.8))
+  add(e1Rows, 'E1 + TLT 40% (주식 60)', blendCurves(E1, T, 0.6))
+  if (G) add(e1Rows, 'E1 + GLD 20% (주식 80)', blendCurves(E1, G, 0.8))
+  if (G) add(e1Rows, 'E1 + TLT 20% + GLD 20% (주식 60)', blend3Curves(E1, T, G, 0.6, 0.2, 0.2))
+
+  const e2Rows: StratRow[] = []
+  add(e2Rows, 'E2 + TLT 20% (주식 80)', blendCurves(E2, T, 0.8))
+  if (G) add(e2Rows, 'E2 + TLT 20% + GLD 20% (주식 60)', blend3Curves(E2, T, G, 0.6, 0.2, 0.2))
+  add(e2Rows, 'E2 + TLT 40% — 고전 60:40 배합 (주식 60)', blendCurves(E2, T, 0.6))
+
+  // ---- 성적표 -------------------------------------------------------------------
+  log('')
+  log(`## 성적 — 같은 구간(${FROM} ~ ${TO}) · 판정 지표 = 칼마`)
+  stratTable([baseE1, ...e1Rows, baseE2, ...e2Rows], HALF_YEAR, { calmar: true })
+  log('※ 모든 행이 두 곡선(이상)의 합성이라 "매매·승률"은 0/—다 — 매매가 없다는 뜻이 아니라')
+  log('  매매 원장이 한쪽 슬리브에 귀속되지 않기 때문이다(26·30차와 같은 이유).')
+
+  // ---- 참고 행 — 분산 효과의 원천이 어디인지 ------------------------------------
+  const refRows: StratRow[] = []
+  refRows.push(curveStrat(`[참고] ${BENCH} KODEX 200 단독`, BM, BM, yrs))
+  refRows.push(curveStrat(`[참고] ${ASSET_TLT} 단독 (원화)`, T, BM, yrs))
+  if (G) refRows.push(curveStrat(`[참고] ${ASSET_GLD} 단독 (원화)`, G, BM, yrs))
+  {
+    const c = blendCurves(BM, T, 0.6)
+    if (c.length >= 2) refRows.push(curveStrat(`[참고] 순수 60:40 (KODEX 60 / ${ASSET_TLT} 40)`, c, BM, yrs))
+  }
+  log('')
+  log('## 참고 행 — 분산 효과의 **원천**이 어디인가')
+  log('전략을 빼고 자산만 놓았을 때의 성적이다. 여기서 이미 칼마가 높다면 위 표의 개선은')
+  log('"전략과 자산의 궁합"이 아니라 **그 자산 자체의 성질**을 옮겨 온 것일 수 있다.')
+  stratTable(refRows, HALF_YEAR, { calmar: true })
+
+  // ---- 판정 · 위기 연도 · 연도별 --------------------------------------------------
+  const adopted1 = assetVerdictTable(baseE1, e1Rows)
+  const adopted2 = assetVerdictTable(baseE2, e2Rows)
+  crisisTable(crisis)
+  perYearTable([baseE1, ...e1Rows], '연도별 수익 분해 — E1 계열 (거짓 매끈함 방지)')
+  perYearTable([baseE2, ...e2Rows], '연도별 수익 분해 — E2 계열')
+  log(`※ 첫 해(${FROM.slice(0, 4)})는 ${FROM}부터의 **부분 연도**다 — 온전한 1년이 아니다.`)
+  assetMultipleTestingNote(e1Rows.length + e2Rows.length, adopted1 + adopted2)
+
+  // ---- 한계 ---------------------------------------------------------------------
+  log('')
+  log('## 이 실험의 구조적 한계')
+  log('· **리밸런스 비용이 0으로 가정돼 있다.** 모든 행이 슬리브 곡선의 월별 합성이라 주식↔채권↔금')
+  log('  이체에 드는 수수료·세금·슬리피지가 **전혀 반영되지 않았다**. 월 리밸런스는 연 12회 이체이고,')
+  log('  해외 ETF는 환전 스프레드까지 붙는다. 따라서 분산 변형의 개선폭은 **낙관적 상한**으로 읽어라.')
+  log('  (주식 슬리브 **내부**의 매매비용은 반영돼 있다 — 빠진 것은 슬리브 **간** 이체 비용이다.)')
+  log('· **환율이 반영돼 있고 환헤지는 없다고 가정했다.** TLT·GLD는 달러 자산이라 원화 곡선에는')
+  log('  자산 수익과 원/달러 변동이 **섞여 있다.** 특히 원/달러는 국내 증시와 역상관인 경향이 있어')
+  log('  (위기 때 원화 약세 → 달러자산 원화가치 상승) 여기서 관측되는 분산 효과의 상당 부분이')
+  log('  **채권·금이 아니라 달러 노출**일 수 있다. 참고 행의 TLT·GLD 단독 성적이 그 크기를 가늠하는 자리다.')
+  log('  환헤지 상품을 썼다면 이 효과는 사라지고 결과가 달라진다.')
+  log('· **미 상장 ETF 기준이다** — 국내 상장 대체품(KODEX 미국채10년 등)은 상장일이 늦고 보수·추적오차가')
+  log('  달라 그대로 재현되지 않는다. 세제(해외주식 양도세 22% vs 국내 ETF 배당소득세)도 반영하지 않았다.')
+  log('· **구간이 짧아졌다** — 2000~2004를 잘라냈으므로 닷컴 붕괴는 이 표에 없다. 남은 위기는')
+  log('  2008·2020·2022뿐이고, 그중 2022는 **주식과 채권이 같이 빠진 해**라 분산의 최악 시나리오다.')
+  log('  위기 표에서 2022 열을 반드시 확인하라 — 여기서 무너지면 나머지 개선은 평시 한정이다.')
+  log('· **금은 현금흐름이 없다** — 채권의 이자, 주식의 이익 같은 근거 수익원이 없어 과거 상관이')
+  log('  미래에도 유지된다는 보장이 특히 약하다. 채권도 2000~2020의 금리 하락 추세가 만든 성적이')
+  log('  섞여 있고, 그 추세는 반복되지 않을 수 있다(2022가 그 예다).')
+  log('· 유니버스·비용·벤치·연쇄 규약은 25·26·30차와 동일하다. 다른 표의 숫자를 옮겨 적지 않았다.')
+  unverifiedNote()
+  disclaimer()
+}
+
+// ============================================================================
 
 const MODES: Record<string, () => Promise<void>> = {
   seasonal,
@@ -4750,6 +5123,7 @@ const MODES: Record<string, () => Promise<void>> = {
   usxsmom80,
   combo,
   overlay,
+  asset,
 }
 
 // 런처(scripts/idea-lab.mjs)만 IDEA_LAB_RUN=1을 넘긴다. 테스트가 이 모듈을
