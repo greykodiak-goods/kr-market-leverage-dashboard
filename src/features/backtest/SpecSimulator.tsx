@@ -28,7 +28,6 @@ import { runXsmomChained } from './xsmomChain'
 import { blendChainResults } from './comboBlend'
 import { PIT_UNION, PIT_YEARS, pitCodes } from './pitUniverse'
 import {
-  HEROMOON_MOMENTUM,
   SPEC_VERSION,
   conditionLabel,
   validateSpec,
@@ -37,6 +36,28 @@ import {
   type ExitRule,
   type StrategySpec,
 } from './strategySpec'
+// 프리셋 정의는 **UI 무의존 정본**(presets.ts)에서 읽는다 — 사전계산 스크립트
+// (scripts/preset-precompute.entry.ts)가 같은 배열을 읽으므로 둘이 갈라질 수 없다.
+import {
+  BENCH_SYMBOL,
+  COMBO_WEIGHTS,
+  DEFAULT_COMBO_WA,
+  DEFAULT_COST,
+  DEFAULT_MOM,
+  KOSPI_REGIME,
+  MOM_SLOT_CHOICES,
+  PRESETS,
+  PRESET_PIT_BASE,
+  normalizeWA,
+  type MomentumParams,
+  type StrategyKind,
+} from './presets'
+import {
+  augmentPresetLabel,
+  precomputedToEquityRows,
+  usePrecomputedPresets,
+  type PrecomputedPreset,
+} from './precomputed'
 import { KpiCard } from '../../components/KpiCard'
 import { EquityChart, type EquityRow } from './EquityChart'
 import { InfoTip } from '../../components/InfoTip'
@@ -63,10 +84,8 @@ interface Saved {
   cost: CostSettings
 }
 
-const DEFAULT_COST: CostSettings = { initialCapital: 10_000_000, feePct: 0.015, taxPct: 0.15, slippagePct: 0.1 }
-
-const BENCH_SYMBOL = '069500.KS' // KODEX 200 — 알파 판정 기준(규칙 5). 이 벤치는 바꾸지 않는다.
-const KOSPI_INDEX = '^KS11'
+// 비용 기본값·판정 벤치(KODEX 200)·레짐 게이트는 presets.ts가 정본이다 —
+// 사전계산 스크립트가 같은 상수로 돌아야 두 수치가 비교된다.
 
 // 참고 벤치(2026-08-02 대표 지시) — QQQ를 원화로 환산해 **나란히 보기만** 한다.
 // ⚠️ 알파(규칙 5) 판정 기준은 여전히 KODEX 200이다. QQQ는 판정에 들어가지 않는다 —
@@ -78,114 +97,11 @@ const QQQ_LABEL = 'QQQ(원화 환산)'
 /** 유니버스는 하나뿐이다 — 시세는 전 연도 합집합을 한 번만 받아 모든 해가 나눠 쓴다. */
 const UNIVERSE_LABEL = `연도별 그 해 시총 상위 10+10 [추정] · ${PIT_YEARS[0]}~${PIT_YEARS[PIT_YEARS.length - 1]} · 고유 ${PIT_UNION.length}종목`
 
-// 코스피 지수 5·10일선 정배열일 때만 신규 진입 (레짐 게이트)
-const KOSPI_REGIME: NonNullable<StrategySpec['regime']> = {
-  symbol: KOSPI_INDEX,
-  entry: { op: 'and', nodes: [{ op: 'cond', cond: { kind: 'maAlign', fast: 5, slow: 10 } }] },
-}
-
 // ---- 프리셋 ----------------------------------------------------------------
 //
-// 옛 프리셋(고정 유니버스 전제)은 **전부 삭제**했다. 그 성적표는 "오늘의 시총 상위"라는
-// 승자편향 표본 위에서 나온 숫자라, 유니버스를 정직하게 바꾼 지금 화면에 그대로 두면
-// 서로 다른 전제의 수치를 같은 이름으로 비교하게 된다. 아래 두 개는 **시점 고정 유니버스
-// 전제로 다시 매긴** 조합이다. 어느 쪽도 매수 권유가 아니다(규칙 4).
-
-/** 프리셋 공통 골격 — 진입 이평·신고가 일수·청산 이평·버퍼만 다르다. */
-function pitPreset(
-  id: string,
-  name: string,
-  source: string,
-  maPeriod: number,
-  opts: { highDays?: number; exitMa?: number; bufPct?: number } = {},
-): StrategySpec {
-  const highDays = opts.highDays ?? 20
-  const exitMa = opts.exitMa ?? 60
-  const bufPct = opts.bufPct ?? 2
-  return {
-    version: SPEC_VERSION,
-    id,
-    name,
-    source,
-    universe: HEROMOON_MOMENTUM.universe, // 종목 목록은 실행 시 그 해 유니버스로 주입된다
-    entry: {
-      op: 'and',
-      nodes: [
-        { op: 'cond', id: `${maPeriod}일선돌파`, cond: { kind: 'maCross', period: maPeriod, dir: 'above' } },
-        { op: 'cond', id: `${highDays}일신고가`, cond: { kind: 'highBreak', days: highDays } },
-      ],
-    },
-    ranking: { by: 'tradingValue', dir: 'desc' },
-    exits: [{ kind: 'maBreak', maPeriod: exitMa, pct: bufPct }],
-    sizing: { maxPositions: 10, mode: 'equalSlot' },
-    execution: { timing: 'sameClose', orderType: 'market' },
-  }
-}
-
-/** 현행 기준선 — 지금까지 페이퍼로 추적해 온 조합. 비교의 기준점으로 남긴다. */
-const PRESET_PIT_BASE = pitPreset(
-  'pit-ma15-high20-slow60',
-  '현행 기준선 — MA15×신고20→60선·버퍼2%',
-  '시점 고정 유니버스(연도별 상위 10+10 [추정]) 전제로 재산출한 기준선 — 고정 유니버스 시절 수치와 직접 비교하지 말 것',
-  15,
-)
-
-/** 21차 탐색에서 수익÷MDD 1위였던 조합. 탐색 자체가 곡선맞춤이므로 "1위"를 실력으로 읽지 않는다. */
-const PRESET_PIT_TOP = pitPreset(
-  'pit-ma10-high20-slow60',
-  '21차 1위 — MA10×신고20→60선·버퍼2%',
-  '2026-08-02 21차 격자 탐색(연도별 상위 10+10 [추정] 유니버스) 수익÷MDD 1위 — 다중비교로 뽑은 1위라 과최적화 위험이 남아 있다',
-  10,
-)
-
-/**
- * 23차 400조합 확장 격자(2026-08-02)의 수익률 1위 — 총 +5,899% · CAGR 16.7% · **MDD −40.2%** ·
- * 알파 +8.2%p/연 · 매매 1,528. ⚠️ 400개 중 1등을 고른 것 자체가 곡선맞춤이며, 이 조합의 대가는
- * 낙폭이다(−40%를 견뎌야 했다). 2016·2019·2025 등 벤치에 크게 뒤진 해도 있다.
- */
-const PRESET_PIT_MAXRET = pitPreset(
-  'pit-ma5-high10-slow80',
-  '23차 수익률 1위 — MA5×신고10→80선 (MDD −40%)',
-  '2026-08-02 23차 400조합 격자(연도별 상위 10+10 [추정]) 총수익 1위 +5,899% — 다중비교 1등이라 과최적화 위험이 크고, MDD −40.2%가 대가다',
-  5,
-  { highDays: 10, exitMa: 80, bufPct: 0 },
-)
-
-/**
- * 23차 400조합 확장 격자의 수익÷MDD 1위 — 총 +5,442% · CAGR 16.3% · MDD −31.9% · 비율 170 ·
- * 알파 +7.9%p/연 · 매매 1,997. 수익률 1위보다 총수익은 조금 낮고 낙폭이 얕다. 같은 곡선맞춤 경고.
- */
-const PRESET_PIT_MAXRATIO = pitPreset(
-  'pit-ma25-high10-slow80',
-  '23차 수익÷MDD 1위 — MA25×신고10→80선',
-  '2026-08-02 23차 400조합 격자(연도별 상위 10+10 [추정]) 수익÷MDD 1위 170.3 — 다중비교 1등이라 과최적화 위험 상존',
-  25,
-  { highDays: 10, exitMa: 80, bufPct: 0 },
-)
-
-// ---- 전략 유형 -------------------------------------------------------------
-//
-// 이 화면은 원래 조건식(이평·신고가) 하나만 돌렸다. 2026-08-02 25차 실측에서 이동평균을
-// 전혀 쓰지 않는 **횡단면 모멘텀(12-1)** 이 기준선을 크게 앞서서, 같은 유니버스·같은 비용으로
-// 나란히 돌릴 수 있게 유형을 하나 더 열었다. 두 유형은 **같은 연쇄 규약**(연도별 유니버스 교체·
-// 연말 이월·현금해 처리·벤치 겹침)을 쓰므로 결과가 직접 비교된다.
-
-// 2026-08-02 26차 실측에서 **두 유형을 반반 섞은 결합**이 전·후반 모두 기준선을 이겨서
-// 세 번째 유형을 열었다. 결합은 새 매매 규칙이 아니라 **두 슬리브 곡선의 합성**이다 —
-// 각각 전액 투자로 돌린 곡선을 받아 월 첫 거래일에 가중을 되돌린다(정본 comboBlend.ts).
-export type StrategyKind = 'condition' | 'momentum' | 'combo'
-
-/** 모멘텀 모드 파라미터 — 상위 N과 절대모멘텀 게이트뿐이다(그 외는 정본 그대로 고정). */
-export interface MomentumParams {
-  slots: number
-  gate: boolean
-}
-
-const DEFAULT_MOM: MomentumParams = { slots: 5, gate: true }
-
-/** 결합 모드에서 고를 수 있는 슬리브 A 가중. 50:50이 26차 검증 기본안이고 나머지는 민감도 참고다. */
-const COMBO_WEIGHTS = [0.25, 0.5, 0.75] as const
-const DEFAULT_COMBO_WA = 0.5
+// 프리셋 정의(조건식·모멘텀·결합)와 유형 타입은 **presets.ts가 정본**이다.
+// 화면과 헤드리스 사전계산(scripts/preset-precompute.entry.ts)이 같은 배열을 읽어야
+// 목록과 사전계산 산출물이 조용히 갈라지지 않는다. 여기서는 화면 전용 상태만 다룬다.
 
 /**
  * 결합 모드에서 **각 슬리브를 단독으로** 돌린 성적. 결합 곡선은 두 곡선의 합성이라
@@ -201,73 +117,6 @@ interface SleeveSummary {
   tradeCount: number
   winRate: number | null
 }
-
-/** 저장본·프리셋에서 들어온 가중을 허용값으로 좁힌다(임의 값이 새어 들어오면 기본값으로) */
-function normalizeWA(v: number | undefined): number {
-  return COMBO_WEIGHTS.includes(v as (typeof COMBO_WEIGHTS)[number]) ? (v as number) : DEFAULT_COMBO_WA
-}
-
-type Preset =
-  | { id: string; label: string; kind: 'condition'; spec: StrategySpec }
-  | { id: string; label: string; kind: 'momentum'; mom: MomentumParams; note: string }
-  | { id: string; label: string; kind: 'combo'; spec: StrategySpec; mom: MomentumParams; wA: number; note: string }
-
-/**
- * ⚠️ 모멘텀 프리셋 2개는 25차 실험에서 **여러 조합 중 성적이 좋았던 것**이다.
- * 라벨에 MDD를 함께 적는 이유는, 이 조합의 대가가 낙폭이기 때문이다 — 수익률만 보고
- * 고르는 것을 막으려고 이름에 박아 둔다(규칙 4).
- */
-const PRESETS: Preset[] = [
-  { id: 'pit-base', label: '현행 기준선 MA15×신고20→60선·버퍼2%', kind: 'condition', spec: PRESET_PIT_BASE },
-  { id: 'pit-top', label: '21차 1위 MA10×신고20→60선·버퍼2%', kind: 'condition', spec: PRESET_PIT_TOP },
-  { id: 'pit-maxret', label: '23차 수익률 1위 MA5×신고10→80선 (MDD −40%)', kind: 'condition', spec: PRESET_PIT_MAXRET },
-  { id: 'pit-maxratio', label: '23차 수익÷MDD 1위 MA25×신고10→80선', kind: 'condition', spec: PRESET_PIT_MAXRATIO },
-  {
-    id: 'xsmom-5-gate',
-    label: '25차 모멘텀 상위5+게이트 (MDD −61%)',
-    kind: 'momentum',
-    mom: { slots: 5, gate: true },
-    note:
-      '2026-08-02 25차 실측 — CAGR 30.5% · 알파 +21.9%p/연 · MDD −61% [추정·러너 실행값]. ' +
-      '⚠️ 여러 조합(상위 5/10 × 게이트 on/off)을 함께 돌려 그중 성적이 좋았던 것을 고른 **다중비교 승자**라 ' +
-      '과최적화 위험이 남아 있고, 이 성적을 얻으려면 자산이 고점 대비 **−61%까지 내려앉는 구간을 견뎌야 했다**. ' +
-      '연 20종목 유니버스에서 상위 5는 사실상 상위 25% 분위라 학계의 분위 모멘텀보다 신호가 묽다.',
-  },
-  {
-    id: 'xsmom-5',
-    label: '25차 모멘텀 상위5 (MDD −68%)',
-    kind: 'momentum',
-    mom: { slots: 5, gate: false },
-    note:
-      '2026-08-02 25차 실측 — 게이트를 끈 변형. MDD −68% [추정·러너 실행값]. ' +
-      '⚠️ **다중비교 승자라 과최적화 위험이 있고, −68% 낙폭을 견뎌야 했다.** ' +
-      '절대모멘텀 게이트가 없으므로 전 종목이 하락하는 국면에도 상위 5종목을 그대로 들고 간다 — ' +
-      '하락장에서 게이트 버전보다 더 깊게 파인다.',
-  },
-  {
-    id: 'combo-50',
-    label: '26차 결합 50:50 — 기준선+모멘텀 (MDD −43%)',
-    kind: 'combo',
-    // 슬리브 A = 23차 수익÷MDD 1위와 **같은 스펙**(MA25돌파×신고10 진입 → 80선 이탈 청산·버퍼 0).
-    // 같은 객체를 그대로 쓴다 — 두 프리셋의 스펙이 조용히 갈라지지 않게 하려는 것이다.
-    spec: PRESET_PIT_MAXRATIO,
-    mom: { slots: 5, gate: true },
-    wA: 0.5,
-    note:
-      '2026-08-02 26차 실측(GHA idea:combo) — 슬리브 A 기준선(MA25×신고10→80선) + 슬리브 B XSM 상위5+게이트를 ' +
-      '월초 50:50으로 되돌리는 결합. 총 +32,525% · CAGR 24.3% · MDD −43.1% · 알파 +17.2%p/연 [추정·러너 실행값]로 ' +
-      '전·후반 구간 모두 기준선을 이겼다. ' +
-      '⚠️ **리밸런스 비용 미반영** — 슬리브 간 이체를 0원으로 본 낙관적 상한이라 실제 성적은 이보다 낮다. ' +
-      '⚠️ 분산 효과는 제한적이다: 두 단독 평균 대비 MDD 완화 폭이 **+3.6%p뿐**이고, ' +
-      '2008년 같은 위기 구간에서는 두 슬리브 상관이 1에 붙어 **같이 무너졌다** — 정작 분산이 필요한 순간에 사라졌다. ' +
-      '슬리브 B(xsmom)의 미장 교차 검증: 상위 20 유니버스(26차)에서는 6변형 전패였으나, ' +
-      '**상위 80으로 넓혀 상위 10% 분위를 만든 27차에서는 8변형 전부 전·후반 알파 양(+)** (상위8+게이트 +4.7%p/연) — ' +
-      '시장을 건너 생존한다는 방증이 붙었다. 다만 미국 알파(+4.7%p)는 한국(+21.9%p)보다 훨씬 작아, ' +
-      '한국 수치는 소형 유니버스·생존편향으로 부풀려졌을 가능성을 같이 봐야 한다. ' +
-      '⚠️ A·B 각각이 이미 여러 조합 중 성적이 좋았던 것을 고른 다중비교 승자이고 결합 가중까지 3개를 함께 봤으므로, ' +
-      '다중검정으로 부풀려진 성적일 위험이 겹쳐 있다. 매수 권유가 아니다.',
-  },
-]
 
 function loadSaved(): Saved {
   try {
@@ -671,6 +520,118 @@ const fmtPctGrouped = (v: number, digits = 1) =>
 const fmtPp = (v: number, digits = 1) =>
   `${v >= 0 ? '+' : '−'}${Math.abs(v).toLocaleString('ko-KR', { minimumFractionDigits: digits, maximumFractionDigits: digits })}%p`
 
+/**
+ * 사전계산 결과 화면 — 프리셋을 고르는 즉시 뜨는 요약이다.
+ *
+ * 왜 별도 블록인가(규칙 3): 실행 결과와 **전제가 다르다**. 기준일이 과거일 수 있고,
+ * 곡선은 주 1점으로 줄였으며, 연도별 분해·매매 이력은 산출물에 없다. 같은 화면에
+ * 섞어 놓으면 "지금 돌린 결과"로 오해된다 — 그래서 배지·한계·재실행 버튼을 함께 둔다.
+ * 카드·차트 컴포넌트(KpiCard·EquityChart)는 실행 결과 화면과 **같은 것**을 쓴다.
+ */
+function PrecomputedResult({
+  pc,
+  asOf,
+  computedAt,
+  mismatch,
+  busy,
+  onRerun,
+}: {
+  pc: PrecomputedPreset
+  asOf: string
+  computedAt: string
+  /** 지금 화면 설정이 사전계산 전제와 다른 부분(없으면 null) */
+  mismatch: string | null
+  busy: boolean
+  onRerun: () => void
+}) {
+  const rows = useMemo(() => precomputedToEquityRows(pc), [pc])
+  return (
+    <div className="bt-results">
+      <div className="bt-chart-caption">
+        <span className="badge sample">사전계산 (asOf {asOf || '—'}) · [추정]</span>{' '}
+        <strong>{pc.label}</strong> — 미리 돌려 저장해 둔 결과입니다(지금 실행한 것이 아닙니다).
+        구간 {pc.startDate}~{pc.endDate} · 초기자본 {fmtWon(pc.initialCapital)}원
+        {computedAt && <> · 계산 시각 {computedAt.slice(0, 16).replace('T', ' ')}</>}
+      </div>
+      {mismatch && (
+        <div className="bt-warn">
+          ⚠️ 지금 화면의 설정(<strong>{mismatch}</strong>)은 사전계산 전제(<strong>전 구간 · 기본 비용</strong>)와
+          다릅니다 — 아래 수치는 <strong>사전계산 전제</strong>의 것이고, 「직접 다시 돌리기」를 누르면 지금 설정으로
+          실행되어 수치가 달라집니다.
+        </div>
+      )}
+      <div className="kpi-row">
+        <KpiCard
+          label="총 수익률"
+          value={fmtPctGrouped(pc.totalPct)}
+          unit={` · 연 ${fmtPct(pc.cagrPct)}`}
+          changeText={
+            pc.benchCagrPct != null
+              ? `벤치마크(KODEX 200) 연 ${fmtPct(pc.benchCagrPct)}`
+              : '벤치마크 없음 — 알파를 계산할 수 없습니다'
+          }
+          changeLabel=""
+          direction={pc.alphaCagrPct != null && pc.alphaCagrPct > 0 ? 'up' : 'down'}
+          info="사전계산 산출물의 값입니다. 화면에서 「직접 다시 돌리기」를 누르면 같은 엔진·같은 비용으로 실행해 같은 수치가 나와야 합니다(데이터가 그 사이 늘었다면 기준일만큼 달라집니다)."
+        />
+        <KpiCard
+          label="초과수익(알파, 연환산)"
+          value={pc.alphaCagrPct != null ? fmtPp(pc.alphaCagrPct) : '—'}
+          unit=" / 연"
+          changeText={`${pc.startDate}~${pc.endDate}`}
+          changeLabel=""
+          direction={pc.alphaCagrPct != null && pc.alphaCagrPct > 0 ? 'up' : 'down'}
+          info="규칙 5의 판정 기준은 연환산 알파(전략 CAGR − 벤치마크 CAGR)입니다. 음수면 그냥 지수를 사는 편이 나았다는 뜻입니다."
+        />
+        <KpiCard
+          label="최대 낙폭(MDD)"
+          value={fmtPct(pc.mddPct)}
+          changeText="고점 대비 최대 하락 — 다운샘플 전 원곡선 기준"
+          changeLabel=""
+          direction="flat"
+          info="아래 곡선은 주 1점으로 줄인 것이지만, 이 MDD는 줄이기 전 일별 곡선에서 잰 값입니다(줄인 곡선에서 재면 낙폭이 얕아 보입니다). 수익률보다 먼저 이 낙폭을 견딜 수 있는지 확인하세요."
+        />
+        <KpiCard
+          label="최근 10년 연평균"
+          value={pc.cagr10yPct != null ? fmtPct(pc.cagr10yPct) : '—'}
+          unit=" / 연"
+          changeText={pc.cagr10yPct != null ? `${asOf || pc.endDate} 기준 직전 10년 연환산` : '구간이 10년보다 짧아 계산하지 않았습니다'}
+          changeLabel=""
+          direction={pc.cagr10yPct != null && pc.cagr10yPct > 0 ? 'up' : 'down'}
+          info="데이터 마지막 날에서 10년 전을 자르고, 그 이후 첫 점 대비 마지막 점의 배수를 연환산한 값입니다. 전 구간 CAGR과 다를 수 있습니다 — 초기 구간의 성적이 빠지기 때문입니다."
+        />
+        <KpiCard
+          label="승률 / 매매"
+          value={pc.tradeCount != null ? `${pc.tradeCount.toLocaleString('ko-KR')}회` : '합성'}
+          unit=""
+          changeText={
+            pc.tradeCount != null
+              ? '사전계산 산출물에는 매매 이력·승률이 들어 있지 않습니다 — 「직접 다시 돌리기」로 확인하세요'
+              : '결합 곡선에는 매매 원장이 없습니다 — A·B 단독 실행에서 확인하세요'
+          }
+          changeLabel=""
+          direction="flat"
+          info="사전계산은 파일 크기를 줄이려고 요약 수치와 곡선만 담습니다. 매매 이력·연도별 분해·스크리닝은 직접 실행해야 나옵니다."
+        />
+      </div>
+      <EquityChart equity={rows} benchmarkLabel="KODEX 200 단순보유" />
+      <div className="bt-note">
+        ⚠️ 이 화면의 곡선은 <strong>주 1점(각 주 마지막 거래일)</strong>으로 줄인 것입니다 — 파일 크기를 줄이려는
+        조작이며, 주중 등락은 보이지 않습니다(최저점과 최종일은 보존). 위 요약 수치는{' '}
+        <strong>줄이기 전 일별 곡선</strong>에서 쟀습니다. 기준일(asOf {asOf || '—'}) 이후 거래일은 반영되어 있지
+        않으므로, 최신 수치가 필요하면 아래 버튼으로 직접 돌리세요. 유니버스는 연도별 시총 상위 10+10{' '}
+        <strong>[추정]</strong>이며 상장폐지 종목의 가격 부재로 <strong>생존편향</strong>이 남아 있습니다. 결합
+        프리셋은 <strong>리밸런스 비용 미반영</strong>입니다. 매수 권유가 아닙니다(규칙 4).
+      </div>
+      <div className="bt-actions">
+        <button type="button" className="bt-btn-run" disabled={busy} onClick={onRerun}>
+          {busy ? '실행 중…' : '▶ 직접 다시 돌리기 (실데이터 재실행)'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export function SpecSimulator() {
   const [saved] = useState(loadSaved)
   const [kind, setKind] = useState<StrategyKind>(saved.kind ?? 'condition')
@@ -703,6 +664,19 @@ export function SpecSimulator() {
 
   const addNote = (m: string) => setNotes((prev) => (prev.includes(m) ? prev : [...prev, m]))
 
+  /** 사전계산 산출물(없으면 null) — 라벨 병기와 "프리셋 즉시 표시"에 쓴다 */
+  const precomputed = usePrecomputedPresets()
+  /**
+   * 지금 화면에 띄운 사전계산 결과. 프리셋을 고르면 채워지고,
+   * 「직접 다시 돌리기」(= 실행)를 누르면 비워진다 — 실행 결과가 그 자리를 대신한다.
+   */
+  const [shownPre, setShownPre] = useState<PrecomputedPreset | null>(null)
+  /**
+   * 사전계산을 띄운 시점의 **설정 지문**. 사용자가 조건·슬롯·가중을 손대면 지문이 어긋나
+   * 블록이 사라진다 — 바뀐 설정 위에 옛 프리셋 성적이 남아 있으면 그게 곧 거짓말이다.
+   */
+  const [preSig, setPreSig] = useState<string | null>(null)
+
   const [jsonOpen, setJsonOpen] = useState(false)
   const [jsonText, setJsonText] = useState('')
   const [jsonError, setJsonError] = useState<string | null>(null)
@@ -724,6 +698,31 @@ export function SpecSimulator() {
     () => validateSpec({ ...spec, universe: { ...spec.universe, symbols: PIT_UNION } }),
     [spec],
   )
+
+  /** 전략 설정 지문 — 사전계산 블록이 지금 설정과 같은 전략을 가리키는지 판정한다 */
+  const settingsSig = useMemo(() => JSON.stringify({ kind, mom, comboWA, spec }), [kind, mom, comboWA, spec])
+  /** 지문이 어긋나면 띄우지 않는다(설정을 손대면 사전계산 결과는 그 설정의 것이 아니다) */
+  const showPre = shownPre != null && precomputed != null && preSig === settingsSig
+  /**
+   * 사전계산의 전제(전 구간 · presets.ts 기본 비용)와 지금 화면 설정이 다르면 알린다.
+   * 숨기지 않고 **차이를 밝힌 채로** 보여준다 — 재실행하면 수치가 달라진다는 사실이 핵심이다.
+   */
+  const preMismatch = useMemo(() => {
+    if (!showPre || !precomputed) return null
+    const diffs: string[] = []
+    if (startDate) diffs.push(`시작일 ${startDate}`)
+    if (endDate) diffs.push(`종료일 ${endDate}`)
+    const c = precomputed.cost
+    if (
+      c &&
+      (c.initialCapital !== cost.initialCapital ||
+        c.feePct !== cost.feePct ||
+        c.taxPct !== cost.taxPct ||
+        c.slippagePct !== cost.slippagePct)
+    )
+      diffs.push('비용 설정')
+    return diffs.length ? diffs.join(' · ') : null
+  }, [showPre, precomputed, startDate, endDate, cost])
 
   /** 기간 입력 검증 — 실행 전에 막는다 */
   const dateError = useMemo(
@@ -925,6 +924,9 @@ export function SpecSimulator() {
       }
       if (chained.perYear.length === 0) throw new Error('실행할 연도가 없습니다 — 시작일·종료일을 확인하세요')
       setResult(chained)
+      // 실행이 성공한 순간에만 사전계산 화면을 내린다 — 실행 중에는 그대로 둬야
+      // 「직접 다시 돌리기」를 누른 버튼이 진행 상태를 계속 보여준다(빈 화면 방지).
+      setShownPre(null)
       setRunCapital(cost.initialCapital)
       setTradesPage(0) // 새 실행마다 1페이지부터
       const cashYears = chained.perYear.filter((r) => r.cash).map((r) => r.year)
@@ -1089,14 +1091,20 @@ export function SpecSimulator() {
             <label>
               보유 종목 수{kind === 'combo' ? ' (슬리브 B)' : ''}
               <InfoTip text="랭킹 상위 몇 종목을 동일가중으로 담을지입니다. 유니버스가 연 20종목이라 상위 5는 사실상 상위 25% 분위입니다 — 학계의 상위 10% 분위 모멘텀보다 신호가 묽습니다." />
+              {/* 선택지는 presets.ts(MOM_SLOT_CHOICES)가 정본이다 — 프리셋이 쓰는 값이
+                  목록에 없으면 셀렉트가 빈칸으로 보인다(tests/presetprecompute.test.ts가 강제). */}
               <select
                 value={mom.slots}
                 onChange={(e) => setMom((m) => ({ ...m, slots: Number(e.target.value) }))}
                 disabled={busy}
               >
-                <option value={4}>상위 4종목</option>
-                <option value={5}>상위 5종목 (기본)</option>
-                <option value={6}>상위 6종목</option>
+                {MOM_SLOT_CHOICES.map((n) => (
+                  <option key={n} value={n}>
+                    상위 {n}종목
+                    {n === DEFAULT_MOM.slots ? ' (기본)' : ''}
+                    {n === 3 ? ' — 집중도↑·낙폭↑' : ''}
+                  </option>
+                ))}
               </select>
             </label>
             <label>
@@ -1482,6 +1490,19 @@ export function SpecSimulator() {
               setComboWA(normalizeWA(p.wA))
               setMomNote(p.note)
             }
+            // 사전계산이 있으면 **즉시** 결과를 띄운다(수십 초짜리 실행을 기다리지 않는다).
+            // 없으면 null — 예전처럼 실행 버튼을 눌러야 결과가 나온다(우아한 강등).
+            setShownPre(precomputed?.byId[p.id] ?? null)
+            // 이 프리셋이 만들 설정의 지문을 함께 박아 둔다. 이후 사용자가 조건·슬롯·가중을
+            // 손대면 지문이 어긋나 블록이 사라진다(바뀐 설정에 옛 성적을 붙여 두지 않는다).
+            setPreSig(
+              JSON.stringify({
+                kind: p.kind,
+                mom: p.kind === 'condition' ? mom : p.mom,
+                comboWA: p.kind === 'combo' ? normalizeWA(p.wA) : comboWA,
+                spec: p.kind === 'momentum' ? spec : p.spec,
+              }),
+            )
             setJsonOpen(false)
           }}
           title="프리셋 불러오기"
@@ -1489,9 +1510,11 @@ export function SpecSimulator() {
           <option value="" disabled>
             프리셋 불러오기…
           </option>
+          {/* 라벨의 MDD·10년 연평균은 **사전계산 산출물에서 온다** — 하드코딩이 아니라
+              GHA가 파일을 갱신하면 라벨도 따라 바뀐다. 파일이 없으면 원래 라벨 그대로. */}
           {PRESETS.map((p) => (
             <option key={p.id} value={p.id}>
-              {p.label}
+              {augmentPresetLabel(p.label, precomputed?.byId[p.id])}
             </option>
           ))}
         </select>
@@ -1534,8 +1557,20 @@ export function SpecSimulator() {
         </div>
       )}
 
-      {/* ---- 결과 ---- */}
-      {result && summary && (
+      {/* ---- 사전계산 결과 (프리셋을 고른 즉시) ---- */}
+      {showPre && shownPre && precomputed && (
+        <PrecomputedResult
+          pc={shownPre}
+          asOf={precomputed.asOf}
+          computedAt={precomputed.computedAt}
+          mismatch={preMismatch}
+          busy={busy}
+          onRerun={run}
+        />
+      )}
+
+      {/* ---- 결과 ---- (사전계산을 띄운 동안에는 이전 실행 결과를 숨긴다 — 수치 혼동 방지) */}
+      {!showPre && result && summary && (
         <div className="bt-results">
           <div className="kpi-row">
             <KpiCard
