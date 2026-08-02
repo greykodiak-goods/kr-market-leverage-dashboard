@@ -21,3 +21,4 @@ yarn-error.log*
 
 # 키움 토큰 캐시 — 단기 자격증명, 커밋 절대 금지
 /.kiwoom-token-cache.json
+.claude/worktrees/
