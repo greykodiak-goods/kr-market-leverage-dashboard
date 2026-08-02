@@ -8,6 +8,10 @@
 //   2) 확장 윈도우 — 월 필터·셀 선정·z-score가 미래 데이터를 포함하지 않음
 //   3) 체결 시점 — pairprem 스위칭이 신호 **다음날 시가**에 체결됨 (규칙 1-2)
 //   4) 월 게이트가 실제로 신규 진입만 막고 청산은 막지 않음
+//   6) 워크포워드 선택이 **선택 시점 이후를 보지 않음** (xswf) — 뒤쪽 데이터를 조작해도
+//      그 이전 선택·자산곡선이 불변. 워크포워드는 실수로 전 구간을 보게 되기 가장 쉬운 구조다.
+//   7) combo 결합 산술 손계산 대조 + 이월(carry-forward)이 과거 방향으로만 감(환율 포함)
+//   8) 미장 유니버스 매핑이 **재사용 티커를 거부**함 (usxsmom)
 //   5) flow **T−1 원칙** — D일 진입 판단에 D일 수급을 쓰지 않는다. D일 이후 수급 행을
 //      극단값으로 바꿔도 D일까지의 매매·자산곡선이 완전히 같아야 한다(수급판 절단 불변성).
 //      더불어 bespoke 시뮬이 필터를 껐을 때 엔진 base와 **전 점 일치**하는지도 여기서 막는다 —
@@ -42,6 +46,33 @@ import {
   simulateXsMomYear,
   wilderRsi,
   xsmomRank,
+  COMBO_XSMOM,
+  COST_US,
+  WF_CANDS,
+  WF_DEFAULT,
+  alignCurves,
+  blendCurves,
+  blendMonthlyRebalanced,
+  buildYearlyUs,
+  curveStrat,
+  holdTable,
+  monthlyCorrelation,
+  monthlyReturnsOf,
+  pearson,
+  perYearOfCurve,
+  plateauness,
+  runWalkForward,
+  spanOf,
+  stitchYears,
+  toKrwCurve,
+  valueAsOf,
+  wfLabel,
+  wfPick,
+  yearCurvesOf,
+  yearMaxDrawdown,
+  type WfCand,
+  type WfTable,
+  type YearCurve,
   FLOW_BASE,
   FLOW_F2,
   FLOW_F3,
@@ -77,6 +108,7 @@ import {
 import { runStrategySpec, type CostSettings } from '../src/features/backtest/conditionScreen'
 import { sma } from '../src/features/backtest/strategySpec'
 import type { DailyBar } from '../src/features/backtest/types'
+import { resolveUsTicker } from '../src/features/backtest/usPitUniverse'
 
 const COST: CostSettings = { initialCapital: 10_000_000, feePct: 0.015, taxPct: 0.15, slippagePct: 0.1 }
 
@@ -1205,6 +1237,470 @@ section('14) 보고 경로 — 알파는 겹치는 구간에서만 · 표 렌더
   }
   check('표 3종이 예외 없이 렌더링된다', threw === '' && lines > 15, threw || `lines=${lines}`)
   eq('판정: 자기 자신과 비교하면 개선 0건', verdictTableSilent(rows), 0)
+}
+
+// ============================================================================
+// 검증 3종 (MODE=xswf · usxsmom · combo)
+// ============================================================================
+//
+// 여기서 막는 것:
+//   · 워크포워드 선택이 **미래를 안 본다** — `y < year`인 해만 점수에 들어간다.
+//     선택 시점 이후 데이터를 마음대로 바꿔도 그 이전 선택·자산곡선이 완전히 같아야 한다.
+//     (이 테스트가 없으면 "매년 그때 골랐다"는 말이 사실인지 확인할 방법이 없다 — 워크포워드는
+//      실수로 전 구간 성적을 보게 만들기가 아주 쉬운 구조다.)
+//   · 연도별 분해(`yearCurvesOf` + `stitchYears`)가 `runCustomChain`과 **점 단위로 일치** —
+//     갈라지면 워크포워드가 다른 연쇄 산술로 계산된 성적을 기준선과 비교하는 셈이 된다.
+//   · 결합(combo) 합성 산술을 **알려진 두 곡선으로 손계산 대조** — 월 리밸런스가 실제로
+//     달이 바뀔 때 일어나는지, 가중 1.0이면 원곡선과 같은지.
+//   · 이월(carry-forward)이 **과거 방향으로만** 간다 — 환율 결측일에 다음 환율을 당겨오면
+//     그것이 미래참조다.
+//   · 미장 유니버스 매핑이 **재사용 티커를 거부**한다(조용한 오염 방지).
+
+/** 한 해치 상대곡선을 [중간값, 연말값]으로 손쉽게 만든다(테스트 전용). */
+function yc(y: number, mid: number, end: number): YearCurve {
+  return {
+    y,
+    rel: [
+      { date: `${y}-06-30`, rel: mid },
+      { date: `${y}-12-30`, rel: end },
+    ],
+    endFactor: end,
+  }
+}
+
+// ============================================================================
+section('15) 이월(valueAsOf)·정렬(alignCurves) — 과거 방향으로만 본다')
+// ============================================================================
+{
+  const curve = [
+    { date: '2001-01-10', equity: 10 },
+    { date: '2001-01-20', equity: 20 },
+    { date: '2001-02-01', equity: 30 },
+  ]
+  eq('데이터 시작 전은 null', valueAsOf(curve, '2000-12-31'), null)
+  eq('경계 당일은 그 값(이하 포함)', valueAsOf(curve, '2001-01-10'), 10)
+  eq('결측일은 직전 값 이월', valueAsOf(curve, '2001-01-15'), 10)
+  eq('결측일에 **다음** 값을 당겨오지 않는다', valueAsOf(curve, '2001-01-19'), 10)
+  eq('마지막 이후는 마지막 값', valueAsOf(curve, '2099-01-01'), 30)
+
+  const a = [
+    { date: '2001-01-10', equity: 100 },
+    { date: '2001-01-11', equity: 110 },
+    { date: '2001-01-12', equity: 120 },
+  ]
+  const b = [
+    { date: '2001-01-11', equity: 50 },
+    { date: '2001-01-13', equity: 60 },
+  ]
+  const al = alignCurves(a, b)
+  eq('겹치는 구간만 남는다 (2001-01-11 ~ 2001-01-12)', al.dates.join(','), '2001-01-11,2001-01-12')
+  eq('a는 제 값', al.ea.join(','), '110,120')
+  eq('b는 봉 없는 날 직전 값 이월(다음 값 60을 당겨오지 않는다)', al.eb.join(','), '50,50')
+  eq('겹치지 않으면 빈 결과', alignCurves(a, [{ date: '2010-01-01', equity: 1 }]).dates.length, 0)
+  eq('빈 곡선도 안전', alignCurves([], b).dates.length, 0)
+}
+
+// ============================================================================
+section('16) combo 결합 산술 — 알려진 두 곡선으로 손계산 대조')
+// ============================================================================
+{
+  // A는 매 스텝 2배, B는 완전 평탄. 달 경계는 2001-01-02 → 2001-02-01 사이 한 번뿐이다.
+  const dates = ['2001-01-01', '2001-01-02', '2001-02-01', '2001-02-02']
+  const ea = [100, 200, 400, 800]
+  const eb = [100, 100, 100, 100]
+
+  // 손계산(월 첫 거래일 **시작 시점**에 50:50 복원):
+  //   i0: A .5 / B .5                              → 1.00
+  //   i1: 같은 달 → A .5×2=1.0 / B .5              → 1.50
+  //   i2: 달 바뀜 → 1.5를 .75/.75로 복원 → A 1.5 / B .75 → 2.25
+  //   i3: 같은 달 → A 3.0 / B .75                  → 3.75
+  const v = blendMonthlyRebalanced(dates, ea, eb, 0.5)
+  closeTo('i0 = 1.00', v[0], 1, 1e-12)
+  closeTo('i1 = 1.50 (달 안에서는 표류)', v[1], 1.5, 1e-12)
+  closeTo('i2 = 2.25 (달 첫날 50:50 복원 후 수익 적용)', v[2], 2.25, 1e-12)
+  closeTo('i3 = 3.75', v[3], 3.75, 1e-12)
+  check('월 리밸런스가 실제로 무언가를 한다 (버티기 결합 4.5와 다르다)', Math.abs(v[3] - 4.5) > 0.5, `${v[3]}`)
+
+  const only = blendMonthlyRebalanced(dates, ea, eb, 1)
+  eq('가중 1.0이면 A 곡선 그대로', only.map((x) => x.toFixed(4)).join(','), '1.0000,2.0000,4.0000,8.0000')
+  const none = blendMonthlyRebalanced(dates, ea, eb, 0)
+  eq('가중 0이면 B 곡선 그대로', none.map((x) => x.toFixed(4)).join(','), '1.0000,1.0000,1.0000,1.0000')
+
+  // 리밸런스가 **날짜만** 보고 일어난다 — 같은 달 안에 몰아넣으면 복원이 없다
+  const oneMonth = ['2001-01-01', '2001-01-02', '2001-01-03', '2001-01-04']
+  const w = blendMonthlyRebalanced(oneMonth, ea, eb, 0.5)
+  closeTo('한 달 안이면 복원 없이 그냥 표류 (0.5×8 + 0.5×1)', w[3], 4.5, 1e-12)
+
+  // blendCurves = alignCurves + blendMonthlyRebalanced
+  const cA = dates.map((date, i) => ({ date, equity: ea[i] }))
+  const cB = dates.map((date, i) => ({ date, equity: eb[i] }))
+  const blended = blendCurves(cA, cB, 0.5)
+  eq('blendCurves 길이', blended.length, 4)
+  closeTo('blendCurves 마지막 값이 손계산과 일치', blended[3].equity, 3.75, 1e-12)
+}
+
+// ============================================================================
+section('17) 월수익률 상관 · 연도 분해 · 연중 낙폭')
+// ============================================================================
+{
+  eq('완전 양의 상관', pearson([1, 2, 3, 4], [2, 4, 6, 8])?.toFixed(6), (1).toFixed(6))
+  eq('완전 음의 상관', pearson([1, 2, 3, 4], [-2, -4, -6, -8])?.toFixed(6), (-1).toFixed(6))
+  eq('상수 계열은 null', pearson([1, 1, 1, 1], [1, 2, 3, 4]), null)
+  eq('표본 3 미만은 null', pearson([1, 2], [1, 2]), null)
+
+  // 월수익률 = 달 마지막 값 기준. 첫 달은 직전 달이 없어 빠진다.
+  const c1 = [
+    { date: '2001-01-31', equity: 100 },
+    { date: '2001-02-28', equity: 110 },
+    { date: '2001-03-31', equity: 99 },
+  ]
+  const m = monthlyReturnsOf(c1)
+  eq('첫 달은 수익률 없음', m.has('2001-01'), false)
+  closeTo('2월 +10%', m.get('2001-02')!, 0.1, 1e-12)
+  closeTo('3월 −10%', m.get('2001-03')!, -0.1, 1e-12)
+
+  const c2 = [
+    { date: '2001-01-31', equity: 50 },
+    { date: '2001-02-28', equity: 45 },
+    { date: '2001-03-31', equity: 49.5 },
+  ]
+  const mc = monthlyCorrelation(c1, c2)
+  eq('공통 월 2개', mc.n, 2)
+  eq('표본 부족이면 상관 null (억지로 숫자를 만들지 않는다)', mc.r, null)
+
+  // 연도 분해 — 그 해 마지막 값 ÷ 직전 해 마지막 값
+  const c3 = [
+    { date: '2000-06-01', equity: 1 },
+    { date: '2000-12-31', equity: 2 },
+    { date: '2001-12-31', equity: 6 },
+  ]
+  const py = perYearOfCurve(c3, [2000, 2001, 2002])
+  eq('2000년 = 첫 값 대비 2배', py[0].ret, 2)
+  eq('2001년 = 직전 연말 대비 3배', py[1].ret, 3)
+  eq('점이 없는 해는 1(현금)', py[2].ret, 1)
+
+  // 연중 최대 낙폭 — 그 해 안의 고점 기준
+  const c4 = [
+    { date: '2001-01-02', equity: 100 },
+    { date: '2001-06-01', equity: 120 },
+    { date: '2001-09-01', equity: 60 },
+    { date: '2001-12-28', equity: 90 },
+    { date: '2002-12-28', equity: 50 },
+  ]
+  closeTo('2001년 낙폭 = 120 → 60 = −50%', yearMaxDrawdown(c4, 2001)!, -50, 1e-9)
+  eq('점 1개뿐인 해는 null', yearMaxDrawdown(c4, 2002), null)
+  eq('점 없는 해는 null', yearMaxDrawdown(c4, 1999), null)
+}
+
+// ============================================================================
+section('18) 환율 환산 — 결측일은 직전 환율 이월(다음 환율 금지)')
+// ============================================================================
+{
+  const bar = (date: string, c: number): DailyBar => ({ date, t: 0, o: c, h: c, l: c, c, v: 1 })
+  const usd = [bar('2001-01-01', 10), bar('2001-01-02', 20), bar('2001-01-03', 30), bar('2001-01-04', 40)]
+  // 환율은 1/2·1/4에만 있다 — 1/1은 환율 이전, 1/3은 결측이다.
+  const fx = [bar('2001-01-02', 1000), bar('2001-01-04', 2000)]
+  const krw = toKrwCurve(usd, fx)
+  eq('환율 시작 전 구간(1/1)은 버린다', krw.map((p) => p.date).join(','), '2001-01-02,2001-01-03,2001-01-04')
+  eq('1/2 = 20 × 1000', krw[0].equity, 20_000)
+  eq('1/3 결측 → **직전** 환율 1000 (다음 환율 2000을 당겨오지 않는다)', krw[1].equity, 30_000)
+  eq('1/4 = 40 × 2000', krw[2].equity, 80_000)
+  eq('환율이 전혀 없으면 빈 곡선', toKrwCurve(usd, []).length, 0)
+
+  // 환율 뒷부분을 통째로 바꿔도 앞 구간 환산값은 불변(절단 불변성의 환율판)
+  const fxTampered = [bar('2001-01-02', 1000), bar('2001-01-04', 9_999_999)]
+  const krw2 = toKrwCurve(usd, fxTampered)
+  check(
+    '1/4 환율을 바꿔도 1/2·1/3 환산값 불변',
+    krw2[0].equity === krw[0].equity && krw2[1].equity === krw[1].equity,
+    `${krw2[0].equity}/${krw2[1].equity}`,
+  )
+}
+
+// ============================================================================
+section('19) 연도별 분해(yearCurvesOf + stitchYears) = runCustomChain 연쇄')
+// ============================================================================
+{
+  const yearly = buildYearly(HISTORIES, YEARS)
+  const opts = { slots: 5, gate: true }
+  const runYear = (v: (typeof yearly)[number]) => simulateXsMomYear(v.hist, `${v.y}-01-01`, v.syms, COST, opts)
+  const chain = runCustomChain(yearly, runYear, COST, opts.slots)
+  const stitched = stitchYears(yearCurvesOf(yearly, runYear, COST, opts.slots))
+  check(
+    `분해 후 재조립이 연쇄와 점 단위로 일치 (${chain.equity.length}점)`,
+    chain.equity.length > 500 &&
+      chain.equity.length === stitched.length &&
+      chain.equity.every((e, i) => e.date === stitched[i].date && Math.abs(e.equity - stitched[i].equity) < 1e-12),
+    `chain=${chain.equity.length} stitched=${stitched.length}`,
+  )
+  // 연말 정산 근사(haircut)도 같이 반영된다 — 끄면 두 경로가 같이 달라져야 한다
+  const noHc = stitchYears(yearCurvesOf(yearly, runYear, COST, opts.slots, false))
+  const noHcChain = runCustomChain(yearly, runYear, COST, opts.slots, false)
+  check(
+    'haircut을 끈 경로도 서로 일치',
+    noHc.length === noHcChain.equity.length &&
+      noHc.every((e, i) => Math.abs(e.equity - noHcChain.equity[i].equity) < 1e-12),
+  )
+  check('haircut on/off는 실제로 다른 곡선', Math.abs(noHc[noHc.length - 1].equity - stitched[stitched.length - 1].equity) > 1e-9)
+}
+
+// ============================================================================
+section('20) 워크포워드 선택 — 선택 시점 이후를 보지 않는다 (손으로 만든 표)')
+// ============================================================================
+{
+  // C1 = 고수익·깊은 낙폭 / C2 = 저수익·얕은 낙폭. 2002년까지는 C2가, 그 뒤로는 C1이 앞선다.
+  // C2를 기본값(WF_DEFAULT)과 같은 후보로 두어 "학습 부족 구간의 기본값" 경로도 함께 탄다.
+  const C1: WfCand = { slots: 4, gate: false }
+  const C2: WfCand = { ...WF_DEFAULT }
+  const mk = (spec: Record<number, [number, number]>) =>
+    Object.keys(spec)
+      .map(Number)
+      .sort((a, b) => a - b)
+      .map((y) => yc(y, spec[y][0], spec[y][1]))
+  const table: WfTable = [
+    { cand: C1, years: mk({ 2000: [0.5, 2.0], 2001: [0.5, 2.0], 2002: [0.9, 3.0], 2003: [0.9, 3.0], 2004: [1, 1] }) },
+    { cand: C2, years: mk({ 2000: [0.99, 1.1], 2001: [0.99, 1.1], 2002: [0.5, 0.6], 2003: [0.5, 0.6], 2004: [1, 1] }) },
+  ]
+  const YS = [2000, 2001, 2002, 2003, 2004]
+
+  // (a) 학습 표본 부족 구간은 기본값 — 사후지식 없는 선택
+  eq('학습 0년 → 기본값', wfLabel(wfPick(table, 2000, 2).pick), wfLabel(WF_DEFAULT))
+  eq('학습 1년 → 기본값', wfLabel(wfPick(table, 2001, 2).pick), wfLabel(WF_DEFAULT))
+  eq('학습 표본 카운트', wfPick(table, 2002, 2).trained, 2)
+
+  // (b) 점수는 직전까지의 누적 수익÷MDD — 독립 계산과 대조
+  const objOf = (row: WfTable[number], year: number) => perfOf(stitchYears(row.years.filter((cc) => cc.y < year))).obj
+  const p2002 = wfPick(table, 2002, 2)
+  eq('2002년: 낙폭이 얕은 C2를 고른다', wfLabel(p2002.pick), wfLabel(C2))
+  closeTo('선택 점수 = 그 후보의 직전까지 누적 수익÷MDD', p2002.score!, objOf(table[1], 2002)!, 1e-9)
+  check('그 시점에는 C1이 실제로 열세', objOf(table[0], 2002)! < objOf(table[1], 2002)!)
+
+  // (c) 뒤로 갈수록 순위가 뒤집힌다 — 선택도 따라 바뀌어야 한다
+  eq('2003년: 역전되어 C1', wfLabel(wfPick(table, 2003, 2).pick), wfLabel(C1))
+  eq('2004년: 계속 C1', wfLabel(wfPick(table, 2004, 2).pick), wfLabel(C1))
+
+  // (d) ★ 미래참조 금지 — 선택 시점 **이후** 연도를 극단값으로 바꿔도 선택이 그대로여야 한다
+  const tamper = (from: number): WfTable =>
+    table.map((row) => ({
+      cand: row.cand,
+      years: row.years.map((cc) =>
+        cc.y < from
+          ? cc
+          : {
+              y: cc.y,
+              rel: cc.rel.map((p) => ({ date: p.date, rel: p.rel * (row.cand.slots === 4 ? 1e6 : 1e-6) })),
+              endFactor: cc.endFactor * (row.cand.slots === 4 ? 1e6 : 1e-6),
+            },
+      ),
+    }))
+  for (const year of [2002, 2003, 2004]) {
+    const t = tamper(year)
+    eq(
+      `${year}년 선택은 ${year}년 이후 데이터를 조작해도 불변`,
+      wfLabel(wfPick(t, year, 2).pick),
+      wfLabel(wfPick(table, year, 2).pick),
+    )
+    closeTo(`${year}년 선택 점수도 불변`, wfPick(t, year, 2).score!, wfPick(table, year, 2).score!, 1e-9)
+  }
+
+  // (e) 연쇄 자산곡선 손계산
+  //   2000·2001 기본값(C2) → 1.1 → 1.21 / 2002 C2 → ×0.6 = 0.726 / 2003 C1 → ×3 = 2.178 / 2004 C1 → ×1
+  const wf = runWalkForward(table, YS, 2, WF_DEFAULT)
+  eq('선택 이력 길이', wf.picks.length, 5)
+  eq('연쇄 점 수 = 5년 × 2점', wf.equity.length, 10)
+  closeTo('2000년 말 = 1.1', wf.equity[1].equity, 1.1, 1e-12)
+  closeTo('2001년 말 = 1.21', wf.equity[3].equity, 1.21, 1e-12)
+  closeTo('2002년 말 = 0.726', wf.equity[5].equity, 0.726, 1e-12)
+  closeTo('2003년 말 = 2.178 (C1로 갈아탄 해)', wf.equity[7].equity, 2.178, 1e-12)
+  closeTo('2004년 말 = 2.178', wf.equity[9].equity, 2.178, 1e-12)
+  closeTo('연도별 수익 2003 = ×3', wf.perYear[3].ret, 3, 1e-12)
+  eq('교체가 실제로 일어났다', new Set(wf.picks.map((p) => wfLabel(p.pick))).size, 2)
+
+  // (f) 연쇄 전체도 뒤쪽 조작에 대해 앞 구간 불변
+  const wfT = runWalkForward(tamper(2003), YS, 2, WF_DEFAULT)
+  check(
+    '2003년 이후를 조작해도 2002년까지의 곡선 동일',
+    wf.equity
+      .filter((e) => e.date < '2003-01-01')
+      .every((e, i) => e.date === wfT.equity[i].date && Math.abs(e.equity - wfT.equity[i].equity) < 1e-12),
+  )
+  eq('조작 후에도 2002년 선택은 같다', wfLabel(wfT.picks[2].pick), wfLabel(wf.picks[2].pick))
+}
+
+// ============================================================================
+section('21) 워크포워드 절단 불변성 (합성 시세 · 실제 xsmom 경로)')
+// ============================================================================
+{
+  const CUT = '2003-12-31'
+  const MIN = 2
+  const buildTable = (h: Record<string, DailyBar[]>): WfTable => {
+    const yearly = buildYearly(h, YEARS)
+    return WF_CANDS.map((cand) => ({
+      cand,
+      years: yearCurvesOf(yearly, (v) => simulateXsMomYear(v.hist, `${v.y}-01-01`, v.syms, COST, cand), COST, cand.slots),
+    }))
+  }
+  const full = runWalkForward(buildTable(HISTORIES), YEARS, MIN, WF_DEFAULT)
+  // 절단이 아니라 **조작**으로 본다 — 잘라내면 그 해가 통째로 사라져 비교가 헐거워진다.
+  // 배율을 종목마다 다르게 줘야 모멘텀 **순위**까지 흔들린다(전 종목 동일 배율이면
+  // 비율이 상쇄돼 랭킹이 그대로라 조작이 사실상 아무 일도 안 한 셈이 된다).
+  const tampered: Record<string, DailyBar[]> = {}
+  Object.entries(HISTORIES).forEach(([s, bars], i) => {
+    const k = 1 + ((i * 7) % 11) * 0.9 // 1.0 ~ 10.0
+    tampered[s] = bars.map((b) => (b.date <= CUT ? b : { ...b, o: b.o * k, h: b.h * k, l: b.l * k, c: b.c * k }))
+  })
+  const after = runWalkForward(buildTable(tampered), YEARS, MIN, WF_DEFAULT)
+
+  const fe = full.equity.filter((e) => e.date <= CUT)
+  const ae = after.equity.filter((e) => e.date <= CUT)
+  check(
+    `절단 시점 이전 자산곡선 동일 (${fe.length}점)`,
+    fe.length > 500 && fe.length === ae.length && fe.every((e, i) => e.date === ae[i].date && Math.abs(e.equity - ae[i].equity) < 1e-9),
+    `full=${fe.length} after=${ae.length}`,
+  )
+  const yBefore = YEARS.filter((y) => y <= 2004) // 2004년 선택은 2003년까지만 보고 한다
+  check(
+    '2004년까지의 선택이 전부 동일 (선택이 미래를 보지 않는다)',
+    yBefore.every((y) => {
+      const a = full.picks.find((p) => p.y === y)!
+      const b = after.picks.find((p) => p.y === y)!
+      return wfLabel(a.pick) === wfLabel(b.pick) && a.trained === b.trained
+    }),
+    full.picks.map((p) => `${p.y}:${wfLabel(p.pick)}`).join(' '),
+  )
+  check('조작 구간 이후는 실제로 달라진다(테스트가 무언가를 재고 있다)', full.equity.some((e, i) => e.date > CUT && after.equity[i] && Math.abs(e.equity - after.equity[i].equity) > 1e-9))
+  check('재실행 결정성', runWalkForward(buildTable(HISTORIES), YEARS, MIN, WF_DEFAULT).equity.every((e, i) => Object.is(e.equity, full.equity[i].equity)))
+}
+
+// ============================================================================
+section('22) plateauness — 고원 vs 뾰족한 봉우리')
+// ============================================================================
+{
+  const flat = plateauness([10, 20, 22, 21, 12, 8], 2)
+  closeTo('이웃 평균 ÷ 중심', flat.ratio!, 20.5 / 22, 1e-12)
+  check('고원 판정', flat.verdict.startsWith('고원'), flat.verdict)
+  const spike = plateauness([1, 2, 30, 2, 1, 1], 2)
+  check('봉우리 판정', spike.verdict.startsWith('뾰족'), spike.verdict)
+  eq('중심이 null이면 판정 불가', plateauness([1, null, 3], 1).ratio, null)
+  eq('이웃이 전부 null이면 판정 불가', plateauness([null, 5, null], 1).ratio, null)
+  check('중심이 0 이하면 판정 불가', plateauness([1, 0, 1], 1).ratio == null)
+}
+
+// ============================================================================
+section('23) 미장 유니버스 매핑 — 재사용 티커 거부 · 사명변경 폴백')
+// ============================================================================
+{
+  const usBars = (start: string, n: number, seed: number): DailyBar[] =>
+    makeBars(seed, n).map((b, i) => ({
+      ...b,
+      date: new Date(Date.parse(`${start}T00:00:00Z`) + i * 86400000).toISOString().slice(0, 10),
+    }))
+  // 'LU'(재사용 티커)에 **일부러** 시세를 넣어 둔다 — 매핑이 거부돼야 정상이다.
+  const h: Record<string, DailyBar[]> = {
+    MSFT: usBars('1999-01-01', 1200, 7001),
+    GE: usBars('1999-01-01', 1200, 7002),
+    CSCO: usBars('1999-01-01', 1200, 7003),
+    WMT: usBars('1999-01-01', 1200, 7004),
+    XOM: usBars('1999-01-01', 1200, 7005),
+    LU: usBars('1999-01-01', 1200, 7006),
+    IBM: usBars('2000-09-01', 400, 7007), // 그 해 6/30 이후 시작 → 2000년 편입 불가
+  }
+  const [slice] = buildYearlyUs(h, [2000])
+  check('재사용 티커 LU는 시세가 있어도 편입되지 않는다', !slice.syms.includes('LU'), slice.syms.join(','))
+  check('정상 티커는 편입된다', ['MSFT', 'GE', 'CSCO', 'WMT', 'XOM'].every((s) => slice.syms.includes(s)), slice.syms.join(','))
+  check('그 해 6/30 이후 상장분은 빠진다', !slice.syms.includes('IBM'), slice.syms.join(','))
+  eq('매핑률 분모는 그 해 목록 20종목', slice.mapped.split('/')[1], '20')
+  eq('슬라이스 히스토리는 그 해 말까지만', slice.hist.MSFT.every((b) => b.date <= '2000-12-31'), true)
+
+  // 사명 변경 폴백 — FB는 META로 조회된다
+  const h2: Record<string, DailyBar[]> = { META: usBars('2010-01-01', 1200, 7008) }
+  eq('FB → META 폴백', resolveUsTicker('FB', (s) => !!h2[s]?.length), 'META')
+  eq('재사용 티커는 폴백도 없다', resolveUsTicker('LU', () => true), undefined)
+}
+
+// ============================================================================
+section('24) 미장 xsmom 경로 — 절단 불변성 (KR과 같은 시뮬을 미장 비용으로)')
+// ============================================================================
+{
+  const usBars = (seed: number): DailyBar[] => makeBars(seed, N_DAYS)
+  const tickers = ['MSFT', 'GE', 'CSCO', 'WMT', 'XOM', 'IBM', 'INTC', 'ORCL']
+  const h: Record<string, DailyBar[]> = {}
+  tickers.forEach((t, i) => (h[t] = usBars(880_000 + i * 613)))
+  const CUT = '2004-07-20'
+  const opts = { slots: 4, gate: true }
+  const full = simulateXsMomYear(h, '2001-01-01', tickers, COST_US, opts)
+  const cut = simulateXsMomYear(truncate(h, CUT), '2001-01-01', tickers, COST_US, opts)
+  const fe = full.equity.filter((e) => e.date <= CUT)
+  const ce = cut.equity.filter((e) => e.date <= CUT)
+  check(
+    `미장 비용 경로도 절단 불변 (${fe.length}점)`,
+    fe.length > 900 && fe.length === ce.length && fe.every((e, i) => e.date === ce[i].date && Object.is(e.equity, ce[i].equity)),
+    `full=${fe.length} cut=${ce.length}`,
+  )
+  eq('미장 비용: 매도 거래세 0', COST_US.taxPct, 0)
+  check('KR 비용과 다른 상수를 쓴다', COST_US.taxPct !== COST.taxPct)
+}
+
+// ============================================================================
+section('25) 검증 3종 표 렌더링 — 예외 없이 돌고 판정이 자기모순이 아니다')
+// ============================================================================
+{
+  const yearly = buildYearly(HISTORIES, YEARS)
+  const benchEq = benchCurve(BENCH_BARS)
+  const chainA = runSpecChain(yearly, baselineSpec, COST)
+  const chainB = runCustomChain(
+    yearly,
+    (v) => simulateXsMomYear(v.hist, `${v.y}-01-01`, v.syms, COST, COMBO_XSMOM),
+    COST,
+    COMBO_XSMOM.slots,
+  )
+  const blended = blendCurves(chainA.equity, chainB.equity, 0.5)
+  check('결합 곡선이 만들어진다', blended.length > 500, `${blended.length}`)
+  const row = curveStrat('결합 50:50', blended, benchEq, YEARS)
+  eq('curveStrat 라벨', row.label, '결합 50:50')
+  eq('결합 행은 매매 집계가 없다(승률 분모 오염 방지)', row.closed, 0)
+  eq('연도별 분해 길이 = 연도 수', row.perYear.length, YEARS.length)
+
+  // 가중을 끝으로 밀면 결합은 그 슬리브 **그 자체**여야 한다 — 산술적으로 강제되는 성질이라
+  // 여기서 어긋나면 가중이 뒤바뀌었거나 정렬이 틀어진 것이다.
+  const onlyA = blendCurves(chainA.equity, chainB.equity, 1)
+  const alA = alignCurves(chainA.equity, chainB.equity)
+  check(
+    '가중 1.0 → A 슬리브 곡선과 배수까지 일치',
+    onlyA.length === alA.dates.length &&
+      onlyA.every((p, i) => p.date === alA.dates[i] && Math.abs(p.equity - alA.ea[i] / alA.ea[0]) < 1e-9),
+    `${onlyA.length}/${alA.dates.length}`,
+  )
+  const onlyB = blendCurves(chainA.equity, chainB.equity, 0)
+  check(
+    '가중 0 → B 슬리브 곡선과 배수까지 일치',
+    onlyB.every((p, i) => Math.abs(p.equity - alA.eb[i] / alA.eb[0]) < 1e-9),
+  )
+  const mixTotal = perfOf(blended).total
+  check(
+    '50:50 결합은 두 단독과 다른 곡선이다 (합성이 실제로 일어났다)',
+    Math.abs(mixTotal - perfOf(onlyA).total) > 1e-6 && Math.abs(mixTotal - perfOf(onlyB).total) > 1e-6,
+    `A=${perfOf(onlyA).total.toFixed(1)} B=${perfOf(onlyB).total.toFixed(1)} mix=${mixTotal.toFixed(1)}`,
+  )
+
+  const [from, to] = spanOf(chainA.equity)
+  check('spanOf가 곡선 양끝을 준다', from === chainA.equity[0].date && to === chainA.equity[chainA.equity.length - 1].date)
+  eq('빈 곡선 span', spanOf([]).join(','), ',')
+
+  let lines = 0
+  let threw = ''
+  const orig = console.log
+  console.log = () => {
+    lines++
+  }
+  try {
+    holdTable('테스트', [{ label: '벤치', curve: benchEq, note: '메모' }, { label: '빈 곡선', curve: [] }], from, to)
+  } catch (e) {
+    threw = String(e)
+  } finally {
+    console.log = orig
+  }
+  check('holdTable이 빈 곡선에도 예외 없이 렌더링된다', threw === '' && lines > 5, threw || `lines=${lines}`)
 }
 
 /** verdictTable을 출력 없이 호출해 승자 수만 받는다 */
