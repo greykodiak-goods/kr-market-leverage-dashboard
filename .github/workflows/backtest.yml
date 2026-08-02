@@ -1,0 +1,43 @@
+# Yahoo 전용 백테스트를 GHA 러너에서 직접 실행 (2026-08-02 대표 지적 "왜 EC2에서 하냐").
+#
+# 실행 장소 규칙:
+#   - 여기(GHA 러너, 2코어·7GB): Yahoo 일봉만 쓰는 모드 전부 — pit1010(+wide)·fullmar·decade·
+#     slots·tune·usprobe·idea:seasonal/monthpat/pairprem 등. 사업 서버 무접촉·메모리 여유.
+#   - EC2(awning-ops deploy-investing.yml): 국내 IP·키움 키가 필요한 것만 — pityear(KRX)·
+#     probe:flow·backfill:flow(키움 수급)·모의투자 데몬.
+# 시크릿 불필요(Yahoo 공개 엔드포인트). 데이터 커밋 없음(읽기 전용 실행).
+
+name: Backtest (GHA runner)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'MODE (예: pit1010 / idea:seasonal — idea: 접두면 idea-lab.mjs)'
+        type: string
+        required: true
+      grid:
+        description: 'PIT_GRID (pit1010에서 wide 지정 시 400조합)'
+        type: string
+        default: ''
+
+concurrency: backtest-runner
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: 백테스트 실행
+        run: |
+          RAW="${{ inputs.mode }}"
+          SCRIPT="spec-backtest.mjs"; RUN_MODE="$RAW"
+          case "$RAW" in idea:*) SCRIPT="idea-lab.mjs"; RUN_MODE="${RAW#idea:}";; esac
+          [ -n "${{ inputs.grid }}" ] && export PIT_GRID="${{ inputs.grid }}"
+          env MODE="$RUN_MODE" NODE_OPTIONS=--max-old-space-size=4096 node "scripts/$SCRIPT"
