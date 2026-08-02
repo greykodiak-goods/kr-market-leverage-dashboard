@@ -19,8 +19,25 @@ import { join } from 'node:path'
 import { runStrategySpec, type ConditionResult, type CostSettings } from '../src/features/backtest/conditionScreen'
 import { SPEC_VERSION, avgVolume, priorHigh, rsi, sma, type Condition, type ConditionNode, type StrategySpec } from '../src/features/backtest/strategySpec'
 import type { DailyBar } from '../src/features/backtest/types'
-import { PIT_SOURCE_NOTE, PIT_UNION, PIT_YEARS } from '../src/features/backtest/pitUniverse'
+import { PIT_SOURCE_NOTE, PIT_UNION, PIT_YEARS, pitCodes } from '../src/features/backtest/pitUniverse'
 import { runPitChained } from '../src/features/backtest/pitChain'
+import { BENCH_SYMBOL, DEFAULT_COST, PRESET_PIT_MAXRATIO } from '../src/features/backtest/presets'
+import {
+  attributeGap,
+  conclude,
+  diffLoad,
+  diffSpecs,
+  emptyProbe,
+  isCosmetic,
+  pickPrecompute,
+  pickResearch,
+  run2x2Condition,
+  run2x2Xsmom,
+  type CellStat,
+  type DataBundle,
+  type LoadDiffRow,
+  type SuffixProbe,
+} from './lib/presetDiag'
 import {
   US_COMPANY_NAMES,
   US_PIT_SOURCE_NOTE,
@@ -3012,7 +3029,390 @@ async function uspit() {
   log('   손실 경로: MDD 열이 그 조합이 실제로 견뎌야 했던 최대 하락이다 — 2008년 구간을 특히 볼 것.')
 }
 
+// ============================================================================
+// MODE=presetdiag — 프리셋 사전계산 ↔ 연구 러너 수치 괴리 원인 규명 (2026-08-02 지시)
+// ============================================================================
+//
+// 증상: 같은 날·같은 Yahoo·같은 시세 로드 수(66/67)인데 사전계산이 **전 프리셋 일제히** 낮다
+//       (pit-maxratio ~10× · xsmom-5-gate ~4× · combo-50 ~6×). 체계적 차이다.
+//
+// 이 모드는 **아무것도 고치지 않는다** — 어느 축이 갭을 만드는지 표로 특정만 한다.
+// 판정 로직은 전부 `scripts/lib/presetDiag.ts`(순수 모듈)에 있고 합성 데이터로 테스트된다.
+// 여기 있는 것은 네트워크 조회와 출력뿐이다.
+//
+// ⚠️ 컨테이너는 Yahoo 403이라 여기서 못 돈다 — GHA(.github/workflows/backtest.yml)에서
+//    MODE=presetdiag로 1회 실행한다. 조회량은 67코드 × 2접미사 × 2구간 + 벤치 2회.
+
+/** 연구 러너 구간 — spec-backtest pit1010:1894 · idea-lab loadPitHistories:488 */
+const DIAG_RESEARCH_RANGE = 'since:1999-01-01'
+/** 사전계산 구간 — preset-precompute.entry.ts `RANGE` */
+const DIAG_PRECOMPUTE_RANGE = 'since:2000-01-01'
+
+interface DiagFetch {
+  bars: DailyBar[]
+  /** adjclose가 실려 온 봉 수 */
+  adjBars: number
+  /** adj/close 계수가 1이 아닌 봉 수 */
+  adjNonUnitBars: number
+  /** 거래소현지 날짜(연구식)와 KST 고정 날짜(사전계산식)가 어긋난 봉 수 — KR은 0이어야 한다 */
+  kstMismatch: number
+}
+
+/**
+ * `fetchDaily`와 **같은 산술**로 파싱하되 진단 계수를 함께 센다.
+ * 기존 `fetchDaily`는 손대지 않는다(다른 모드 동작 불변 — 이번 단계는 진단만).
+ * 날짜는 연구식(`exchangeLocalDate`)으로 만들고, 사전계산식 KST 고정 공식과의
+ * 불일치 봉 수를 따로 센다. 한국거래소는 서머타임이 없어 0이어야 하며, 0이 아니면
+ * 그 자체가 원인 후보이므로 표에 드러낸다.
+ */
+async function fetchDailyDiag(symbol: string, range: string): Promise<DiagFetch> {
+  const qs = range.startsWith('since:')
+    ? `period1=${Math.floor(Date.parse(range.slice(6)) / 1000)}&period2=${Math.floor(Date.now() / 1000)}`
+    : `range=${range}`
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
+    symbol,
+  )}?${qs}&interval=1d&events=div%2Csplit`
+  const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' } })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const json = (await res.json()) as any
+  const r = json?.chart?.result?.[0]
+  if (!r) throw new Error(json?.chart?.error?.description ?? 'chart.result 없음')
+  const ts: number[] = r.timestamp ?? []
+  const q = r.indicators?.quote?.[0] ?? {}
+  const adj: (number | null)[] = r.indicators?.adjclose?.[0]?.adjclose ?? []
+  const gmtoffset: number = typeof r.meta?.gmtoffset === 'number' ? r.meta.gmtoffset : fallbackGmtOffset(symbol)
+  const bars: DailyBar[] = []
+  let adjBars = 0
+  let adjNonUnitBars = 0
+  let kstMismatch = 0
+  for (let i = 0; i < ts.length; i++) {
+    const o = q.open?.[i]
+    const h = q.high?.[i]
+    const l = q.low?.[i]
+    const cl = q.close?.[i]
+    const v = q.volume?.[i]
+    if ([o, h, l, cl].some((x: unknown) => x == null || !Number.isFinite(x as number))) continue
+    const hasAdj = adj[i] != null && Number.isFinite(adj[i]!) && cl > 0
+    const f = hasAdj ? adj[i]! / cl : 1
+    if (hasAdj) adjBars++
+    if (f !== 1) adjNonUnitBars++
+    const date = exchangeLocalDate(ts[i], gmtoffset)
+    const kst = new Date(ts[i] * 1000 + 9 * 3600 * 1000).toISOString().slice(0, 10)
+    if (date !== kst) kstMismatch++
+    bars.push({ date, t: ts[i], o: o * f, h: h * f, l: l * f, c: cl * f, v: Number.isFinite(v) ? v : 0 })
+  }
+  return { bars, adjBars, adjNonUnitBars, kstMismatch }
+}
+
+/** 한 (코드, 접미사, 구간) 조회 → 요약 + 봉. 실패는 예외로 새지 않고 probe.ok=false로 남는다. */
+async function probeSuffix(
+  code: string,
+  suffix: string,
+  range: string,
+): Promise<{ probe: SuffixProbe; bars: DailyBar[]; kstMismatch: number }> {
+  const sym = `${code}${suffix}`
+  // 공통 창 하한 — 두 경로의 시작일을 같은 잣대로 비교하기 위한 기준일
+  const floor = DIAG_PRECOMPUTE_RANGE.slice(6)
+  try {
+    const d = await fetchDailyDiag(sym, range)
+    return {
+      probe: {
+        sym,
+        suffix,
+        range,
+        ok: true,
+        bars: d.bars.length,
+        start: d.bars.length ? d.bars[0].date : '',
+        startAtOrAfter: d.bars.find((b) => b.date >= floor)?.date ?? '',
+        end: d.bars.length ? d.bars[d.bars.length - 1].date : '',
+        adjBars: d.adjBars,
+        adjNonUnitBars: d.adjNonUnitBars,
+        error: '',
+      },
+      bars: d.bars,
+      kstMismatch: d.kstMismatch,
+    }
+  } catch (e) {
+    return { probe: emptyProbe(sym, suffix, range, String((e as Error)?.message ?? e)), bars: [], kstMismatch: 0 }
+  }
+}
+
+const pDesc = (p: SuffixProbe | null) => (p ? `${p.sym} ${p.bars}봉 ${p.start || '—'}` : '**채택 없음**')
+
+function statRow(s: CellStat): string {
+  return (
+    `| ${s.dataLabel} | ${s.armLabel} | ${f1(s.totalPct)}% | ${f1(s.cagrPct)}% | ${f1(s.mddPct)}% | ` +
+    `${s.alphaCagrPct != null ? `${f1(s.alphaCagrPct)}%p` : '—'} | ${s.tradeCount} | ` +
+    `${s.mappedAvgPct != null ? `${s.mappedAvgPct.toFixed(0)}%` : '—'} | ${s.cashYears.length} | ${s.startDate}~${s.endDate} |`
+  )
+}
+
+function printStatTable(title: string, cells: CellStat[]) {
+  log('')
+  log(`### ${title}`)
+  log('| 데이터축 | 전략축 | 총수익 | CAGR | MDD | 알파(연) | 매매 | 평균매핑률 | 현금해 | 구간 |')
+  log('|---|---|---|---|---|---|---|---|---|---|')
+  for (const s of cells) log(statRow(s))
+}
+
+async function presetdiag() {
+  log('# MODE=presetdiag — 프리셋 사전계산 ↔ 연구 러너 수치 괴리 진단')
+  log('')
+  log('아무것도 고치지 않는다. **어느 축이 갭을 만드는지 특정**만 한다.')
+  log(`유니버스 ${PIT_UNION.length}종목 · 연도 ${PIT_YEARS[0]}~${PIT_YEARS[PIT_YEARS.length - 1]}`)
+  log(`⚠️ ${PIT_SOURCE_NOTE}`)
+  log('')
+  log('| 축 | 연구 러너 | 사전계산 |')
+  log('|---|---|---|')
+  log(`| 조회 구간 | \`${DIAG_RESEARCH_RANGE}\` | \`${DIAG_PRECOMPUTE_RANGE}\` |`)
+  log('| 접미사 순서 | .KQ → .KS | .KS → .KQ |')
+  log(`| 채택 규칙 | 긴 이력 채택 · ${'200봉'} 미만이면 포기 | 첫 성공(1봉↑)에서 중단 · 하한 없음 |`)
+  const costSame =
+    COST.initialCapital === DEFAULT_COST.initialCapital &&
+    COST.feePct === DEFAULT_COST.feePct &&
+    COST.taxPct === DEFAULT_COST.taxPct &&
+    COST.slippagePct === DEFAULT_COST.slippagePct
+  log(`| 비용 상수 | 러너 COST | presets.DEFAULT_COST → **${costSame ? '동일' : '⚠️ 다름'}** |`)
+  log(`| 벤치마크 | ${BENCH} | ${BENCH_SYMBOL} → **${BENCH === BENCH_SYMBOL ? '동일' : '⚠️ 다름'}** |`)
+
+  // ==========================================================================
+  log('')
+  log('## 1) 데이터 대조표 — 연구식 로드 vs 사전계산식 로드')
+  // ==========================================================================
+  const researchHist: Record<string, DailyBar[]> = {} // 코드 키(pit1010 방식 — resolve 없음)
+  const precomputeHist: Record<string, DailyBar[]> = {} // 접미사 심볼 키
+  const symOf: Record<string, string> = {}
+  const diffs: LoadDiffRow[] = []
+  let kstMismatchTotal = 0
+  let researchAdopted = 0
+  let precomputeAdopted = 0
+  let researchNoAdj = 0
+  let precomputeNoAdj = 0
+  /** 연구가 200봉 게이트로 버린 계열을 사전계산이 주워 담은 경우 */
+  const stubAccepted: string[] = []
+  /** 연구가 조기 중단(.KQ ≥200봉) 때문에 보지 못한 더 긴 .KS 계열 */
+  const unseenLonger: string[] = []
+
+  const inYearList = (code: string) => (y: number) => pitCodes(y).includes(code)
+
+  for (const code of PIT_UNION) {
+    const byResearch: Record<string, SuffixProbe | undefined> = {}
+    const byPrecompute: Record<string, SuffixProbe | undefined> = {}
+    const barsR: Record<string, DailyBar[]> = {}
+    const barsP: Record<string, DailyBar[]> = {}
+    for (const suffix of ['.KQ', '.KS']) {
+      const r = await probeSuffix(code, suffix, DIAG_RESEARCH_RANGE)
+      byResearch[suffix] = r.probe
+      barsR[suffix] = r.bars
+      kstMismatchTotal += r.kstMismatch
+      await sleep(120)
+      const p = await probeSuffix(code, suffix, DIAG_PRECOMPUTE_RANGE)
+      byPrecompute[suffix] = p.probe
+      barsP[suffix] = p.bars
+      kstMismatchTotal += p.kstMismatch
+      await sleep(120)
+    }
+    const rPick = pickResearch(byResearch)
+    const pPick = pickPrecompute(byPrecompute)
+    if (rPick) {
+      researchAdopted++
+      researchHist[code] = barsR[rPick.suffix]
+      if (rPick.adjBars === 0) researchNoAdj++
+    }
+    if (pPick) {
+      precomputeAdopted++
+      precomputeHist[pPick.sym] = barsP[pPick.suffix]
+      symOf[code] = pPick.sym
+      if (pPick.adjBars === 0) precomputeNoAdj++
+      if (pPick.bars < 200) stubAccepted.push(`${code}(${pPick.sym} ${pPick.bars}봉)`)
+    }
+    // 연구가 .KQ에서 끊겨 못 본 더 긴 .KS가 있었나 (연구 규약 자체의 사각지대)
+    const kq = byResearch['.KQ']
+    const ks = byResearch['.KS']
+    if (kq?.ok && ks?.ok && kq.bars >= 200 && ks.bars > kq.bars) unseenLonger.push(`${code}(.KQ ${kq.bars} < .KS ${ks.bars})`)
+    // 봉 배열은 채택된 것만 남긴다 — 나머지는 여기서 참조가 끊긴다(메모리)
+    const row = diffLoad(code, rPick, pPick, PIT_YEARS, inYearList(code))
+    if (row) diffs.push(row)
+  }
+
+  log('')
+  log(
+    `채택 수: 연구식 ${researchAdopted}/${PIT_UNION.length} · 사전계산식 ${precomputeAdopted}/${PIT_UNION.length} · ` +
+      `**다른 종목 ${diffs.length}개**`,
+  )
+
+  // 벤치는 실패해도 진단을 멈추지 않는다 — 알파만 비고, 총수익·MDD 대조는 그대로 성립한다.
+  const loadBench = async (sym: string, range: string): Promise<DailyBar[] | undefined> => {
+    try {
+      return (await fetchDailyDiag(sym, range)).bars
+    } catch (e) {
+      log(`⚠️ 벤치(${sym} ${range}) 로드 실패 — 알파는 —로 남는다: ${String((e as Error)?.message ?? e)}`)
+      return undefined
+    }
+  }
+  const benchRBars = await loadBench(BENCH, DIAG_RESEARCH_RANGE)
+  await sleep(120)
+  const benchPBars = await loadBench(BENCH_SYMBOL, DIAG_PRECOMPUTE_RANGE)
+  log(
+    `배당보정(adjclose) 부재로 계수 1 폴백한 종목: 연구식 ${researchNoAdj} · 사전계산식 ${precomputeNoAdj} ` +
+      `(0이 아니면 규칙 3의 총수익 보정이 그만큼 안 걸렸다는 뜻)`,
+  )
+  log(`거래소현지 날짜 vs KST 고정 날짜 불일치 봉: **${kstMismatchTotal}** (한국거래소는 서머타임이 없어 0이어야 정상)`)
+  log(
+    `벤치 ${BENCH}: 연구식 ${benchRBars?.length ?? 0}봉 ${benchRBars?.[0]?.date ?? '—'} · ` +
+      `사전계산식 ${benchPBars?.length ?? 0}봉 ${benchPBars?.[0]?.date ?? '—'}`,
+  )
+  if (stubAccepted.length)
+    log(`⚠️ 연구가 200봉 게이트로 버렸을 짧은 계열을 사전계산이 채택: ${stubAccepted.join(', ')}`)
+  if (unseenLonger.length) log(`ℹ️ 연구가 .KQ 조기중단으로 보지 못한 더 긴 .KS: ${unseenLonger.join(', ')}`)
+
+  if (researchAdopted === 0 && precomputeAdopted === 0) {
+    log('')
+    log('❌ 양쪽 모두 시세를 하나도 못 받았다 — 대조 자체가 성립하지 않는다(0개 = "동일"이 아니다).')
+  } else if (diffs.length === 0) {
+    log('')
+    log('→ **두 로드 규약이 만든 시세는 전 종목 동일하다.** 데이터축은 원인 후보에서 빠진다(구간 차이는 별도).')
+  } else {
+    log('')
+    log('| 코드 | 연구식 채택 | 사전계산식 채택 | 차이 | 연구에만 든 해 | 사전계산에만 든 해 |')
+    log('|---|---|---|---|---|---|')
+    for (const d of diffs)
+      log(
+        `| ${d.code} | ${pDesc(d.research)} | ${pDesc(d.precompute)} | ${d.reasons.join('·')} | ` +
+          `${d.yearsOnlyResearch.join(' ') || '—'} | ${d.yearsOnlyPrecompute.join(' ') || '—'} |`,
+      )
+    const lostYears = diffs.reduce((s, d) => s + d.yearsOnlyResearch.length, 0)
+    const gainedYears = diffs.reduce((s, d) => s + d.yearsOnlyPrecompute.length, 0)
+    log('')
+    log(
+      `유니버스 편입 상실(연구엔 있고 사전계산엔 없는 종목-해) **${lostYears}건** · 반대 방향 ${gainedYears}건. ` +
+        '상실이 크면 사전계산은 그 해 더 적은 후보로 돌았다는 뜻이고, 그것만으로 성적이 갈린다.',
+    )
+  }
+
+  // 구간(워밍업) 차이는 로드 규약과 별개로 항상 존재한다 — 수치로 박아 둔다.
+  const warmR = Object.values(researchHist).filter((b) => b.length && b[0].date < '2000-01-01').length
+  log('')
+  log(
+    `워밍업: 연구식 시세 중 2000-01-01 **이전** 봉을 가진 종목 ${warmR}/${researchAdopted}. ` +
+      '사전계산식은 구조상 0이다(구간 자체가 2000-01-01 시작).',
+  )
+  log('  → 연쇄 첫 해(2000년) 실행에서 사전계산은 이평·모멘텀 워밍업 봉이 없다. `smaAt`이 null을 주면')
+  log('    `maBreak` 청산이 **발동하지 않고**(conditionScreen.ts maBreak 분기), `momentum12_1`은 null이라')
+  log('    후보에서 빠진다(xsmomChain.ts). 즉 첫 해의 진입·청산 규칙이 서로 다르게 작동한다.')
+
+  // ==========================================================================
+  log('')
+  log('## 2) 스펙 diff — presets.PRESET_PIT_MAXRATIO vs pit1010 specOf(MA25·신고10→80선·버퍼0)')
+  // ==========================================================================
+  const SYMS = ['A', 'B'] // 유니버스 심볼은 실행 시 주입되므로 같은 자리표시자로 고정해 비교한다
+  const researchSpec = (symbols: string[]): StrategySpec =>
+    baseSpec({
+      entry: {
+        op: 'and',
+        nodes: [c('25일선돌파', { kind: 'maCross', period: 25, dir: 'above' }), c('10일신고가', { kind: 'highBreak', days: 10 })],
+      },
+      exits: [{ kind: 'maBreak', maPeriod: 80, pct: 0 }],
+      universe: { ...baseSpec({}).universe, symbols },
+    })
+  // 사전계산 runCondition(preset-precompute.entry.ts)이 하는 것과 **같은 주입**
+  const presetSpec = (symbols: string[]): StrategySpec => ({
+    ...PRESET_PIT_MAXRATIO,
+    universe: { ...PRESET_PIT_MAXRATIO.universe, symbols },
+  })
+  const specRows = diffSpecs(researchSpec(SYMS), presetSpec(SYMS))
+  const behavioral = specRows.filter((r) => !isCosmetic(r.path))
+  log('')
+  if (specRows.length === 0) {
+    log('→ **두 스펙은 필드 단위로 완전히 같다.** 스펙축은 원인이 아니다.')
+  } else {
+    log('| 경로 | 연구식(pit1010) | 프리셋(presets.ts) | 표시용? |')
+    log('|---|---|---|---|')
+    for (const r of specRows) log(`| \`${r.path}\` | ${r.left} | ${r.right} | ${isCosmetic(r.path) ? '예' : '**아니오**' } |`)
+    log('')
+    log(`행동에 영향 없는 이름표(id·name·source)를 빼면 남는 차이 **${behavioral.length}개**.`)
+    if (behavioral.length === 0) log('→ 실행에 들어가는 필드는 전부 같다. 스펙축은 원인이 아니다.')
+  }
+
+  // ==========================================================================
+  log('')
+  log('## 3) 2×2 재실행 — {연구식 데이터, 사전계산식 데이터} × {연구식 팔, 프리셋 팔}')
+  // ==========================================================================
+  if (researchAdopted === 0 || precomputeAdopted === 0) {
+    log('')
+    log('❌ 한쪽 데이터가 통째로 비었다(시세 조회 실패) — 2×2는 의미가 없어 건너뛴다.')
+    log('   컨테이너는 Yahoo 403이다. 이 모드는 GHA(backtest.yml MODE=presetdiag)에서 돌려야 한다.')
+    return
+  }
+
+  const bundles: DataBundle[] = [
+    { label: '연구식 데이터', histories: researchHist, bench: benchRBars },
+    {
+      label: '사전계산식 데이터',
+      histories: precomputeHist,
+      resolve: (code: string) => symOf[code],
+      bench: benchPBars,
+    },
+  ]
+  const env = { cost: COST, years: PIT_YEARS, codesFor: pitCodes }
+
+  const condCells = run2x2Condition(
+    bundles,
+    [
+      { label: '연구식 스펙', make: researchSpec },
+      { label: '프리셋 스펙', make: presetSpec },
+    ],
+    env,
+  )
+  printStatTable('3-A. pit-maxratio (MA25×신고10→80선)', condCells)
+
+  const xsCells = run2x2Xsmom(
+    bundles,
+    [
+      { label: '연구식 러너(haircut ON)', slots: 5, gate: true, haircut: true },
+      { label: '프리셋 러너(haircut OFF)', slots: 5, gate: true, haircut: false },
+    ],
+    env,
+  )
+  printStatTable('3-B. xsmom-5-gate (상위5 + 절대모멘텀 게이트)', xsCells)
+  log('')
+  log('※ xsmom은 스펙 객체가 아니라 **러너 옵션**이 전략을 정한다. 연구(idea-lab `runCustomChain`)는')
+  log('  해마다 구간끝 청산비용 근사(haircut)를 물리고, 사전계산(`runXsmomChained` 기본값)은 물리지 않는다.')
+  log('  haircut은 성적을 **낮추는** 방향이므로, 갭을 만드는 원인일 수 없다 — 오히려 갭을 키운다.')
+
+  // ==========================================================================
+  log('')
+  log('## 4) 기여도 분해 · 결론')
+  // ==========================================================================
+  const cell = (cells: CellStat[], data: string, arm: string) =>
+    cells.find((s) => s.dataLabel === data && s.armLabel === arm)?.totalPct ?? 0
+  const condGap = attributeGap(
+    cell(condCells, '연구식 데이터', '연구식 스펙'),
+    cell(condCells, '연구식 데이터', '프리셋 스펙'),
+    cell(condCells, '사전계산식 데이터', '연구식 스펙'),
+    cell(condCells, '사전계산식 데이터', '프리셋 스펙'),
+  )
+  const xsGap = attributeGap(
+    cell(xsCells, '연구식 데이터', '연구식 러너(haircut ON)'),
+    cell(xsCells, '연구식 데이터', '프리셋 러너(haircut OFF)'),
+    cell(xsCells, '사전계산식 데이터', '연구식 러너(haircut ON)'),
+    cell(xsCells, '사전계산식 데이터', '프리셋 러너(haircut OFF)'),
+  )
+  log('')
+  log(`- ${conclude('pit-maxratio', condGap)}`)
+  log(`- ${conclude('xsmom-5-gate', xsGap)}`)
+  log('')
+  log('데이터축은 다시 두 갈래다 — **(a) 접미사 채택 규약**(1)절 대조표의 "다른 종목" 수)과')
+  log('**(b) 워밍업 구간**(1999 vs 2000). (a)가 0이면 남는 것은 (b)뿐이므로 그것으로 결론난다.')
+  log('')
+  log('⚠️ 이 진단은 원인 특정까지다. **수정은 하지 않았다** — 어느 쪽 수치가 옳은지(연구식이 정답인지')
+  log('   사전계산식이 정답인지)는 별도 판단이며, 화면이 그동안 연구와 다른 수치를 보여줬다는 사실 자체를')
+  log('   먼저 대표에게 보고해야 한다(규칙 3 데이터 정직성).')
+  log('⚠️ 유니버스는 [추정]이고 상폐 종목 가격 부재로 생존편향이 남아 있다. 시뮬레이션이며 투자자문이 아니다.')
+}
+
 const MODES: Record<string, () => Promise<void>> = {
+  presetdiag,
   uspit,
   usprobe,
   vintage,
