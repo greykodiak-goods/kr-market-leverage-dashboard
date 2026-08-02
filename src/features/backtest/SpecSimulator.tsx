@@ -592,6 +592,14 @@ function PrecomputedResult({
           info="아래 곡선은 주 1점으로 줄인 것이지만, 이 MDD는 줄이기 전 일별 곡선에서 잰 값입니다(줄인 곡선에서 재면 낙폭이 얕아 보입니다). 수익률보다 먼저 이 낙폭을 견딜 수 있는지 확인하세요."
         />
         <KpiCard
+          label="연평균 ÷ MDD (칼마)"
+          value={Math.abs(pc.mddPct) > 0.01 ? (pc.cagrPct / Math.abs(pc.mddPct)).toFixed(2) : '—'}
+          changeText={`연 ${fmtPct(pc.cagrPct)} ÷ 낙폭 ${fmtPct(Math.abs(pc.mddPct))}`}
+          changeLabel=""
+          direction="flat"
+          info="칼마 비율 — 연평균 수익률(CAGR)을 최대 낙폭으로 나눈 값입니다. 총수익÷MDD는 구간이 길수록 복리로 부풀어 오르지만, 이 값은 기간과 무관하게 '낙폭 1%를 견딘 대가로 연 몇 %를 벌었나'를 잽니다. 1을 넘으면 낙폭보다 연수익이 큰 것입니다."
+        />
+        <KpiCard
           label="최근 10년 연평균"
           value={pc.cagr10yPct != null ? fmtPct(pc.cagr10yPct) : '—'}
           unit=" / 연"
@@ -1624,6 +1632,14 @@ export function SpecSimulator() {
               changeLabel=""
               direction="flat"
               info="같은 수익이라도 덜 아프게 번 쪽을 고르기 위한 보조 지표입니다. 이 값을 최대화하도록 조합을 고르는 행위 자체가 곡선맞춤이므로, 구간을 나눠도 값이 유지되는지 함께 보세요(규칙 5)."
+            />
+            <KpiCard
+              label="연평균 ÷ MDD (칼마)"
+              value={Math.abs(summary.mdd) > 0.01 ? (summary.cagrPct / Math.abs(summary.mdd)).toFixed(2) : '—'}
+              changeText={`연 ${fmtPct(summary.cagrPct)} ÷ 낙폭 ${fmtPct(Math.abs(summary.mdd))}`}
+              changeLabel=""
+              direction="flat"
+              info="칼마 비율 — 연평균 수익률(CAGR)을 최대 낙폭으로 나눈 값입니다. 총수익÷MDD는 구간이 길수록 복리로 부풀어 오르지만, 이 값은 기간과 무관하게 '낙폭 1%를 견딘 대가로 연 몇 %를 벌었나'를 잽니다. 1을 넘으면 낙폭보다 연수익이 큰 것입니다."
             />
             {/* 결합 모드는 두 슬리브 **곡선의 합성**이라 체결이 어느 쪽에도 귀속되지 않는다.
                 여기에 0/—을 그냥 두면 "매매가 없었다"로 읽히므로, 어디서 읽어야 하는지 명시한다. */}
