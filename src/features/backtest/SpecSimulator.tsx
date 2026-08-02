@@ -25,6 +25,7 @@ import type { DailyBar } from './types'
 import { EXIT_LABELS, type CostSettings } from './conditionScreen'
 import { annualize, runPitChained, yearsBetween, type PitChainResult } from './pitChain'
 import { runXsmomChained } from './xsmomChain'
+import { blendChainResults } from './comboBlend'
 import { PIT_UNION, PIT_YEARS, pitCodes } from './pitUniverse'
 import {
   HEROMOON_MOMENTUM,
@@ -52,6 +53,8 @@ interface Saved {
   kind?: StrategyKind
   /** 모멘텀 모드 파라미터 — 없으면 기본값 */
   mom?: MomentumParams
+  /** 결합 모드의 슬리브 A 가중(0.25·0.5·0.75) — 없으면 기본 0.5 */
+  comboWA?: number
   spec: StrategySpec
   startDate: string
   /** 종료일 — 이 날짜 이후 봉을 잘라내고 실행한다. 없거나 빈 문자열이면 데이터 끝까지.
@@ -167,7 +170,10 @@ const PRESET_PIT_MAXRATIO = pitPreset(
 // 나란히 돌릴 수 있게 유형을 하나 더 열었다. 두 유형은 **같은 연쇄 규약**(연도별 유니버스 교체·
 // 연말 이월·현금해 처리·벤치 겹침)을 쓰므로 결과가 직접 비교된다.
 
-export type StrategyKind = 'condition' | 'momentum'
+// 2026-08-02 26차 실측에서 **두 유형을 반반 섞은 결합**이 전·후반 모두 기준선을 이겨서
+// 세 번째 유형을 열었다. 결합은 새 매매 규칙이 아니라 **두 슬리브 곡선의 합성**이다 —
+// 각각 전액 투자로 돌린 곡선을 받아 월 첫 거래일에 가중을 되돌린다(정본 comboBlend.ts).
+export type StrategyKind = 'condition' | 'momentum' | 'combo'
 
 /** 모멘텀 모드 파라미터 — 상위 N과 절대모멘텀 게이트뿐이다(그 외는 정본 그대로 고정). */
 export interface MomentumParams {
@@ -177,9 +183,34 @@ export interface MomentumParams {
 
 const DEFAULT_MOM: MomentumParams = { slots: 5, gate: true }
 
+/** 결합 모드에서 고를 수 있는 슬리브 A 가중. 50:50이 26차 검증 기본안이고 나머지는 민감도 참고다. */
+const COMBO_WEIGHTS = [0.25, 0.5, 0.75] as const
+const DEFAULT_COMBO_WA = 0.5
+
+/**
+ * 결합 모드에서 **각 슬리브를 단독으로** 돌린 성적. 결합 곡선은 두 곡선의 합성이라
+ * 매매 원장이 어느 쪽에도 귀속되지 않는다 — 매매수·승률은 여기서만 읽을 수 있다.
+ */
+interface SleeveSummary {
+  key: 'A' | 'B'
+  label: string
+  totalPct: number
+  cagrPct: number
+  mddPct: number
+  alphaCagrPct: number | null
+  tradeCount: number
+  winRate: number | null
+}
+
+/** 저장본·프리셋에서 들어온 가중을 허용값으로 좁힌다(임의 값이 새어 들어오면 기본값으로) */
+function normalizeWA(v: number | undefined): number {
+  return COMBO_WEIGHTS.includes(v as (typeof COMBO_WEIGHTS)[number]) ? (v as number) : DEFAULT_COMBO_WA
+}
+
 type Preset =
   | { id: string; label: string; kind: 'condition'; spec: StrategySpec }
   | { id: string; label: string; kind: 'momentum'; mom: MomentumParams; note: string }
+  | { id: string; label: string; kind: 'combo'; spec: StrategySpec; mom: MomentumParams; wA: number; note: string }
 
 /**
  * ⚠️ 모멘텀 프리셋 2개는 25차 실험에서 **여러 조합 중 성적이 좋았던 것**이다.
@@ -213,6 +244,27 @@ const PRESETS: Preset[] = [
       '절대모멘텀 게이트가 없으므로 전 종목이 하락하는 국면에도 상위 5종목을 그대로 들고 간다 — ' +
       '하락장에서 게이트 버전보다 더 깊게 파인다.',
   },
+  {
+    id: 'combo-50',
+    label: '26차 결합 50:50 — 기준선+모멘텀 (MDD −43%)',
+    kind: 'combo',
+    // 슬리브 A = 23차 수익÷MDD 1위와 **같은 스펙**(MA25돌파×신고10 진입 → 80선 이탈 청산·버퍼 0).
+    // 같은 객체를 그대로 쓴다 — 두 프리셋의 스펙이 조용히 갈라지지 않게 하려는 것이다.
+    spec: PRESET_PIT_MAXRATIO,
+    mom: { slots: 5, gate: true },
+    wA: 0.5,
+    note:
+      '2026-08-02 26차 실측(GHA idea:combo) — 슬리브 A 기준선(MA25×신고10→80선) + 슬리브 B XSM 상위5+게이트를 ' +
+      '월초 50:50으로 되돌리는 결합. 총 +32,525% · CAGR 24.3% · MDD −43.1% · 알파 +17.2%p/연 [추정·러너 실행값]로 ' +
+      '전·후반 구간 모두 기준선을 이겼다. ' +
+      '⚠️ **리밸런스 비용 미반영** — 슬리브 간 이체를 0원으로 본 낙관적 상한이라 실제 성적은 이보다 낮다. ' +
+      '⚠️ 분산 효과는 제한적이다: 두 단독 평균 대비 MDD 완화 폭이 **+3.6%p뿐**이고, ' +
+      '2008년 같은 위기 구간에서는 두 슬리브 상관이 1에 붙어 **같이 무너졌다** — 정작 분산이 필요한 순간에 사라졌다. ' +
+      '⚠️ 슬리브 B(xsmom)는 **미장 교차 검증에서 탈락**했다 — 같은 규칙을 미국 시장에 옮기면 알파가 남지 않아, ' +
+      '한국 표본 밖으로 일반화할 근거가 없다(과거 한 표본의 성질일 수 있다). ' +
+      '⚠️ A·B 각각이 이미 여러 조합 중 성적이 좋았던 것을 고른 다중비교 승자이고 결합 가중까지 3개를 함께 봤으므로, ' +
+      '다중검정으로 부풀려진 성적일 위험이 겹쳐 있다. 매수 권유가 아니다.',
+  },
 ]
 
 function loadSaved(): Saved {
@@ -226,8 +278,9 @@ function loadSaved(): Saved {
           ...s,
           cost: s.cost ?? DEFAULT_COST,
           endDate: s.endDate ?? '',
-          kind: s.kind === 'momentum' ? 'momentum' : 'condition',
+          kind: s.kind === 'momentum' || s.kind === 'combo' ? s.kind : 'condition',
           mom: s.mom ?? DEFAULT_MOM,
+          comboWA: normalizeWA(s.comboWA),
         }
     }
   } catch {
@@ -236,6 +289,7 @@ function loadSaved(): Saved {
   return {
     kind: 'condition',
     mom: DEFAULT_MOM,
+    comboWA: DEFAULT_COMBO_WA,
     spec: PRESET_PIT_BASE,
     startDate: '',
     endDate: '',
@@ -619,7 +673,9 @@ export function SpecSimulator() {
   const [saved] = useState(loadSaved)
   const [kind, setKind] = useState<StrategyKind>(saved.kind ?? 'condition')
   const [mom, setMom] = useState<MomentumParams>(saved.mom ?? DEFAULT_MOM)
-  /** 모멘텀 프리셋을 고르면 그 경고문을 화면에 띄운다(라벨만으로는 낙폭 맥락이 안 전달된다) */
+  /** 결합 모드의 슬리브 A 가중 */
+  const [comboWA, setComboWA] = useState<number>(normalizeWA(saved.comboWA))
+  /** 모멘텀·결합 프리셋을 고르면 그 경고문을 화면에 띄운다(라벨만으로는 낙폭 맥락이 안 전달된다) */
   const [momNote, setMomNote] = useState<string | null>(null)
   const [spec, setSpec] = useState<StrategySpec>(saved.spec)
   const [startDate, setStartDate] = useState(saved.startDate)
@@ -640,6 +696,8 @@ export function SpecSimulator() {
   const [qqqKrw, setQqqKrw] = useState<FxPoint[] | null>(null)
   /** 이 결과를 만들 때 쓴 초기자본 — 실행 후 입력을 바꿔도 참고곡선 정규화가 흔들리지 않게 붙잡아 둔다 */
   const [runCapital, setRunCapital] = useState<number | null>(null)
+  /** 결합 모드에서 두 슬리브를 **단독으로** 돌린 성적 — 결합 곡선에 없는 매매수·승률이 여기 있다 */
+  const [sleeves, setSleeves] = useState<SleeveSummary[] | null>(null)
 
   const addNote = (m: string) => setNotes((prev) => (prev.includes(m) ? prev : [...prev, m]))
 
@@ -649,11 +707,14 @@ export function SpecSimulator() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify({ kind, mom, spec, startDate, endDate, cost } satisfies Saved))
+      localStorage.setItem(
+        STORE_KEY,
+        JSON.stringify({ kind, mom, comboWA, spec, startDate, endDate, cost } satisfies Saved),
+      )
     } catch {
       /* 저장 실패는 치명적이지 않다 */
     }
-  }, [kind, mom, spec, startDate, endDate, cost])
+  }, [kind, mom, comboWA, spec, startDate, endDate, cost])
 
   const flat = useMemo(() => asFlatAnd(spec.entry), [spec.entry])
   // 종목 목록은 실행 시 그 해 유니버스로 주입되므로, 검증에는 대표로 첫 해 목록을 쓴다.
@@ -752,7 +813,8 @@ export function SpecSimulator() {
 
       // 레짐 게이트가 있으면 지수 시세도 필요하다 (매매 대상 아님 — 판정 전용)
       const extraSymbols: string[] = []
-      if (kind === 'condition' && spec.regime) {
+      // 결합 모드의 슬리브 A도 조건식이므로 레짐 지수가 필요하다 (모멘텀 단독 모드만 안 쓴다)
+      if (kind !== 'momentum' && spec.regime) {
         setProgress(`레짐 지수(${spec.regime.symbol}) 로딩…`)
         try {
           const rh = await getDailyHistory(spec.regime.symbol, 'max')
@@ -796,26 +858,69 @@ export function SpecSimulator() {
       }
 
       setProgress('연도별 유니버스 연쇄 백테스트 실행…')
-      // 두 유형 모두 **같은 연쇄 규약**을 쓴다 — 유니버스 교체·연말 이월·현금해·벤치 겹침 동일.
-      const chained: PitChainResult =
-        kind === 'momentum'
-          ? runXsmomChained(histories, {
-              cost,
-              slots: mom.slots,
-              gate: mom.gate,
-              years: PIT_YEARS,
-              codesFor: pitCodes,
-              resolve: (code) => symOf[code],
-              startDate,
-              endDate,
-              bench,
-            })
-          : runPitChained(
-              histories,
-              (symbols) => ({ ...spec, universe: { ...spec.universe, symbols } }),
-              cost,
-              { resolve: (code) => symOf[code], startDate, endDate, bench, extraSymbols },
-            )
+      // 세 유형 모두 **같은 연쇄 규약**을 쓴다 — 유니버스 교체·연말 이월·현금해·벤치 겹침 동일.
+      const runCondition = () =>
+        runPitChained(
+          histories,
+          (symbols) => ({ ...spec, universe: { ...spec.universe, symbols } }),
+          cost,
+          { resolve: (code) => symOf[code], startDate, endDate, bench, extraSymbols },
+        )
+      const runMomentum = () =>
+        runXsmomChained(histories, {
+          cost,
+          slots: mom.slots,
+          gate: mom.gate,
+          years: PIT_YEARS,
+          codesFor: pitCodes,
+          resolve: (code) => symOf[code],
+          startDate,
+          endDate,
+          bench,
+        })
+
+      let chained: PitChainResult
+      if (kind === 'combo') {
+        // 결합 = **두 슬리브를 각각 전액 투자로 돌린 곡선**의 월 리밸런스 합성(정본 comboBlend.ts).
+        // 두 슬리브가 같은 유니버스·같은 비용·같은 벤치를 쓰므로 결합 곡선이 같은 축에서 읽힌다.
+        const chainA = runCondition()
+        const chainB = runMomentum()
+        if (chainA.equity.length === 0 || chainB.equity.length === 0)
+          throw new Error('결합할 슬리브 곡선이 비었습니다 — 시작일·종료일을 확인하세요')
+        chained = blendChainResults(chainA, chainB, comboWA, cost.initialCapital)
+        setSleeves([
+          {
+            key: 'A',
+            label: `A 조건식 · ${spec.name}`,
+            totalPct: chainA.totalPct,
+            cagrPct: chainA.cagrPct,
+            mddPct: chainA.mddPct,
+            alphaCagrPct: chainA.alphaCagrPct,
+            tradeCount: chainA.tradeCount,
+            winRate: chainA.winRate,
+          },
+          {
+            key: 'B',
+            label: `B 모멘텀 · 상위${mom.slots}${mom.gate ? '+게이트' : ''}`,
+            totalPct: chainB.totalPct,
+            cagrPct: chainB.cagrPct,
+            mddPct: chainB.mddPct,
+            alphaCagrPct: chainB.alphaCagrPct,
+            tradeCount: chainB.tradeCount,
+            winRate: chainB.winRate,
+          },
+        ])
+        // 결합 구간은 두 곡선이 **겹치는 구간**뿐이다 — 한쪽만 있는 구간을 넣으면 그 구간이
+        // 통째로 그 슬리브의 성적이 되므로 버린다. 구간이 줄었으면 숨기지 않고 알린다.
+        if (chained.startDate > chainA.startDate || chained.startDate > chainB.startDate)
+          addNote(
+            `결합 구간은 두 슬리브가 겹치는 ${chained.startDate}~${chained.endDate}입니다 — ` +
+              `A 단독(${chainA.startDate}~) · B 단독(${chainB.startDate}~)과 구간이 다르므로 수치를 직접 비교하지 마세요.`,
+          )
+      } else {
+        setSleeves(null)
+        chained = kind === 'momentum' ? runMomentum() : runCondition()
+      }
       if (chained.perYear.length === 0) throw new Error('실행할 연도가 없습니다 — 시작일·종료일을 확인하세요')
       setResult(chained)
       setRunCapital(cost.initialCapital)
@@ -949,16 +1054,38 @@ export function SpecSimulator() {
       <div className="bt-controls bt-settings">
         <label>
           전략 유형
-          <InfoTip text="「조건식」은 이평·신고가 같은 조건을 만족하는 종목을 사는 방식입니다. 「모멘텀 랭킹」은 조건을 보지 않고 매월 첫 거래일에 '12개월 전~1개월 전' 수익률로 유니버스를 줄 세워 상위 N만 동일가중으로 보유합니다(최근 1개월은 단기 반전을 피하려고 창에서 뺍니다). 두 유형 모두 같은 유니버스·같은 비용·같은 연쇄 규약으로 돌아가므로 결과가 직접 비교됩니다." />
+          <InfoTip text="「조건식」은 이평·신고가 같은 조건을 만족하는 종목을 사는 방식입니다. 「모멘텀 랭킹」은 조건을 보지 않고 매월 첫 거래일에 '12개월 전~1개월 전' 수익률로 유니버스를 줄 세워 상위 N만 동일가중으로 보유합니다(최근 1개월은 단기 반전을 피하려고 창에서 뺍니다). 「결합」은 앞의 둘을 각각 전액 투자로 돌린 뒤 매월 첫 거래일에 자산을 정해진 비율로 되돌리는 합성입니다 — 새 매매 규칙이 아니라 두 곡선을 섞는 것이며, 리밸런스 매매비용은 반영되지 않습니다. 세 유형 모두 같은 유니버스·같은 비용·같은 연쇄 규약으로 돌아가므로 결과가 직접 비교됩니다." />
           <select value={kind} onChange={(e) => setKind(e.target.value as StrategyKind)} disabled={busy}>
             <option value="condition">조건식(현행)</option>
             <option value="momentum">모멘텀 랭킹</option>
+            <option value="combo">결합 — 조건식 + 모멘텀</option>
           </select>
         </label>
-        {kind === 'momentum' && (
+        {kind === 'combo' && (
+          <label>
+            결합 가중 (A : B)
+            <InfoTip text="슬리브 A(조건식)와 슬리브 B(모멘텀)에 자산을 얼마씩 나눌지입니다. 매월 첫 거래일 시작 시점에 총자산을 이 비율로 되돌리고, 달 안에서는 각 슬리브가 제 수익률대로 표류합니다. 가중을 정하는 데 쓰는 정보는 날짜뿐이라 미래참조가 들어갈 자리가 없습니다. 리밸런스에 드는 매매비용은 반영되지 않았습니다(낙관적 상한)." />
+            <select
+              value={comboWA}
+              onChange={(e) => setComboWA(normalizeWA(Number(e.target.value)))}
+              disabled={busy}
+            >
+              {COMBO_WEIGHTS.map((w) => (
+                <option key={w} value={w}>
+                  A {Math.round(w * 100)} : B {Math.round((1 - w) * 100)}
+                  {w === DEFAULT_COMBO_WA ? ' (기본 · 26차 검증안)' : ' [민감도 참고]'}
+                </option>
+              ))}
+            </select>
+            <span className="bt-hint">
+              50:50이 26차 검증 기본안이고, 25:75·75:25는 <strong>가중 민감도를 보기 위한 참고</strong>입니다
+            </span>
+          </label>
+        )}
+        {kind !== 'condition' && (
           <>
             <label>
-              보유 종목 수
+              보유 종목 수{kind === 'combo' ? ' (슬리브 B)' : ''}
               <InfoTip text="랭킹 상위 몇 종목을 동일가중으로 담을지입니다. 유니버스가 연 20종목이라 상위 5는 사실상 상위 25% 분위입니다 — 학계의 상위 10% 분위 모멘텀보다 신호가 묽습니다." />
               <select
                 value={mom.slots}
@@ -971,7 +1098,7 @@ export function SpecSimulator() {
               </select>
             </label>
             <label>
-              절대모멘텀 게이트
+              절대모멘텀 게이트{kind === 'combo' ? ' (슬리브 B)' : ''}
               <InfoTip text="12-1 수익률이 음수인 종목은 사지 않고 그 슬롯을 현금으로 둡니다. 슬롯 분모는 게이트와 무관하게 min(N, 후보수)로 고정되므로, 걸러진 슬롯의 돈이 남은 종목에 재분배되지 않습니다(게이트가 레버리지로 둔갑하지 않게). 25차 실측에서 게이트를 켜면 낙폭이 −68%→−61%로 줄었습니다." />
               <select
                 value={mom.gate ? 'on' : 'off'}
@@ -983,20 +1110,33 @@ export function SpecSimulator() {
               </select>
             </label>
             <div className="bt-note" style={{ width: '100%' }}>
-              <strong>모멘텀 랭킹 (12-1)</strong> — 매월 <strong>첫 거래일 시가</strong>에 리밸런스합니다. 랭킹은
+              <strong>모멘텀 랭킹 (12-1){kind === 'combo' ? ' — 슬리브 B' : ''}</strong> — 매월{' '}
+              <strong>첫 거래일 시가</strong>에 리밸런스합니다. 랭킹은
               <strong> 전월 1일 이전 종가까지만</strong> 보므로 판정에 당일·직전 한 달 데이터가 들어가지 않습니다
-              (미래참조 금지). 이동평균·신고가·레짐·매도 규칙은 이 모드에서 쓰지 않습니다 — 청산은 월간 리밸런스로만
-              일어납니다. 12개월치 시세가 없는 종목은 그 시점 후보에서 빠집니다.
+              (미래참조 금지). 이동평균·신고가·레짐·매도 규칙은 {kind === 'combo' ? '이 슬리브에서' : '이 모드에서'}{' '}
+              쓰지 않습니다 — 청산은 월간 리밸런스로만 일어납니다. 12개월치 시세가 없는 종목은 그 시점 후보에서
+              빠집니다.
             </div>
           </>
         )}
+        {kind === 'combo' && (
+          <div className="bt-note" style={{ width: '100%' }}>
+            <strong>결합 (A {Math.round(comboWA * 100)} : B {Math.round((1 - comboWA) * 100)})</strong> — 아래 조건식이{' '}
+            <strong>슬리브 A</strong>, 위 모멘텀 파라미터가 <strong>슬리브 B</strong>입니다. 두 슬리브를 각각{' '}
+            <strong>전액 투자 기준</strong>으로 돌린 뒤, 매월 첫 거래일 시작 시점에 총자산을 이 비율로 되돌리고 달
+            안에서는 표류시킵니다(가중 판단에 쓰는 정보는 <strong>날짜뿐</strong> — 미래참조 없음). 결합은 새 매매
+            규칙이 아니라 <strong>두 곡선의 합성</strong>이라, <strong>리밸런스 매매비용이 반영되지 않은 낙관적
+            상한</strong>이며 매매 원장(매매수·승률)이 어느 쪽에도 귀속되지 않습니다 — 그 수치는 아래{' '}
+            <strong>슬리브 단독 성적</strong> 표에서 읽으세요.
+          </div>
+        )}
       </div>
-      {momNote && kind === 'momentum' && <div className="bt-warn">⚠️ {momNote}</div>}
+      {momNote && kind !== 'condition' && <div className="bt-warn">⚠️ {momNote}</div>}
 
-      {/* ---- 매수 조건 ---- */}
-      {kind === 'condition' && (
+      {/* ---- 매수 조건 ---- (결합 모드에서는 이것이 슬리브 A다) */}
+      {kind !== 'momentum' && (
       <div className="bt-controls">
-        <strong>매수 조건 (전부 충족 시 편입 · AND)</strong>
+        <strong>매수 조건 (전부 충족 시 편입 · AND){kind === 'combo' ? ' — 슬리브 A' : ''}</strong>
         {flat == null ? (
           <div className="bt-warn">
             이 스펙은 OR/NOT이 섞인 고급 트리라 목록 편집을 지원하지 않습니다 — 아래 JSON으로 편집하세요.
@@ -1068,8 +1208,8 @@ export function SpecSimulator() {
       </div>
       )}
 
-      {/* ---- 매도 조건 ---- */}
-      {kind === 'condition' && (
+      {/* ---- 매도 조건 ---- (결합 모드에서는 이것이 슬리브 A다) */}
+      {kind !== 'momentum' && (
       <div className="bt-controls">
         <strong>
           매도 조건 (먼저 걸리는 것이 청산)
@@ -1145,8 +1285,9 @@ export function SpecSimulator() {
       {/* ---- 실행 설정 ---- */}
       <div className="bt-controls bt-settings">
         {/* 아래 4개는 조건식 전용이다 — 모멘텀 모드는 상위 N·게이트만 쓰고 이 값들을 읽지 않는다.
-            그대로 두면 "바꿔도 결과가 안 변하는 입력"이 되어 사용자를 속인다. */}
-        {kind === 'condition' && (
+            그대로 두면 "바꿔도 결과가 안 변하는 입력"이 되어 사용자를 속인다.
+            결합 모드에서는 슬리브 A(조건식)가 이 값들을 그대로 쓰므로 함께 보여준다. */}
+        {kind !== 'momentum' && (
         <>
         <label>
           동시 보유
@@ -1208,9 +1349,9 @@ export function SpecSimulator() {
         </label>
         </>
         )}
-        {kind === 'momentum' && (
+        {kind !== 'condition' && (
           <label>
-            보유 규칙
+            보유 규칙{kind === 'combo' ? ' (슬리브 B)' : ''}
             <InfoTip text="모멘텀 모드는 동시 보유 수를 위의 '보유 종목 수'로, 체결을 '월 첫 거래일 시가'로 고정합니다. 우선순위는 12-1 모멘텀 순위이고, 매도 규칙·장 레짐은 쓰지 않습니다." />
             <span className="bt-hint">
               상위 {mom.slots}종목 동일가중 · 월초 시가 리밸런스 · 게이트 {mom.gate ? '켬' : '끔'}
@@ -1293,7 +1434,7 @@ export function SpecSimulator() {
       </div>
 
       {/* ---- 스펙 검증 경고 ---- */}
-      {kind === 'condition' && issues.length > 0 && (
+      {kind !== 'momentum' && issues.length > 0 && (
         <div className="bt-warn">
           {issues.map((it, i) => (
             <div key={i}>
@@ -1308,12 +1449,12 @@ export function SpecSimulator() {
         <button
           type="button"
           className="bt-btn-run"
-          disabled={busy || dateError != null || (kind === 'condition' && issues.some((i) => i.level === 'error'))}
+          disabled={busy || dateError != null || (kind !== 'momentum' && issues.some((i) => i.level === 'error'))}
           onClick={run}
         >
           {busy ? (progress ?? '실행 중…') : '▶ 백테스트 실행 (2차 검증)'}
         </button>
-        {kind === 'condition' && (
+        {kind !== 'momentum' && (
           <button type="button" className="bt-btn-mini" onClick={exportJson}>
             스펙 JSON
           </button>
@@ -1329,8 +1470,14 @@ export function SpecSimulator() {
             if (p.kind === 'condition') {
               setSpec(p.spec)
               setMomNote(null)
-            } else {
+            } else if (p.kind === 'momentum') {
               setMom(p.mom)
+              setMomNote(p.note)
+            } else {
+              // 결합 프리셋은 **두 슬리브를 한꺼번에** 세팅한다 — 한쪽만 바뀌면 검증된 조합이 아니게 된다
+              setSpec(p.spec)
+              setMom(p.mom)
+              setComboWA(normalizeWA(p.wA))
               setMomNote(p.note)
             }
             setJsonOpen(false)
@@ -1360,7 +1507,7 @@ export function SpecSimulator() {
       ))}
 
       {/* ---- JSON 편집 ---- */}
-      {jsonOpen && kind === 'condition' && (
+      {jsonOpen && kind !== 'momentum' && (
         <div className="bt-controls">
           <strong>
             스펙 JSON — 이 문서가 조건식의 정본입니다
@@ -1433,15 +1580,74 @@ export function SpecSimulator() {
               direction="flat"
               info="같은 수익이라도 덜 아프게 번 쪽을 고르기 위한 보조 지표입니다. 이 값을 최대화하도록 조합을 고르는 행위 자체가 곡선맞춤이므로, 구간을 나눠도 값이 유지되는지 함께 보세요(규칙 5)."
             />
-            <KpiCard
-              label="승률 / 매매"
-              value={summary.winRate != null ? `${summary.winRate.toFixed(0)}%` : '—'}
-              unit={summary.tradeCount ? ` / ${summary.tradeCount}회` : ''}
-              changeText={`평균 손익 ${summary.avgPnl != null ? fmtPct(summary.avgPnl, 2) : '—'} · 연말 이월(미청산) ${result.openAtEnd}`}
-              changeLabel=""
-              direction="flat"
-            />
+            {/* 결합 모드는 두 슬리브 **곡선의 합성**이라 체결이 어느 쪽에도 귀속되지 않는다.
+                여기에 0/—을 그냥 두면 "매매가 없었다"로 읽히므로, 어디서 읽어야 하는지 명시한다. */}
+            {kind === 'combo' ? (
+              <KpiCard
+                label="승률 / 매매"
+                value="합성"
+                unit=""
+                changeText="결합 곡선에는 매매 원장이 없습니다 — A·B 단독 실행에서 확인하세요 (아래 슬리브 단독 성적 표)"
+                changeLabel=""
+                direction="flat"
+                info="결합은 두 슬리브를 각각 전액 투자로 돌린 곡선을 월 단위로 합성한 것입니다. 체결(매수·매도)은 각 슬리브 안에서 일어나므로 결합 곡선 자체에는 귀속되는 매매가 없습니다. 0건이라는 뜻이 아닙니다 — 매매수·승률·평균손익은 아래 「슬리브 단독 성적」 표나 각 유형을 단독으로 실행해 읽으세요."
+              />
+            ) : (
+              <KpiCard
+                label="승률 / 매매"
+                value={summary.winRate != null ? `${summary.winRate.toFixed(0)}%` : '—'}
+                unit={summary.tradeCount ? ` / ${summary.tradeCount}회` : ''}
+                changeText={`평균 손익 ${summary.avgPnl != null ? fmtPct(summary.avgPnl, 2) : '—'} · 연말 이월(미청산) ${result.openAtEnd}`}
+                changeLabel=""
+                direction="flat"
+              />
+            )}
           </div>
+
+          {/* 슬리브 단독 성적 — 결합 곡선에 없는 매매 원장이 여기 있다 */}
+          {kind === 'combo' && sleeves && (
+            <div className="bt-table-wrap">
+              <div className="bt-chart-caption">
+                슬리브 단독 성적 — 각 슬리브를 <strong>전액 투자 기준</strong>으로 따로 돌린 결과입니다. 결합 성적은
+                이 두 곡선을 월초 {Math.round(comboWA * 100)}:{Math.round((1 - comboWA) * 100)}로 되돌리며 합성한 것이라
+                매매 원장이 없습니다 — <strong>매매수·승률은 이 표에서 읽으세요</strong>.
+              </div>
+              <table>
+                <thead>
+                  <tr>
+                    <th>슬리브</th>
+                    <th>총 수익률</th>
+                    <th>연환산</th>
+                    <th>알파(연)</th>
+                    <th>MDD</th>
+                    <th>매매</th>
+                    <th>승률</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sleeves.map((s) => (
+                    <tr key={s.key}>
+                      <td>{s.label}</td>
+                      <td className={s.totalPct >= 0 ? 'pos' : 'neg'}>{fmtPctGrouped(s.totalPct)}</td>
+                      <td>{fmtPct(s.cagrPct)}</td>
+                      <td className={(s.alphaCagrPct ?? 0) >= 0 ? 'pos' : 'neg'}>
+                        {s.alphaCagrPct != null ? fmtPp(s.alphaCagrPct) : '—'}
+                      </td>
+                      <td className="neg">{fmtPct(s.mddPct)}</td>
+                      <td>{s.tradeCount.toLocaleString('ko-KR')}회</td>
+                      <td>{s.winRate != null ? `${s.winRate.toFixed(0)}%` : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="bt-note">
+                ⚠️ 단독 행은 <strong>각 슬리브의 전체 구간</strong> 기준이고 결합은 <strong>두 구간이 겹치는
+                구간</strong> 기준이라, 구간이 다르면 수치가 직접 비교되지 않습니다. 결합 성적에는{' '}
+                <strong>월 리밸런스 매매비용이 반영되어 있지 않습니다</strong> — 실제로는 매월 두 슬리브의 편차만큼
+                사고팔아야 하므로 그만큼 깎입니다(낙관적 상한).
+              </div>
+            </div>
+          )}
 
           {/* 벤치마크 비교 — 2줄. 판정(알파)은 KODEX 200 한 줄뿐이고 QQQ는 참고다(규칙 5 판정 벤치 불변). */}
           <div className="bt-table-wrap">
@@ -1522,6 +1728,13 @@ export function SpecSimulator() {
                 연도별 분해 — 매핑률(그 해 목록 중 가격이 있는 종목){' '}
                 {result.mappedAvgPct != null && <>· 평균 {result.mappedAvgPct.toFixed(0)}%</>} · 매핑률이 낮은 해일수록
                 생존편향이 크게 남습니다
+                {kind === 'combo' && (
+                  <>
+                    {' '}
+                    · <strong>결합 모드의 「매매」 열은 두 슬리브 매매수의 합</strong>입니다(결합 곡선 자체에는 원장이
+                    없습니다)
+                  </>
+                )}
               </div>
               <table>
                 <thead>
@@ -1647,7 +1860,9 @@ export function SpecSimulator() {
               <div className="bt-chart-caption">
                 {kind === 'momentum'
                   ? `마지막 리밸런스 랭킹 (${result.lastScreenDate}) — 12-1 모멘텀 상위와 게이트 판정`
-                  : `마지막 스크리닝 (${result.lastScreenDate}) — 조건식이 실제로 무엇을 거르는지 확인`}
+                  : kind === 'combo'
+                    ? `마지막 스크리닝 (${result.lastScreenDate}) — 슬리브 A(조건식) 기준입니다. 슬리브 B의 모멘텀 랭킹은 모멘텀 모드를 단독 실행해 확인하세요`
+                    : `마지막 스크리닝 (${result.lastScreenDate}) — 조건식이 실제로 무엇을 거르는지 확인`}
               </div>
               <table>
                 <thead>
@@ -1688,6 +1903,24 @@ export function SpecSimulator() {
               아니며 관찰·조건부 서술입니다.
             </div>
           )}
+          {/* 규칙 4 — 결합은 "낙폭이 줄어든다"는 기대로 고르는 조합이라, 그 기대가 어디서 깨지는지를
+              수익과 같은 무게로 붙여 둔다. */}
+          {kind === 'combo' && (
+            <div className="bt-warn">
+              ⚠️ <strong>결합 모드 낙폭·한계 경고</strong> — 26차 실측(50:50)의 최대낙폭은{' '}
+              <strong>−43.1%</strong>였습니다 [추정 · 러너 실행값]. 결합의 존재 이유는 낙폭 완화인데, 실제 완화 폭은{' '}
+              <strong>두 단독 평균 대비 +3.6%p뿐</strong>이라 <strong>분산 효과가 제한적</strong>입니다. 더 중요한
+              것은 <strong>2008년 같은 위기 구간에서 두 슬리브의 상관이 1에 붙어 같이 무너졌다</strong>는 점입니다 —
+              분산이 가장 필요한 순간에 사라졌습니다. 성적에는{' '}
+              <strong>월 리밸런스 매매비용이 반영되어 있지 않습니다</strong>(슬리브 간 이체를 0원으로 본 낙관적
+              상한). 슬리브 B(횡단면 모멘텀)는 <strong>미국 시장 교차 검증에서 알파가 남지 않았습니다</strong> —
+              한국 표본 밖으로 일반화할 근거가 없어, 과거 한 표본의 성질일 수 있습니다. A·B 각각이 이미 여러 조합 중
+              성적이 좋았던 것을 고른 다중비교 승자이고 결합 가중까지 함께 봤으므로{' '}
+              <strong>다중검정으로 부풀려진 성적일 위험</strong>이 겹쳐 있습니다. 무효화 지점: 두 슬리브의 월수익률
+              상관이 높아지거나(같은 것을 두 번 사는 셈) 슬리브 B의 모멘텀 알파가 사라지면 결합의 근거가 무너집니다.
+              매수 권유가 아니며 관찰·조건부 서술입니다.
+            </div>
+          )}
         </div>
       )}
 
@@ -1701,7 +1934,12 @@ export function SpecSimulator() {
         <strong>QQQ 비교는 KRW=X 종가 환산 기준 — 환헤지·거래비용 미반영</strong>이며 참고 표시일 뿐 알파 판정에
         들어가지 않습니다(판정 벤치는 KODEX 200). 모멘텀 랭킹 모드는 매월 첫 거래일 시가에 리밸런스하는 12-1 횡단면
         모멘텀이며, 25차 실측 낙폭은 <strong>−61%~−68%</strong> [추정]입니다 — 프리셋은 여러 조합 중 성적이 좋았던
-        것을 고른 것이라 <strong>과최적화 위험</strong>이 남아 있습니다.
+        것을 고른 것이라 <strong>과최적화 위험</strong>이 남아 있습니다. 결합 모드는 두 슬리브를 각각 전액 투자로
+        돌린 <strong>곡선의 합성</strong>이라 매매 원장이 없고(매매수·승률은 단독 실행에서 확인),{' '}
+        <strong>월 리밸런스 매매비용이 반영되지 않은 낙관적 상한</strong>입니다. 26차 실측 낙폭은{' '}
+        <strong>−43.1%</strong> [추정]이고 두 단독 평균 대비 완화 폭은 <strong>+3.6%p</strong>에 그치며, 위기
+        구간에서는 두 슬리브가 <strong>함께 무너졌습니다</strong>. 슬리브 B(횡단면 모멘텀)는 미국 시장 교차 검증에서
+        알파가 남지 않아 <strong>한국 표본 밖 일반화 근거가 없습니다</strong>.
         백테스트 성적은 과최적화·체결 가정의 한계를 가지며 미래 수익을 보장하지 않습니다. 손실 경로는 MDD 카드가
         그 조합이 견뎌야 했던 최대 하락입니다. 본 화면은 정보·참고용이며 <strong>투자자문이 아닙니다</strong>.
         매수/매도 권유가 아니며 모든 투자 판단·손익 책임은 이용자 본인에게 있습니다.
