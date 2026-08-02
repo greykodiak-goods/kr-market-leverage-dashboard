@@ -89,9 +89,23 @@ export const KNOWN_NAMES: Record<string, string> = {
   '067310.KQ': '하나마이크론',
 }
 
-/** "이름 (코드)" 표시용 — 이름을 모르면 코드 그대로. runtime 맵(index.json 실측)이 정적 맵보다 우선. */
+/** "이름 (코드)" 표시용 — 이름을 모르면 코드 그대로. runtime 맵(index.json 실측)이 정적 맵보다 우선.
+ *
+ * 접미사는 신뢰하지 않는다: Yahoo가 .KS/.KQ 접미사를 무시하고 같은 데이터를 주는 탓에
+ * 듀얼 로더가 코스피 종목을 `.KQ` 심볼로 채택할 수 있다(예: 005930.KQ = 삼성전자).
+ * 이름은 6자리 코드가 정체성이므로 두 접미사를 모두 시도해 찾는다. */
 export function displaySymbol(sym: string, runtime?: Record<string, string>): string {
-  const name = runtime?.[sym] ?? KNOWN_NAMES[sym]
+  const code = sym.replace(/\.(KS|KQ)$/, '')
+  const candidates = [sym, `${code}.KS`, `${code}.KQ`]
+  let name: string | undefined
+  for (const key of candidates) {
+    name = runtime?.[key] ?? name
+    if (name) break
+  }
+  if (!name) for (const key of candidates) {
+    name = KNOWN_NAMES[key]
+    if (name) break
+  }
   if (!name) return sym
-  return `${name} (${sym.replace(/\.(KS|KQ)$/, '')})`
+  return `${name} (${code})`
 }

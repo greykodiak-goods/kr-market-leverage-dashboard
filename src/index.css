@@ -50,6 +50,19 @@ body,
   min-height: 100%;
 }
 
+html,
+body {
+  /* 모바일에서 차트 드래그 시 페이지가 가로로 밀리는 것을 차단 (내부 표는 자체 overflow-x: auto) */
+  overflow-x: hidden;
+}
+
+/* 차트 본체: 터치 드래그를 recharts 십자선 추적에만 쓰고 브라우저 스크롤·팬으로 넘기지 않는다.
+   래퍼 전체가 아니라 차트 캔버스(.recharts-wrapper)에만 걸어 범례·캡션에서는 페이지 스크롤이 살아 있게 한다 */
+.bt-chart-block .recharts-wrapper {
+  touch-action: none;
+  overscroll-behavior: contain;
+}
+
 body {
   background: var(--bg);
   color: var(--text);

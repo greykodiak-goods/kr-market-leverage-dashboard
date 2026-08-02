@@ -68,7 +68,8 @@ export function EquityChart({
   }
 
   return (
-    <div>
+    // bt-chart-block: 차트 위 터치 드래그를 십자선 추적에만 쓰고 페이지 스크롤로 새지 않게 한다
+    <div className="bt-chart-block">
       <ResponsiveContainer width="100%" height={240}>
         <ComposedChart data={rows} margin={{ top: 8, right: 12, left: 4, bottom: 0 }} syncId="bt-sync">
           <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
