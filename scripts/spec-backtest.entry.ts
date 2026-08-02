@@ -21,6 +21,16 @@ import { SPEC_VERSION, avgVolume, priorHigh, rsi, sma, type Condition, type Cond
 import type { DailyBar } from '../src/features/backtest/types'
 import { PIT_SOURCE_NOTE, PIT_UNION, PIT_YEARS } from '../src/features/backtest/pitUniverse'
 import { runPitChained } from '../src/features/backtest/pitChain'
+import {
+  US_COMPANY_NAMES,
+  US_PIT_SOURCE_NOTE,
+  US_PIT_UNION,
+  US_PIT_YEARS,
+  exchangeLocalDate,
+  fallbackGmtOffset,
+  resolveUsTicker,
+  usPitCodes,
+} from '../src/features/backtest/usPitUniverse'
 
 // CJS 번들에서 import.meta.url이 없으므로 런처가 REPO_ROOT를 넘긴다.
 const root = process.env.REPO_ROOT ?? process.cwd()
@@ -53,6 +63,16 @@ async function fetchDaily(symbol: string, range = '10y'): Promise<DailyBar[]> {
   const ts: number[] = r.timestamp ?? []
   const q = r.indicators?.quote?.[0] ?? {}
   const adj: (number | null)[] = r.indicators?.adjclose?.[0]?.adjclose ?? []
+  // 날짜 라벨은 **거래소 현지 시각** 기준으로 만든다(src/lib/history.ts:263 toLocalDate와 같은 공식).
+  // 종전에는 `+9*3600*1000`(KST)이 하드코딩돼 있었다. 미장을 넣으면서 바꾼 이유:
+  //   · 확정 일봉은 개장시각 스탬프(미 동부 09:30 = 13:30/14:30 UTC)라 +9h를 더해도 우연히
+  //     같은 날에 떨어지지만, **당일 진행 중인 봉**은 현재시각으로 스탬프되므로 미 동부
+  //     오후(예: 20:00 UTC)에 +9h를 더하면 05:00 UTC → **날짜가 하루 밀린다**.
+  //   · gmtoffset을 쓰면 서머타임(−18000/−14400)까지 거래소가 알려주는 값으로 정확해진다.
+  // ⚠️ 기존 KR 모드 결과 불변: 한국거래소는 서머타임이 없어 gmtoffset이 항상 +32400이므로
+  //    `(ts + 32400)*1000` 은 `ts*1000 + 9*3600*1000` 과 **수식이 동일**하다(1비트도 안 바뀐다).
+  //    meta가 비는 예외에서도 fallbackGmtOffset이 .KS/.KQ를 +32400로 떨어뜨려 동작을 보존한다.
+  const gmtoffset: number = typeof r.meta?.gmtoffset === 'number' ? r.meta.gmtoffset : fallbackGmtOffset(symbol)
   const out: DailyBar[] = []
   for (let i = 0; i < ts.length; i++) {
     const o = q.open?.[i]
@@ -63,7 +83,7 @@ async function fetchDaily(symbol: string, range = '10y'): Promise<DailyBar[]> {
     if ([o, h, l, c].some((x: unknown) => x == null || !Number.isFinite(x as number))) continue
     // 총수익 보정(규칙 3): adjclose ÷ close 계수를 OHLC에 적용 (배당 재투자 기준)
     const f = adj[i] != null && Number.isFinite(adj[i]!) && c > 0 ? adj[i]! / c : 1
-    const date = new Date(ts[i] * 1000 + 9 * 3600 * 1000).toISOString().slice(0, 10) // KST
+    const date = exchangeLocalDate(ts[i], gmtoffset) // 거래소 현지 날짜
     out.push({ date, t: ts[i], o: o * f, h: h * f, l: l * f, c: c * f, v: Number.isFinite(v) ? v : 0 })
   }
   return out
@@ -2770,32 +2790,230 @@ async function krxprobe() {
  */
 async function usprobe() {
   const TICKERS = ['AAPL', 'MSFT', 'NVDA', 'SPY', 'QQQ', 'BRK-B', 'XOM', 'GE', 'INTC', 'TWTR']
-  log('| 티커 | 행 수 | 시작일 | 끝일 | 끝일 요일 | 종가 표본 | 배당보정(adj≠close) |')
-  log('|---|---|---|---|---|---|---|')
+  log('| 티커 | 행 수 | 시작일 | 끝일 | 끝일 요일 | 마지막봉 raw UTC | 종가 표본 | 배당보정(adj≠close) |')
+  log('|---|---|---|---|---|---|---|---|')
   for (const t of TICKERS) {
     try {
       const bars = await fetchDaily(t, 'since:1995-01-01')
       if (!bars.length) {
-        log(`| ${t} | 0 | — | — | — | — | — |`)
+        log(`| ${t} | 0 | — | — | — | — | — | — |`)
         continue
       }
       const last = bars[bars.length - 1]
       const dow = ['일', '월', '화', '수', '목', '금', '토'][new Date(last.date + 'T00:00:00Z').getUTCDay()]
+      // 마지막 봉의 **원본 타임스탬프 UTC 시각** — 개장시각 스탬프(확정 봉)와 현재시각
+      // 스탬프(당일 진행 중 봉)를 구분하는 근거다. 미 동부 개장 09:30 = 13:30(EDT)/14:30(EST) UTC
+      // 이므로 그 부근이면 확정 봉, 그보다 늦으면(예: 19~21시 UTC) 장중 진행 봉일 수 있다.
+      const utc = new Date(last.t * 1000)
+      const hhmm = `${String(utc.getUTCHours()).padStart(2, '0')}:${String(utc.getUTCMinutes()).padStart(2, '0')}`
       // 배당 보정 여부: 오래된 봉에서 o≈c 라운드 수치가 아닌 소수면 보정 계수가 곱해진 것
       const adj = bars[0].c !== Math.round(bars[0].c) ? '보정됨(소수)' : '[미확인]'
-      log(`| ${t} | ${bars.length} | ${bars[0].date} | ${last.date} | ${dow} | ${last.c.toFixed(2)} | ${adj} |`)
+      log(`| ${t} | ${bars.length} | ${bars[0].date} | ${last.date} | ${dow} | ${hhmm} | ${last.c.toFixed(2)} | ${adj} |`)
     } catch (e) {
-      log(`| ${t} | ❌ | ${(e as Error).message.slice(0, 40)} | — | — | — | — |`)
+      log(`| ${t} | ❌ | ${(e as Error).message.slice(0, 40)} | — | — | — | — | — |`)
     }
     await sleep(200)
   }
   log('')
-  log('판독법: ①끝일 요일이 토/일이면 KST +9h 날짜 밀림 버그 — 미장 지원 시 거래소 TZ 변환 필요')
+  log('판독법: ①끝일 요일이 토/일이면 날짜 라벨 밀림 — 이제 거래소 gmtoffset으로 변환하므로 나오면 안 된다')
   log('②TWTR(상폐)가 0행/오류면 미장도 상폐 종목 가격 부재 → PIT 유니버스 매핑률 보고 필수')
   log('③시작일이 1995면 30년치 확보 — 시뮬레이터 26년 구간과 동등 이상')
+  log('④raw UTC가 13:30/14:30 부근이면 개장시각 스탬프(확정 봉). 19시 이후면 당일 진행 봉일 수 있어')
+  log('   그 봉은 아직 종가가 아니다 — 마지막 봉 신규 진입 금지(규칙 1-6)와 함께 읽는다.')
+}
+
+/**
+ * MODE=uspit — **미국(NYSE+NASDAQ) 연도별 시점 고정 유니버스 상위 20** 연쇄 백테스트
+ * (2026-08-02 대표 지시 "백테스트에 미장 종목도 추가해. 그 당시 시점별 상위 종목들
+ *  데이터도 가져와서 편향 없애고").
+ *
+ * KR의 MODE=pit1010과 **같은 연쇄 엔진**(runPitChained)을 부른다 — 엔진은 시장 중립이라
+ * resolve/codesFor/bench/years만 갈아끼우면 된다(엔진 무수정). 목록의 단일 원본은
+ * src/features/backtest/usPitUniverse.ts 다.
+ *
+ * 미장 고유 처리:
+ *   · 비용: 미국은 **매도 거래세가 없다**(taxPct 0). 국내 증권사 해외주식 수수료를
+ *     0.1%로 근사했다 [추정] — 엔진을 고치지 않고 비용 상수만 분리했다.
+ *   · 티커: 접미사 없이 직행('AAPL'), 클래스는 하이픈('BRK-B'). 사명 변경은 폴백(FB→META),
+ *     **다른 회사가 물려받은 티커(LU·AOL 등)는 매핑 거부** — 조용한 오염보다 정직한 실패.
+ *   · 벤치마크 SPY.
+ *
+ * 생존편향: 상폐·피인수 종목을 목록에서 빼지 않았다. 가격이 없으면 **매핑 실패로 계수**되어
+ * 연도별 매핑률(n/20)로 드러난다 — 편향이 제거된 게 아니라 측정 가능해진 것이다.
+ */
+async function uspit() {
+  const years = US_PIT_YEARS
+  const union = US_PIT_UNION
+  // 미국은 매도 거래세가 없다(KR 0.15% → 0). 수수료는 국내 증권사 해외주식 온라인 약정
+  // 수수료를 0.1%로 근사한 값이다 [추정] — 증권사·구간별로 0.07~0.25%로 갈리고 최소수수료·
+  // 환전스프레드가 별도라 실제 비용은 이보다 클 수 있다.
+  const COST_US: CostSettings = { initialCapital: 10_000_000, feePct: 0.1, taxPct: 0, slippagePct: 0.1 }
+  const BENCH_US = 'SPY'
+
+  log(`미국 연도별 [추정] 시총 상위 20 유니버스 — ${years[0]}~${years[years.length - 1]} · 고유 티커 ${union.length}`)
+  log(`⚠️ ${US_PIT_SOURCE_NOTE}`)
+  log(`비용: 수수료 ${COST_US.feePct}% · 거래세 ${COST_US.taxPct}%(미국은 매도 거래세 없음) · 슬리피지 ${COST_US.slippagePct}% [추정]`)
+  log('⚠️ 환율 미반영 — 전 구간 USD 기준 수익률이다. 원화 환산 시 원/달러 변동이 그대로 더해진다.')
+
+  const histories: Record<string, DailyBar[]> = {}
+  const failed: string[] = []
+  for (const ticker of union) {
+    try {
+      const bars = await fetchDaily(ticker, 'since:1999-01-01')
+      if (bars.length >= 200) histories[ticker] = bars
+      else failed.push(ticker)
+    } catch {
+      failed.push(ticker) // 상폐 티커는 Yahoo 404 — 정상적인 결과다
+    }
+    await sleep(120)
+  }
+  log('')
+  log(`시세 로드 ${Object.keys(histories).length}/${union.length} · 실패(상폐·데이터 부족) ${failed.length}`)
+  if (failed.length) {
+    // 전량 실패(네트워크 차단 등)일 때 로그가 한 줄로 폭주하지 않게 앞 25개만 보인다.
+    const shown = failed.slice(0, 25).map((t) => `${t}(${US_COMPANY_NAMES[t]?.split(' —')[0] ?? '?'})`)
+    log(`실패 티커: ${shown.join(', ')}${failed.length > 25 ? ` … 외 ${failed.length - 25}개` : ''}`)
+    log('  ↑ 이들이 빠지는 것이 곧 잔존 생존편향이다 — 아래 연도별 매핑률로 크기를 잰다.')
+  }
+  const bench = await fetchDaily(BENCH_US, 'since:1999-01-01')
+
+  const has = (sym: string) => !!histories[sym]?.length
+  const resolve = (code: string) => resolveUsTicker(code, has)
+
+  type Combo = { ma: number; hb: number; xm: number; buf: number }
+  const combos: Combo[] = []
+  // 기본 36조합 — KR pit1010과 **같은 격자**라야 두 시장 결과를 나란히 읽을 수 있다.
+  const wide = process.env.PIT_GRID === 'wide'
+  for (const ma of wide ? [5, 10, 15, 20, 25] : [10, 15, 20])
+    for (const hb of wide ? [0, 10, 20, 40, 60] : [20, 60])
+      for (const xm of wide ? [20, 40, 60, 80] : [40, 60, 80])
+        for (const buf of wide ? [0, 1, 2, 3] : [0, 2]) combos.push({ ma, hb, xm, buf })
+  const nameOf = (k: Combo) => `MA${k.ma}${k.hb ? `×신고${k.hb}` : ''}→${k.xm}선${k.buf ? `·버퍼${k.buf}%` : ''}`
+  const specOf = (k: Combo, symbols: string[]): StrategySpec => {
+    const nodes = [c(`${k.ma}일선돌파`, { kind: 'maCross', period: k.ma, dir: 'above' })]
+    if (k.hb) nodes.push(c(`${k.hb}일신고가`, { kind: 'highBreak', days: k.hb }))
+    return baseSpec({
+      entry: { op: 'and', nodes },
+      exits: [{ kind: 'maBreak', maPeriod: k.xm, pct: k.buf }],
+      // universe.markets는 symbols가 있으면 엔진이 쓰지 않는다(conditionScreen:277) —
+      // KR 기본값이 남아 있어도 미장 실행에 영향이 없다.
+      universe: { ...baseSpec({}).universe, symbols },
+    })
+  }
+
+  const chain = (k: Combo) =>
+    runPitChained(histories, (symbols) => specOf(k, symbols), COST_US, {
+      bench,
+      years,
+      codesFor: usPitCodes,
+      resolve,
+    })
+
+  const BASE: Combo = { ma: 15, hb: 20, xm: 60, buf: 2 }
+  log('')
+  log(`격자 ${combos.length}조합 + 기준선 — 연쇄 실행 중`)
+  // ⚠️ pit1010과 같은 규율: **요약 스칼라만 보관**한다. 전체 PitChainResult(자산곡선 수천 점 +
+  // 매매 수백 건)를 조합 수만큼 들고 있으면 EC2(1GB)에서 힙이 터진다(2026-08-02 실측 사고).
+  // 연도별 분해가 필요한 소수 조합만 나중에 재실행한다.
+  const rows = combos.map((k, i) => {
+    const full = chain(k)
+    const r = {
+      totalPct: full.totalPct,
+      cagrPct: full.cagrPct,
+      mddPct: full.mddPct,
+      objective: full.objective,
+      alphaCagrPct: full.alphaCagrPct,
+      benchCagrPct: full.benchCagrPct,
+      benchTotalPct: full.benchTotalPct,
+      tradeCount: full.trades.length,
+      mappedAvgPct: full.mappedAvgPct,
+      mapped: full.perYear.map((v) => `${v.year} ${v.mapped}/${v.total}`).join(' · '),
+    }
+    if ((i + 1) % 12 === 0) log(`… ${i + 1}/${combos.length}`)
+    return { k, r }
+  })
+  const baseRow = rows.find((x) => x.k.ma === BASE.ma && x.k.hb === BASE.hb && x.k.xm === BASE.xm && x.k.buf === BASE.buf)!
+
+  log('')
+  log(`연도별 매핑률: ${baseRow.r.mapped}`)
+  log(`매핑률 평균 ${baseRow.r.mappedAvgPct?.toFixed(1) ?? '—'}% — 100%가 아닌 만큼이 상폐·재사용 티커로 빠진 표본이다.`)
+  rows.sort((a, b) => (b.r.objective ?? -1) - (a.r.objective ?? -1))
+
+  const bcagr = baseRow.r.benchCagrPct ?? 0
+  const btotal = baseRow.r.benchTotalPct ?? 0
+  log('')
+  log(`벤치(${BENCH_US}) 연쇄: 총 ${f1(btotal)}% · CAGR ${f1(bcagr)}% (벤치 데이터 시작 이후 구간만)`)
+  log(
+    `기준선(MA15×신고20→60선·버퍼2%): 수익÷MDD ${baseRow.r.objective?.toFixed(1) ?? '—'} · 총 ${f1(baseRow.r.totalPct)}% · CAGR ${f1(
+      baseRow.r.cagrPct,
+    )}% · MDD ${f1(baseRow.r.mddPct)}% · 매매 ${baseRow.r.tradeCount}`,
+  )
+
+  log('')
+  log('상위 15 (미국 연도별 상위20 교체 유니버스 · 2000~현재 연쇄):')
+  log('| # | 조건식 | **수익÷MDD** | 총수익 | CAGR | MDD | 알파(연, vs SPY연쇄) | 매매 |')
+  log('|---|---|---|---|---|---|---|---|')
+  for (const [i, x] of rows.slice(0, 15).entries()) {
+    log(
+      `| ${i + 1}${x === baseRow ? ' (기준)' : ''} | ${nameOf(x.k)} | **${x.r.objective?.toFixed(1) ?? '—'}** | ${f1(x.r.totalPct)}% | ${f1(
+        x.r.cagrPct,
+      )}% | ${f1(x.r.mddPct)}% | ${f1(x.r.alphaCagrPct ?? 0)}%p | ${x.r.tradeCount} |`,
+    )
+  }
+  if (!rows.slice(0, 15).includes(baseRow)) {
+    const rank = rows.indexOf(baseRow) + 1
+    log(
+      `| ${rank} (기준) | ${nameOf(baseRow.k)} | **${baseRow.r.objective?.toFixed(1) ?? '—'}** | ${f1(baseRow.r.totalPct)}% | ${f1(
+        baseRow.r.cagrPct,
+      )}% | ${f1(baseRow.r.mddPct)}% | ${f1(baseRow.r.alphaCagrPct ?? 0)}%p | ${baseRow.r.tradeCount} |`,
+    )
+  }
+
+  // 총수익 정렬 표 — 매매<100 조합은 몇 번의 운으로 1등 하는 것을 막기 위해 제외한다.
+  const byTotal = rows.filter((x) => x.r.tradeCount >= 100).sort((a, b) => b.r.totalPct - a.r.totalPct)
+  log('')
+  log(`수익률 최대 상위 10 (매매≥100 필터 — 제외 ${rows.length - byTotal.length}조합):`)
+  log('| # | 조건식 | **총수익** | CAGR | MDD | 수익÷MDD | 알파(연) | 매매 |')
+  log('|---|---|---|---|---|---|---|---|')
+  for (const [i, x] of byTotal.slice(0, 10).entries()) {
+    log(
+      `| ${i + 1} | ${nameOf(x.k)} | **${f1(x.r.totalPct)}%** | ${f1(x.r.cagrPct)}% | ${f1(x.r.mddPct)}% | ${x.r.objective?.toFixed(1) ?? '—'} | ${f1(
+        x.r.alphaCagrPct ?? 0,
+      )}%p | ${x.r.tradeCount} |`,
+    )
+  }
+
+  // 연도별 분해(거짓 매끈함 방지)는 필요한 조합만 재실행해 뽑는다(메모리 보호)
+  const yearBreakdown = (label: string, k: Combo) => {
+    const full = chain(k)
+    log('')
+    log(`${label}(${nameOf(k)}) 연도별 수익 vs 벤치:`)
+    log('| 연도 | 매핑 | 전략 | 벤치(SPY) |')
+    log('|---|---|---|---|')
+    for (const py of full.perYear) {
+      log(
+        `| ${py.year} | ${py.mapped}/${py.total}${py.cash ? ' (현금)' : ''} | ${f1(py.strategyPct)}% | ${
+          py.benchPct != null ? f1(py.benchPct) : '—'
+        }% |`,
+      )
+    }
+  }
+  if (byTotal[0]) yearBreakdown('수익률 1위', byTotal[0].k)
+  yearBreakdown('수익÷MDD 1위', rows[0].k)
+
+  log('')
+  log('KR 비교 맥락: MODE=pit1010이 **같은 격자·같은 연쇄 엔진**으로 한국(코스피10+코스닥10)을 돌린다 —')
+  log('  두 모드의 알파(각자 자국 벤치 대비)를 비교해야 시장 자체의 상승분을 걷어낸 실력 비교가 된다(규칙 5).')
+  log('  단 비용(거래세 0.15% vs 0%)·환율·유니버스 크기(20 vs 20)가 달라 총수익 절대치 직접 비교는 부적절하다.')
+  log('')
+  log('⚠️ 유니버스 목록은 [추정](공식 PIT 랭킹 소스 아님 — 2000년대 초·2026년 신뢰도 최저). 상폐 종목은')
+  log('   가격 부재로 빠져 그 구간 성적이 실제보다 후하게 나올 수 있다(연도별 매핑률 참조). 연말 청산 근사 포함.')
+  log('   환율 미반영(USD 기준). 시뮬레이션이며 투자자문이 아니다.')
+  log('   손실 경로: MDD 열이 그 조합이 실제로 견뎌야 했던 최대 하락이다 — 2008년 구간을 특히 볼 것.')
 }
 
 const MODES: Record<string, () => Promise<void>> = {
+  uspit,
   usprobe,
   vintage,
   pityear,
