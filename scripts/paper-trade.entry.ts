@@ -16,18 +16,50 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { runStrategySpec, type CostSettings } from '../src/features/backtest/conditionScreen'
+import { runXsmomChained } from '../src/features/backtest/xsmomChain'
 import { SPEC_VERSION, type ConditionNode, type StrategySpec } from '../src/features/backtest/strategySpec'
 import type { DailyBar } from '../src/features/backtest/types'
 
 const root = process.env.REPO_ROOT ?? process.cwd()
 const paperDir = join(root, 'public', 'data', 'paper')
 
+/**
+ * 트랙 타입.
+ *   'spec'(기본·생략 가능) — 조건식(MA돌파×신고가) 엔진 재실행
+ *   'xsmom'               — 횡단면 모멘텀(12-1) 월초 리밸런스 재실행
+ * 두 타입 모두 **엔진 재실행형**이라 상태를 굴리지 않는다(시뮬과 갈라질 수 없다).
+ */
+type TrackType = 'spec' | 'xsmom'
+
+interface PaperTrack {
+  label: string
+  symbols: string[]
+  type?: TrackType
+  /** spec 타입 전용 */
+  entryMa?: number
+  exitMa?: number
+  /** xsmom 타입 전용 — 보유 종목 수 N */
+  slots?: number
+  /** xsmom 타입 전용 — 절대모멘텀 게이트 */
+  gate?: boolean
+  inception?: string
+}
+
 interface PaperConfig {
   inception: string
   cost: CostSettings
-  tracks: Record<string, { label: string; symbols: string[]; entryMa?: number; exitMa?: number; inception?: string }>
+  tracks: Record<string, PaperTrack>
   benchmark: string
 }
+
+/**
+ * 워밍업 일수. 조건식 트랙은 MA40·신고20 계산분(약 6개월)이면 충분하지만,
+ * **12-1 모멘텀은 리밸런스 시점 기준 13개월치 과거가 필요하다** — 워밍업이 짧으면
+ * 모든 종목이 "12개월 데이터 없음"으로 후보에서 빠져 트랙이 통째로 현금이 된다.
+ * (조건식 트랙은 워밍업을 늘려도 결과가 변하지 않는다 — MA/신고가는 직전 N봉만 본다.)
+ */
+const WARMUP_DAYS_SPEC = 183
+const WARMUP_DAYS_XSMOM = 430
 
 async function fetchDaily(symbol: string, since: string): Promise<DailyBar[]> {
   const p1 = Math.floor(Date.parse(since) / 1000)
@@ -92,10 +124,14 @@ function winnerSpec(symbols: string[], entryMa = 20, exitMa = 40): StrategySpec 
 
 async function main() {
   const config = JSON.parse(readFileSync(join(paperDir, 'config.json'), 'utf8')) as PaperConfig
-  // 워밍업: 개시일 이전 6개월 — MA40·신고20 계산분
-  const warmupStart = new Date(Date.parse(config.inception) - 183 * 86400e3).toISOString().slice(0, 10)
+  // 워밍업 — 트랙 타입 중 가장 긴 요구치를 쓴다(모멘텀 트랙이 있으면 13개월+)
+  const hasXsmom = Object.values(config.tracks).some((t) => t.type === 'xsmom')
+  const warmupDays = hasXsmom ? WARMUP_DAYS_XSMOM : WARMUP_DAYS_SPEC
+  const warmupStart = new Date(Date.parse(config.inception) - warmupDays * 86400e3).toISOString().slice(0, 10)
   const uniq = [...new Set(Object.values(config.tracks).flatMap((t) => t.symbols))]
-  console.log(`페이퍼 트레이딩 갱신 — 개시 ${config.inception} · 종목 ${uniq.length} · 워밍업 ${warmupStart}~`)
+  console.log(
+    `페이퍼 트레이딩 갱신 — 개시 ${config.inception} · 종목 ${uniq.length} · 워밍업 ${warmupStart}~ (${warmupDays}일)`,
+  )
 
   const histories: Record<string, DailyBar[]> = {}
   const failed: string[] = []
@@ -116,11 +152,28 @@ async function main() {
 
   mkdirSync(paperDir, { recursive: true })
   for (const [trackId, track] of Object.entries(config.tracks)) {
-    const spec = winnerSpec(track.symbols.filter((s) => histories[s]), track.entryMa ?? 20, track.exitMa ?? 40)
     const inception = track.inception ?? config.inception
-    const r = runStrategySpec(histories, inception, spec, config.cost)
+    const symbols = track.symbols.filter((s) => histories[s])
+    const isXsmom = track.type === 'xsmom'
+    // 두 타입 모두 `equity(EquityPoint[]) · trades · openAtEnd`를 돌려주므로 아래 집계는 공통이다.
+    const r = isXsmom
+      ? runXsmomChained(histories, {
+          cost: config.cost,
+          slots: track.slots ?? 5,
+          gate: track.gate ?? true,
+          // 페이퍼는 개시일부터 오늘까지 한 구간이다 — 개시 연도 하나만 돌린다.
+          years: [Number(inception.slice(0, 4))],
+          codesFor: () => symbols,
+          startDate: inception,
+          // 유니버스는 개시일에 이미 **동결**돼 있다(config.json). 연중 편입 판정을 다시 하지 않는다.
+          listedBy: () => inception,
+          bench: bench.filter((b) => b.date >= inception),
+        })
+      : runStrategySpec(histories, inception, winnerSpec(symbols, track.entryMa ?? 20, track.exitMa ?? 40), config.cost)
     const finalEq = r.equity.length ? r.equity[r.equity.length - 1].equity : config.cost.initialCapital
-    const benchRet = bench.length >= 2 ? (bench[bench.length - 1].c / bench[0].c - 1) * 100 : null
+    const trackBench = bench.filter((b) => b.date >= inception)
+    const benchSrc = isXsmom ? trackBench : bench
+    const benchRet = benchSrc.length >= 2 ? (benchSrc[benchSrc.length - 1].c / benchSrc[0].c - 1) * 100 : null
     const closed = r.trades.filter((t) => t.exitDate != null)
     const wins = closed.filter((t) => (t.pnlPct ?? 0) > 0).length
     const out = {
@@ -128,7 +181,11 @@ async function main() {
       label: track.label,
       updatedAt: new Date().toISOString(),
       inception,
-      dataNote: 'Yahoo 일봉(비공식·총수익 보정) 근사 체결 — 실호가 대조는 2단계에서. 시뮬레이션이며 투자자문 아님.',
+      strategyType: isXsmom ? 'xsmom' : 'spec',
+      dataNote: isXsmom
+        ? '횡단면 모멘텀(12-1) · 매월 첫 거래일 시가 리밸런스. Yahoo 일봉(비공식·총수익 보정) 근사 체결 — 실호가 대조는 2단계에서. ' +
+          '⚠️ 25차 백테스트 실측 최대낙폭 −61~−68% [추정] — 낙폭이 깊은 계열이다. 시뮬레이션이며 투자자문 아님.'
+        : 'Yahoo 일봉(비공식·총수익 보정) 근사 체결 — 실호가 대조는 2단계에서. 시뮬레이션이며 투자자문 아님.',
       summary: {
         equity: Math.round(finalEq),
         totalPct: +((finalEq / config.cost.initialCapital - 1) * 100).toFixed(2),

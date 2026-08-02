@@ -23,8 +23,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { getDailyHistory } from '../../lib/history'
 import type { DailyBar } from './types'
 import { EXIT_LABELS, type CostSettings } from './conditionScreen'
-import { runPitChained, type PitChainResult } from './pitChain'
-import { PIT_UNION, PIT_YEARS } from './pitUniverse'
+import { annualize, runPitChained, yearsBetween, type PitChainResult } from './pitChain'
+import { runXsmomChained } from './xsmomChain'
+import { PIT_UNION, PIT_YEARS, pitCodes } from './pitUniverse'
 import {
   HEROMOON_MOMENTUM,
   SPEC_VERSION,
@@ -36,7 +37,7 @@ import {
   type StrategySpec,
 } from './strategySpec'
 import { KpiCard } from '../../components/KpiCard'
-import { EquityChart } from './EquityChart'
+import { EquityChart, type EquityRow } from './EquityChart'
 import { InfoTip } from '../../components/InfoTip'
 import { displaySymbol } from '../../lib/krNames'
 
@@ -47,6 +48,10 @@ import { displaySymbol } from '../../lib/krNames'
 const STORE_KEY = 'spec-simulator:v2'
 
 interface Saved {
+  /** 전략 유형 — 없으면(구 저장본) 조건식 모드 */
+  kind?: StrategyKind
+  /** 모멘텀 모드 파라미터 — 없으면 기본값 */
+  mom?: MomentumParams
   spec: StrategySpec
   startDate: string
   /** 종료일 — 이 날짜 이후 봉을 잘라내고 실행한다. 없거나 빈 문자열이면 데이터 끝까지.
@@ -57,8 +62,15 @@ interface Saved {
 
 const DEFAULT_COST: CostSettings = { initialCapital: 10_000_000, feePct: 0.015, taxPct: 0.15, slippagePct: 0.1 }
 
-const BENCH_SYMBOL = '069500.KS' // KODEX 200 — 알파 판정 기준(규칙 5)
+const BENCH_SYMBOL = '069500.KS' // KODEX 200 — 알파 판정 기준(규칙 5). 이 벤치는 바꾸지 않는다.
 const KOSPI_INDEX = '^KS11'
+
+// 참고 벤치(2026-08-02 대표 지시) — QQQ를 원화로 환산해 **나란히 보기만** 한다.
+// ⚠️ 알파(규칙 5) 판정 기준은 여전히 KODEX 200이다. QQQ는 판정에 들어가지 않는다 —
+//    통화·시장·거래시간이 다른 자산을 판정 기준으로 섞으면 알파의 의미가 무너진다.
+const QQQ_SYMBOL = 'QQQ'
+const FX_SYMBOL = 'KRW=X' // USD/KRW 일봉 종가. 결측일은 직전값 이월.
+const QQQ_LABEL = 'QQQ(원화 환산)'
 
 /** 유니버스는 하나뿐이다 — 시세는 전 연도 합집합을 한 번만 받아 모든 해가 나눠 쓴다. */
 const UNIVERSE_LABEL = `연도별 그 해 시총 상위 10+10 [추정] · ${PIT_YEARS[0]}~${PIT_YEARS[PIT_YEARS.length - 1]} · 고유 ${PIT_UNION.length}종목`
@@ -148,11 +160,59 @@ const PRESET_PIT_MAXRATIO = pitPreset(
   { highDays: 10, exitMa: 80, bufPct: 0 },
 )
 
-const PRESETS: { id: string; label: string; spec: StrategySpec }[] = [
-  { id: 'pit-base', label: '현행 기준선 MA15×신고20→60선·버퍼2%', spec: PRESET_PIT_BASE },
-  { id: 'pit-top', label: '21차 1위 MA10×신고20→60선·버퍼2%', spec: PRESET_PIT_TOP },
-  { id: 'pit-maxret', label: '23차 수익률 1위 MA5×신고10→80선 (MDD −40%)', spec: PRESET_PIT_MAXRET },
-  { id: 'pit-maxratio', label: '23차 수익÷MDD 1위 MA25×신고10→80선', spec: PRESET_PIT_MAXRATIO },
+// ---- 전략 유형 -------------------------------------------------------------
+//
+// 이 화면은 원래 조건식(이평·신고가) 하나만 돌렸다. 2026-08-02 25차 실측에서 이동평균을
+// 전혀 쓰지 않는 **횡단면 모멘텀(12-1)** 이 기준선을 크게 앞서서, 같은 유니버스·같은 비용으로
+// 나란히 돌릴 수 있게 유형을 하나 더 열었다. 두 유형은 **같은 연쇄 규약**(연도별 유니버스 교체·
+// 연말 이월·현금해 처리·벤치 겹침)을 쓰므로 결과가 직접 비교된다.
+
+export type StrategyKind = 'condition' | 'momentum'
+
+/** 모멘텀 모드 파라미터 — 상위 N과 절대모멘텀 게이트뿐이다(그 외는 정본 그대로 고정). */
+export interface MomentumParams {
+  slots: number
+  gate: boolean
+}
+
+const DEFAULT_MOM: MomentumParams = { slots: 5, gate: true }
+
+type Preset =
+  | { id: string; label: string; kind: 'condition'; spec: StrategySpec }
+  | { id: string; label: string; kind: 'momentum'; mom: MomentumParams; note: string }
+
+/**
+ * ⚠️ 모멘텀 프리셋 2개는 25차 실험에서 **여러 조합 중 성적이 좋았던 것**이다.
+ * 라벨에 MDD를 함께 적는 이유는, 이 조합의 대가가 낙폭이기 때문이다 — 수익률만 보고
+ * 고르는 것을 막으려고 이름에 박아 둔다(규칙 4).
+ */
+const PRESETS: Preset[] = [
+  { id: 'pit-base', label: '현행 기준선 MA15×신고20→60선·버퍼2%', kind: 'condition', spec: PRESET_PIT_BASE },
+  { id: 'pit-top', label: '21차 1위 MA10×신고20→60선·버퍼2%', kind: 'condition', spec: PRESET_PIT_TOP },
+  { id: 'pit-maxret', label: '23차 수익률 1위 MA5×신고10→80선 (MDD −40%)', kind: 'condition', spec: PRESET_PIT_MAXRET },
+  { id: 'pit-maxratio', label: '23차 수익÷MDD 1위 MA25×신고10→80선', kind: 'condition', spec: PRESET_PIT_MAXRATIO },
+  {
+    id: 'xsmom-5-gate',
+    label: '25차 모멘텀 상위5+게이트 (MDD −61%)',
+    kind: 'momentum',
+    mom: { slots: 5, gate: true },
+    note:
+      '2026-08-02 25차 실측 — CAGR 30.5% · 알파 +21.9%p/연 · MDD −61% [추정·러너 실행값]. ' +
+      '⚠️ 여러 조합(상위 5/10 × 게이트 on/off)을 함께 돌려 그중 성적이 좋았던 것을 고른 **다중비교 승자**라 ' +
+      '과최적화 위험이 남아 있고, 이 성적을 얻으려면 자산이 고점 대비 **−61%까지 내려앉는 구간을 견뎌야 했다**. ' +
+      '연 20종목 유니버스에서 상위 5는 사실상 상위 25% 분위라 학계의 분위 모멘텀보다 신호가 묽다.',
+  },
+  {
+    id: 'xsmom-5',
+    label: '25차 모멘텀 상위5 (MDD −68%)',
+    kind: 'momentum',
+    mom: { slots: 5, gate: false },
+    note:
+      '2026-08-02 25차 실측 — 게이트를 끈 변형. MDD −68% [추정·러너 실행값]. ' +
+      '⚠️ **다중비교 승자라 과최적화 위험이 있고, −68% 낙폭을 견뎌야 했다.** ' +
+      '절대모멘텀 게이트가 없으므로 전 종목이 하락하는 국면에도 상위 5종목을 그대로 들고 간다 — ' +
+      '하락장에서 게이트 버전보다 더 깊게 파인다.',
+  },
 ]
 
 function loadSaved(): Saved {
@@ -161,12 +221,21 @@ function loadSaved(): Saved {
     if (raw) {
       const s = JSON.parse(raw) as Saved
       // endDate가 없는 구 저장본도 그대로 받는다(하위 호환)
-      if (s.spec?.version === SPEC_VERSION) return { ...s, cost: s.cost ?? DEFAULT_COST, endDate: s.endDate ?? '' }
+      if (s.spec?.version === SPEC_VERSION)
+        return {
+          ...s,
+          cost: s.cost ?? DEFAULT_COST,
+          endDate: s.endDate ?? '',
+          kind: s.kind === 'momentum' ? 'momentum' : 'condition',
+          mom: s.mom ?? DEFAULT_MOM,
+        }
     }
   } catch {
     /* 손상 저장본은 기본값으로 */
   }
   return {
+    kind: 'condition',
+    mom: DEFAULT_MOM,
     spec: PRESET_PIT_BASE,
     startDate: '',
     endDate: '',
@@ -508,6 +577,36 @@ function ExitFields({ rule, onChange }: { rule: ExitRule; onChange: (r: ExitRule
 
 // ---- 본체 ------------------------------------------------------------------
 
+/** 원화 환산 QQQ 곡선의 한 점 */
+interface FxPoint {
+  date: string
+  /** QQQ 총수익 보정 종가 × 그 시점 USD/KRW */
+  krw: number
+}
+
+/**
+ * QQQ(총수익 보정 종가)를 USD/KRW로 곱해 **원화 곡선**으로 만든다.
+ * 환율은 거래일이 어긋나므로 `date` 이하의 마지막 환율을 이월해 쓴다(결측일 직전값 이월).
+ * 환율이 아직 시작되지 않은 앞 구간은 환산할 값이 없으므로 버린다 — 임의로 채우면
+ * 그 구간 비교가 거짓이 된다.
+ *
+ * ⚠️ 환헤지·거래비용·세금 미반영. 참고 표시 전용이며 알파 판정에 쓰지 않는다.
+ */
+function toKrwCurve(qqq: DailyBar[], fx: DailyBar[]): FxPoint[] {
+  if (qqq.length === 0 || fx.length === 0) return []
+  const out: FxPoint[] = []
+  let j = 0
+  let rate = 0
+  for (const b of qqq) {
+    while (j < fx.length && fx[j].date <= b.date) {
+      if (fx[j].c > 0) rate = fx[j].c
+      j++
+    }
+    if (rate > 0 && b.c > 0) out.push({ date: b.date, krw: b.c * rate })
+  }
+  return out
+}
+
 const fmtPct = (v: number, digits = 1) => `${v >= 0 ? '+' : ''}${v.toFixed(digits)}%`
 const fmtWon = (v: number | null | undefined) => (v == null ? '—' : Math.round(v).toLocaleString('ko-KR'))
 /** 자릿수 구분 — 총 수익률이 네 자리 %를 넘으면 구분 없이는 읽히지 않는다 */
@@ -518,6 +617,10 @@ const fmtPp = (v: number, digits = 1) =>
 
 export function SpecSimulator() {
   const [saved] = useState(loadSaved)
+  const [kind, setKind] = useState<StrategyKind>(saved.kind ?? 'condition')
+  const [mom, setMom] = useState<MomentumParams>(saved.mom ?? DEFAULT_MOM)
+  /** 모멘텀 프리셋을 고르면 그 경고문을 화면에 띄운다(라벨만으로는 낙폭 맥락이 안 전달된다) */
+  const [momNote, setMomNote] = useState<string | null>(null)
   const [spec, setSpec] = useState<StrategySpec>(saved.spec)
   const [startDate, setStartDate] = useState(saved.startDate)
   const [endDate, setEndDate] = useState(saved.endDate ?? '')
@@ -533,6 +636,10 @@ export function SpecSimulator() {
   const [result, setResult] = useState<PitChainResult | null>(null)
   /** 벤치마크가 실제로 존재한 구간 — 실행 구간보다 늦게 시작하면 알파가 과대평가된다 */
   const [benchSpan, setBenchSpan] = useState<{ start: string; end: string } | null>(null)
+  /** 참고 벤치 — QQQ 원화 환산 곡선. 로드 실패면 null이고 화면은 「—」로 둔다(실행은 계속). */
+  const [qqqKrw, setQqqKrw] = useState<FxPoint[] | null>(null)
+  /** 이 결과를 만들 때 쓴 초기자본 — 실행 후 입력을 바꿔도 참고곡선 정규화가 흔들리지 않게 붙잡아 둔다 */
+  const [runCapital, setRunCapital] = useState<number | null>(null)
 
   const addNote = (m: string) => setNotes((prev) => (prev.includes(m) ? prev : [...prev, m]))
 
@@ -542,11 +649,11 @@ export function SpecSimulator() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify({ spec, startDate, endDate, cost } satisfies Saved))
+      localStorage.setItem(STORE_KEY, JSON.stringify({ kind, mom, spec, startDate, endDate, cost } satisfies Saved))
     } catch {
       /* 저장 실패는 치명적이지 않다 */
     }
-  }, [spec, startDate, endDate, cost])
+  }, [kind, mom, spec, startDate, endDate, cost])
 
   const flat = useMemo(() => asFlatAnd(spec.entry), [spec.entry])
   // 종목 목록은 실행 시 그 해 유니버스로 주입되므로, 검증에는 대표로 첫 해 목록을 쓴다.
@@ -645,7 +752,7 @@ export function SpecSimulator() {
 
       // 레짐 게이트가 있으면 지수 시세도 필요하다 (매매 대상 아님 — 판정 전용)
       const extraSymbols: string[] = []
-      if (spec.regime) {
+      if (kind === 'condition' && spec.regime) {
         setProgress(`레짐 지수(${spec.regime.symbol}) 로딩…`)
         try {
           const rh = await getDailyHistory(spec.regime.symbol, 'max')
@@ -672,15 +779,46 @@ export function SpecSimulator() {
         addNote('⚠️ 벤치마크(KODEX 200) 로드 실패 — 알파를 계산할 수 없습니다')
       }
 
+      // 참고 벤치(QQQ 원화 환산) — **실패해도 백테스트를 막지 않는다**. 참고 표시일 뿐이라
+      // 이것 때문에 실행이 중단되면 배보다 배꼽이 크다. 실패 시 QQQ 행만 「—」로 남는다.
+      setProgress('참고 벤치(QQQ·USD/KRW) 로딩…')
+      try {
+        const [q, fx] = await Promise.all([getDailyHistory(QQQ_SYMBOL, 'max'), getDailyHistory(FX_SYMBOL, 'max')])
+        const curve = toKrwCurve(q.bars, fx.bars)
+        if (curve.length >= 2) setQqqKrw(curve)
+        else {
+          setQqqKrw(null)
+          addNote('⚠️ 참고 벤치(QQQ 원화 환산) 데이터가 부족합니다 — QQQ 비교만 「—」로 두고 백테스트는 그대로 진행합니다.')
+        }
+      } catch {
+        setQqqKrw(null)
+        addNote('⚠️ 참고 벤치(QQQ·USD/KRW) 로드 실패 — QQQ 비교만 「—」로 두고 백테스트는 그대로 진행합니다.')
+      }
+
       setProgress('연도별 유니버스 연쇄 백테스트 실행…')
-      const chained = runPitChained(
-        histories,
-        (symbols) => ({ ...spec, universe: { ...spec.universe, symbols } }),
-        cost,
-        { resolve: (code) => symOf[code], startDate, endDate, bench, extraSymbols },
-      )
+      // 두 유형 모두 **같은 연쇄 규약**을 쓴다 — 유니버스 교체·연말 이월·현금해·벤치 겹침 동일.
+      const chained: PitChainResult =
+        kind === 'momentum'
+          ? runXsmomChained(histories, {
+              cost,
+              slots: mom.slots,
+              gate: mom.gate,
+              years: PIT_YEARS,
+              codesFor: pitCodes,
+              resolve: (code) => symOf[code],
+              startDate,
+              endDate,
+              bench,
+            })
+          : runPitChained(
+              histories,
+              (symbols) => ({ ...spec, universe: { ...spec.universe, symbols } }),
+              cost,
+              { resolve: (code) => symOf[code], startDate, endDate, bench, extraSymbols },
+            )
       if (chained.perYear.length === 0) throw new Error('실행할 연도가 없습니다 — 시작일·종료일을 확인하세요')
       setResult(chained)
+      setRunCapital(cost.initialCapital)
       setTradesPage(0) // 새 실행마다 1페이지부터
       const cashYears = chained.perYear.filter((r) => r.cash).map((r) => r.year)
       if (cashYears.length)
@@ -695,8 +833,46 @@ export function SpecSimulator() {
     }
   }
 
-  // 벤치마크는 연쇄 실행기가 같은 연말 경계로 이어붙여 이미 넣어 준다 — 여기서 다시 겹치지 않는다.
-  const chartEquity = result?.equity ?? null
+  /**
+   * 참고 벤치(QQQ 원화 환산)를 **실행 구간에 맞춰** 정규화한다.
+   * 전략 곡선과 같은 시작값(초기자본)에서 출발시켜야 두 곡선이 같은 축에서 읽힌다.
+   * 환율(KRW=X)이 실행 구간보다 늦게 시작하면 그 이전은 비울 수밖에 없으므로,
+   * 실제로 덮은 구간(from~to)을 그대로 표시해 비교 구간이 다르다는 사실을 숨기지 않는다.
+   */
+  const qqqRef = useMemo(() => {
+    if (!result || !qqqKrw?.length || result.equity.length === 0) return null
+    const cap = runCapital ?? cost.initialCapital
+    let i = 0
+    let last: number | null = null
+    let base: number | null = null
+    let from = ''
+    let to = ''
+    const byDate = new Map<string, number>()
+    for (const p of result.equity) {
+      while (i < qqqKrw.length && qqqKrw[i].date <= p.date) {
+        last = qqqKrw[i].krw
+        i++
+      }
+      if (last == null) continue // 환율·QQQ가 아직 시작되지 않은 앞 구간 — 임의로 채우지 않는다
+      if (base == null) {
+        base = last
+        from = p.date
+      }
+      to = p.date
+      byDate.set(p.date, (last / base) * cap)
+    }
+    if (base == null || byDate.size < 2) return null
+    const ratio = (byDate.get(to) as number) / cap
+    return { byDate, totalPct: (ratio - 1) * 100, cagrPct: annualize(ratio, yearsBetween(from, to)), from, to }
+  }, [result, qqqKrw, runCapital, cost.initialCapital])
+
+  // 벤치마크(KODEX 200)는 연쇄 실행기가 같은 연말 경계로 이어붙여 이미 넣어 준다 —
+  // 여기서 다시 겹치지 않는다. QQQ만 참고 라인으로 얹는다.
+  const chartEquity: EquityRow[] | null = useMemo(() => {
+    if (!result || result.equity.length === 0) return null
+    if (!qqqRef) return result.equity
+    return result.equity.map((p) => ({ ...p, benchmark2: qqqRef.byDate.get(p.date) ?? null }))
+  }, [result, qqqRef])
 
   const summary = useMemo(() => {
     if (!result || result.equity.length === 0) return null
@@ -763,12 +939,62 @@ export function SpecSimulator() {
         <span className="badge sample">시뮬레이션 전용 · 실주문 없음</span>
       </div>
       <div className="panel-sub">
-        영웅문 조건검색으로 찾은 조건식을 옮겨 적고 <strong>즉시 2차 검증</strong>합니다. 신호는 종가 판단 → 익일 시가
+        영웅문 조건검색으로 찾은 조건식을 옮겨 적고 <strong>즉시 2차 검증</strong>합니다. 조건식 대신{' '}
+        <strong>모멘텀 랭킹(12-1)</strong>으로도 같은 유니버스·같은 비용에서 돌려 비교할 수 있습니다. 신호는 종가 판단 → 익일 시가
         체결(미래참조 금지), 판정은 알파(벤치마크 대비) 기준. 유니버스는{' '}
         <strong>매년 그 해 시총 상위 10+10 [추정]</strong>으로 교체됩니다 — 종목을 고정할 수 없습니다(승자편향 제거).
       </div>
 
+      {/* ---- 전략 유형 ---- */}
+      <div className="bt-controls bt-settings">
+        <label>
+          전략 유형
+          <InfoTip text="「조건식」은 이평·신고가 같은 조건을 만족하는 종목을 사는 방식입니다. 「모멘텀 랭킹」은 조건을 보지 않고 매월 첫 거래일에 '12개월 전~1개월 전' 수익률로 유니버스를 줄 세워 상위 N만 동일가중으로 보유합니다(최근 1개월은 단기 반전을 피하려고 창에서 뺍니다). 두 유형 모두 같은 유니버스·같은 비용·같은 연쇄 규약으로 돌아가므로 결과가 직접 비교됩니다." />
+          <select value={kind} onChange={(e) => setKind(e.target.value as StrategyKind)} disabled={busy}>
+            <option value="condition">조건식(현행)</option>
+            <option value="momentum">모멘텀 랭킹</option>
+          </select>
+        </label>
+        {kind === 'momentum' && (
+          <>
+            <label>
+              보유 종목 수
+              <InfoTip text="랭킹 상위 몇 종목을 동일가중으로 담을지입니다. 유니버스가 연 20종목이라 상위 5는 사실상 상위 25% 분위입니다 — 학계의 상위 10% 분위 모멘텀보다 신호가 묽습니다." />
+              <select
+                value={mom.slots}
+                onChange={(e) => setMom((m) => ({ ...m, slots: Number(e.target.value) }))}
+                disabled={busy}
+              >
+                <option value={4}>상위 4종목</option>
+                <option value={5}>상위 5종목 (기본)</option>
+                <option value={6}>상위 6종목</option>
+              </select>
+            </label>
+            <label>
+              절대모멘텀 게이트
+              <InfoTip text="12-1 수익률이 음수인 종목은 사지 않고 그 슬롯을 현금으로 둡니다. 슬롯 분모는 게이트와 무관하게 min(N, 후보수)로 고정되므로, 걸러진 슬롯의 돈이 남은 종목에 재분배되지 않습니다(게이트가 레버리지로 둔갑하지 않게). 25차 실측에서 게이트를 켜면 낙폭이 −68%→−61%로 줄었습니다." />
+              <select
+                value={mom.gate ? 'on' : 'off'}
+                onChange={(e) => setMom((m) => ({ ...m, gate: e.target.value === 'on' }))}
+                disabled={busy}
+              >
+                <option value="on">켬 — 음수 모멘텀 슬롯은 현금 (기본)</option>
+                <option value="off">끔 — 상위 N을 그대로 보유</option>
+              </select>
+            </label>
+            <div className="bt-note" style={{ width: '100%' }}>
+              <strong>모멘텀 랭킹 (12-1)</strong> — 매월 <strong>첫 거래일 시가</strong>에 리밸런스합니다. 랭킹은
+              <strong> 전월 1일 이전 종가까지만</strong> 보므로 판정에 당일·직전 한 달 데이터가 들어가지 않습니다
+              (미래참조 금지). 이동평균·신고가·레짐·매도 규칙은 이 모드에서 쓰지 않습니다 — 청산은 월간 리밸런스로만
+              일어납니다. 12개월치 시세가 없는 종목은 그 시점 후보에서 빠집니다.
+            </div>
+          </>
+        )}
+      </div>
+      {momNote && kind === 'momentum' && <div className="bt-warn">⚠️ {momNote}</div>}
+
       {/* ---- 매수 조건 ---- */}
+      {kind === 'condition' && (
       <div className="bt-controls">
         <strong>매수 조건 (전부 충족 시 편입 · AND)</strong>
         {flat == null ? (
@@ -840,8 +1066,10 @@ export function SpecSimulator() {
           </>
         )}
       </div>
+      )}
 
       {/* ---- 매도 조건 ---- */}
+      {kind === 'condition' && (
       <div className="bt-controls">
         <strong>
           매도 조건 (먼저 걸리는 것이 청산)
@@ -912,9 +1140,14 @@ export function SpecSimulator() {
           </span>
         </div>
       </div>
+      )}
 
       {/* ---- 실행 설정 ---- */}
       <div className="bt-controls bt-settings">
+        {/* 아래 4개는 조건식 전용이다 — 모멘텀 모드는 상위 N·게이트만 쓰고 이 값들을 읽지 않는다.
+            그대로 두면 "바꿔도 결과가 안 변하는 입력"이 되어 사용자를 속인다. */}
+        {kind === 'condition' && (
+        <>
         <label>
           동시 보유
           <span className="bt-inline-field">
@@ -973,6 +1206,17 @@ export function SpecSimulator() {
             <option value="kospi">코스피 5·10일선 정배열일 때만 진입</option>
           </select>
         </label>
+        </>
+        )}
+        {kind === 'momentum' && (
+          <label>
+            보유 규칙
+            <InfoTip text="모멘텀 모드는 동시 보유 수를 위의 '보유 종목 수'로, 체결을 '월 첫 거래일 시가'로 고정합니다. 우선순위는 12-1 모멘텀 순위이고, 매도 규칙·장 레짐은 쓰지 않습니다." />
+            <span className="bt-hint">
+              상위 {mom.slots}종목 동일가중 · 월초 시가 리밸런스 · 게이트 {mom.gate ? '켬' : '끔'}
+            </span>
+          </label>
+        )}
         <label>
           시작일
           <input
@@ -1049,7 +1293,7 @@ export function SpecSimulator() {
       </div>
 
       {/* ---- 스펙 검증 경고 ---- */}
-      {issues.length > 0 && (
+      {kind === 'condition' && issues.length > 0 && (
         <div className="bt-warn">
           {issues.map((it, i) => (
             <div key={i}>
@@ -1064,24 +1308,32 @@ export function SpecSimulator() {
         <button
           type="button"
           className="bt-btn-run"
-          disabled={busy || dateError != null || issues.some((i) => i.level === 'error')}
+          disabled={busy || dateError != null || (kind === 'condition' && issues.some((i) => i.level === 'error'))}
           onClick={run}
         >
           {busy ? (progress ?? '실행 중…') : '▶ 백테스트 실행 (2차 검증)'}
         </button>
-        <button type="button" className="bt-btn-mini" onClick={exportJson}>
-          스펙 JSON
-        </button>
+        {kind === 'condition' && (
+          <button type="button" className="bt-btn-mini" onClick={exportJson}>
+            스펙 JSON
+          </button>
+        )}
         <select
           value=""
           disabled={busy}
           aria-label="프리셋 불러오기"
           onChange={(e) => {
             const p = PRESETS.find((x) => x.id === e.target.value)
-            if (p) {
+            if (!p) return
+            setKind(p.kind)
+            if (p.kind === 'condition') {
               setSpec(p.spec)
-              setJsonOpen(false)
+              setMomNote(null)
+            } else {
+              setMom(p.mom)
+              setMomNote(p.note)
             }
+            setJsonOpen(false)
           }}
           title="프리셋 불러오기"
         >
@@ -1108,7 +1360,7 @@ export function SpecSimulator() {
       ))}
 
       {/* ---- JSON 편집 ---- */}
-      {jsonOpen && (
+      {jsonOpen && kind === 'condition' && (
         <div className="bt-controls">
           <strong>
             스펙 JSON — 이 문서가 조건식의 정본입니다
@@ -1191,6 +1443,61 @@ export function SpecSimulator() {
             />
           </div>
 
+          {/* 벤치마크 비교 — 2줄. 판정(알파)은 KODEX 200 한 줄뿐이고 QQQ는 참고다(규칙 5 판정 벤치 불변). */}
+          <div className="bt-table-wrap">
+            <div className="bt-chart-caption">
+              벤치마크 비교 — <strong>알파 판정 기준은 KODEX 200</strong>이며, QQQ는 참고 표시입니다(판정에 들어가지 않음)
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th>벤치마크</th>
+                  <th>총 수익률</th>
+                  <th>연환산</th>
+                  <th>비교 구간</th>
+                  <th>역할</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>KODEX 200</td>
+                  <td>{summary.benchTotalPct != null ? fmtPctGrouped(summary.benchTotalPct) : '—'}</td>
+                  <td>{summary.benchCagrPct != null ? fmtPct(summary.benchCagrPct) : '—'}</td>
+                  <td>
+                    {result.startDate}~{result.endDate}
+                  </td>
+                  <td>알파 판정 기준 (규칙 5)</td>
+                </tr>
+                <tr>
+                  <td>{QQQ_LABEL}</td>
+                  <td>{qqqRef ? fmtPctGrouped(qqqRef.totalPct) : '—'}</td>
+                  <td>{qqqRef ? fmtPct(qqqRef.cagrPct) : '—'}</td>
+                  <td>{qqqRef ? `${qqqRef.from}~${qqqRef.to}` : '—'}</td>
+                  <td>참고 (알파 미반영)</td>
+                </tr>
+              </tbody>
+            </table>
+            {qqqRef ? (
+              <div className="bt-note">
+                QQQ는 총수익 보정(adjclose) 가격에 <strong>USD/KRW(KRW=X) 종가</strong>를 곱한 원화 곡선입니다(결측일은
+                직전 환율 이월) — <strong>환헤지·거래비용 미반영</strong>. 전략 곡선과 같은 시작값(초기자본)으로 맞춰
+                그렸습니다.
+                {qqqRef.from > result.startDate && (
+                  <>
+                    {' '}
+                    ⚠️ 환율·QQQ 데이터가 <strong>{qqqRef.from}</strong>부터라 그 이전 구간은 QQQ 비교가 없습니다 —
+                    전략 구간({result.startDate}~)과 <strong>비교 구간이 다릅니다</strong>.
+                  </>
+                )}
+              </div>
+            ) : (
+              <div className="bt-note">
+                QQQ 참고 비교를 표시할 수 없습니다 — QQQ 또는 USD/KRW(KRW=X) 시세를 받지 못했습니다. 백테스트 결과
+                자체에는 영향이 없습니다.
+              </div>
+            )}
+          </div>
+
           {benchGap && (
             <div className="bt-bench-note">
               ⚠️ <strong>벤치마크 구간 부족</strong> — 실행 구간은 {result.startDate}부터인데 KODEX 200 데이터는{' '}
@@ -1199,7 +1506,13 @@ export function SpecSimulator() {
             </div>
           )}
 
-          {chartEquity && <EquityChart equity={chartEquity} benchmarkLabel="KODEX 200 단순보유" />}
+          {chartEquity && (
+            <EquityChart
+              equity={chartEquity}
+              benchmarkLabel="KODEX 200 단순보유"
+              benchmark2Label={qqqRef ? QQQ_LABEL : undefined}
+            />
+          )}
 
           {/* 연도별 분해 — 몇 해에 몰려 번 것인지, 그 해 유니버스가 얼마나 채워졌는지 그대로 본다.
               매핑률이 낮은 해는 상장폐지 종목이 빠진 만큼 성적이 후하게 나온다(생존편향 잔존). */}
@@ -1332,16 +1645,18 @@ export function SpecSimulator() {
           {screenRows.length > 0 && (
             <div className="bt-table-wrap">
               <div className="bt-chart-caption">
-                마지막 스크리닝 ({result.lastScreenDate}) — 조건식이 실제로 무엇을 거르는지 확인
+                {kind === 'momentum'
+                  ? `마지막 리밸런스 랭킹 (${result.lastScreenDate}) — 12-1 모멘텀 상위와 게이트 판정`
+                  : `마지막 스크리닝 (${result.lastScreenDate}) — 조건식이 실제로 무엇을 거르는지 확인`}
               </div>
               <table>
                 <thead>
                   <tr>
                     <th>순위</th>
                     <th>종목</th>
-                    <th>등락률</th>
+                    <th>{kind === 'momentum' ? '12-1 모멘텀' : '등락률'}</th>
                     <th>판정</th>
-                    <th>탈락 사유</th>
+                    <th>{kind === 'momentum' ? '사유' : '탈락 사유'}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1360,6 +1675,19 @@ export function SpecSimulator() {
               </table>
             </div>
           )}
+          {/* 규칙 4 — 수익 옆에 손실 경로를 같은 무게로 둔다. 모멘텀 모드는 낙폭이 특히 깊다. */}
+          {kind === 'momentum' && (
+            <div className="bt-warn">
+              ⚠️ <strong>모멘텀 모드 낙폭 경고</strong> — 25차 실측에서 이 계열의 최대낙폭은{' '}
+              <strong>−61%(게이트 켬) ~ −68%(게이트 끔)</strong>였습니다 [추정 · 러너 실행값]. 위 성적을 얻으려면{' '}
+              <strong>자산이 고점 대비 3분의 2 가까이 사라지는 구간을 끝까지 들고 있어야 했습니다</strong> — 그 구간에
+              중도 이탈하면 이 수익률은 실현되지 않습니다. 무효화 지점: 12-1 모멘텀이 유니버스 전반에서 음수로
+              돌아서면(게이트가 대부분의 슬롯을 현금으로 돌리면) 이 전략은 수익원을 잃습니다. 상위 5/10 × 게이트
+              on/off를 함께 돌려 그중 좋은 것을 고른 <strong>다중비교 승자</strong>라 과최적화 위험이 남아 있고, 연
+              20종목 유니버스에서 상위 5는 사실상 상위 25% 분위라 학계의 분위 모멘텀보다 신호가 묽습니다. 매수 권유가
+              아니며 관찰·조건부 서술입니다.
+            </div>
+          )}
         </div>
       )}
 
@@ -1370,6 +1698,10 @@ export function SpecSimulator() {
         이월하는 <strong>연말 청산 근사</strong>가 들어갑니다. 시뮬레이션 전용 — 주문·실계좌·브로커 API와 연결되어
         있지 않습니다. 전 종목이 아니라 연 20종목 표본이므로 실제 조건검색과 결과가 다릅니다. 데이터: Yahoo Finance
         일봉(비공식 엔드포인트 · 정확성 미보증 · 환율 미반영). 장중 조건(분봉)은 일봉 백테스트로 검증되지 않습니다.
+        <strong>QQQ 비교는 KRW=X 종가 환산 기준 — 환헤지·거래비용 미반영</strong>이며 참고 표시일 뿐 알파 판정에
+        들어가지 않습니다(판정 벤치는 KODEX 200). 모멘텀 랭킹 모드는 매월 첫 거래일 시가에 리밸런스하는 12-1 횡단면
+        모멘텀이며, 25차 실측 낙폭은 <strong>−61%~−68%</strong> [추정]입니다 — 프리셋은 여러 조합 중 성적이 좋았던
+        것을 고른 것이라 <strong>과최적화 위험</strong>이 남아 있습니다.
         백테스트 성적은 과최적화·체결 가정의 한계를 가지며 미래 수익을 보장하지 않습니다. 손실 경로는 MDD 카드가
         그 조합이 견뎌야 했던 최대 하락입니다. 본 화면은 정보·참고용이며 <strong>투자자문이 아닙니다</strong>.
         매수/매도 권유가 아니며 모든 투자 판단·손익 책임은 이용자 본인에게 있습니다.
