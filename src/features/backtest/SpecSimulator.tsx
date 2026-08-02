@@ -76,8 +76,17 @@ const KOSPI_REGIME: NonNullable<StrategySpec['regime']> = {
 // 서로 다른 전제의 수치를 같은 이름으로 비교하게 된다. 아래 두 개는 **시점 고정 유니버스
 // 전제로 다시 매긴** 조합이다. 어느 쪽도 매수 권유가 아니다(규칙 4).
 
-/** 두 프리셋의 공통 골격 — 진입 이평만 다르다. */
-function pitPreset(id: string, name: string, source: string, maPeriod: number): StrategySpec {
+/** 프리셋 공통 골격 — 진입 이평·신고가 일수·청산 이평·버퍼만 다르다. */
+function pitPreset(
+  id: string,
+  name: string,
+  source: string,
+  maPeriod: number,
+  opts: { highDays?: number; exitMa?: number; bufPct?: number } = {},
+): StrategySpec {
+  const highDays = opts.highDays ?? 20
+  const exitMa = opts.exitMa ?? 60
+  const bufPct = opts.bufPct ?? 2
   return {
     version: SPEC_VERSION,
     id,
@@ -88,11 +97,11 @@ function pitPreset(id: string, name: string, source: string, maPeriod: number): 
       op: 'and',
       nodes: [
         { op: 'cond', id: `${maPeriod}일선돌파`, cond: { kind: 'maCross', period: maPeriod, dir: 'above' } },
-        { op: 'cond', id: '20일신고가', cond: { kind: 'highBreak', days: 20 } },
+        { op: 'cond', id: `${highDays}일신고가`, cond: { kind: 'highBreak', days: highDays } },
       ],
     },
     ranking: { by: 'tradingValue', dir: 'desc' },
-    exits: [{ kind: 'maBreak', maPeriod: 60, pct: 2 }],
+    exits: [{ kind: 'maBreak', maPeriod: exitMa, pct: bufPct }],
     sizing: { maxPositions: 10, mode: 'equalSlot' },
     execution: { timing: 'sameClose', orderType: 'market' },
   }
@@ -114,9 +123,36 @@ const PRESET_PIT_TOP = pitPreset(
   10,
 )
 
+/**
+ * 23차 400조합 확장 격자(2026-08-02)의 수익률 1위 — 총 +5,899% · CAGR 16.7% · **MDD −40.2%** ·
+ * 알파 +8.2%p/연 · 매매 1,528. ⚠️ 400개 중 1등을 고른 것 자체가 곡선맞춤이며, 이 조합의 대가는
+ * 낙폭이다(−40%를 견뎌야 했다). 2016·2019·2025 등 벤치에 크게 뒤진 해도 있다.
+ */
+const PRESET_PIT_MAXRET = pitPreset(
+  'pit-ma5-high10-slow80',
+  '23차 수익률 1위 — MA5×신고10→80선 (MDD −40%)',
+  '2026-08-02 23차 400조합 격자(연도별 상위 10+10 [추정]) 총수익 1위 +5,899% — 다중비교 1등이라 과최적화 위험이 크고, MDD −40.2%가 대가다',
+  5,
+  { highDays: 10, exitMa: 80, bufPct: 0 },
+)
+
+/**
+ * 23차 400조합 확장 격자의 수익÷MDD 1위 — 총 +5,442% · CAGR 16.3% · MDD −31.9% · 비율 170 ·
+ * 알파 +7.9%p/연 · 매매 1,997. 수익률 1위보다 총수익은 조금 낮고 낙폭이 얕다. 같은 곡선맞춤 경고.
+ */
+const PRESET_PIT_MAXRATIO = pitPreset(
+  'pit-ma25-high10-slow80',
+  '23차 수익÷MDD 1위 — MA25×신고10→80선',
+  '2026-08-02 23차 400조합 격자(연도별 상위 10+10 [추정]) 수익÷MDD 1위 170.3 — 다중비교 1등이라 과최적화 위험 상존',
+  25,
+  { highDays: 10, exitMa: 80, bufPct: 0 },
+)
+
 const PRESETS: { id: string; label: string; spec: StrategySpec }[] = [
   { id: 'pit-base', label: '현행 기준선 MA15×신고20→60선·버퍼2%', spec: PRESET_PIT_BASE },
   { id: 'pit-top', label: '21차 1위 MA10×신고20→60선·버퍼2%', spec: PRESET_PIT_TOP },
+  { id: 'pit-maxret', label: '23차 수익률 1위 MA5×신고10→80선 (MDD −40%)', spec: PRESET_PIT_MAXRET },
+  { id: 'pit-maxratio', label: '23차 수익÷MDD 1위 MA25×신고10→80선', spec: PRESET_PIT_MAXRATIO },
 ]
 
 function loadSaved(): Saved {
