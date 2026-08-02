@@ -12,6 +12,11 @@
 // MODE=xsmom    — 횡단면 모멘텀 랭킹(12-1). 이동평균을 아예 쓰지 않는다.
 // MODE=volbrk   — 변동성 돌파(래리 윌리엄스 k). 전일 레인지만 쓴다.
 // MODE=rsirev   — 단기 평균회귀(RSI2 · Wilder) + 200일선 추세 필터.
+//
+// ── 25차 승자(횡단면 모멘텀) 검증 3종 (2026-08-02 대표 승인 "모두 진행") ──────
+// MODE=xswf     — 워크포워드 + 슬롯 민감도. "사후에 고른 5"와 "그때 골랐을 파라미터"의 차이.
+// MODE=usxsmom  — 미장 교차 실행. 24차에서 추세돌파가 미국에서 전패한 것의 역질문.
+// MODE=combo    — 기준선 + xsmom 반반 결합. 상관·낙폭 완화 폭을 잰다.
 //   판정 기준선은 셋 다 **MA25×신고10→80선**(23차 격자 수익÷MDD 1위)을 같은 유니버스·
 //   같은 비용으로 **재실행한** 수치다. 다른 표의 숫자를 옮겨 적지 않는다.
 //
@@ -50,6 +55,14 @@ import {
   type StrategySpec,
 } from '../src/features/backtest/strategySpec'
 import type { DailyBar } from '../src/features/backtest/types'
+import {
+  US_COMPANY_NAMES,
+  US_PIT_SOURCE_NOTE,
+  US_PIT_UNION,
+  US_PIT_YEARS,
+  resolveUsTicker,
+  usPitCodes,
+} from '../src/features/backtest/usPitUniverse'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -2550,6 +2563,954 @@ async function rsirev() {
 }
 
 // ============================================================================
+// 검증 3종 공용 기반 (MODE=xswf · usxsmom · combo)
+// ============================================================================
+//
+// 25차 실측에서 횡단면 모멘텀(12-1 · 상위5 + 절대모멘텀 게이트)이 기준선을 전·후반 모두
+// 앞섰다. 좋아 보이는 결과가 나왔을 때 해야 할 일은 그것을 자랑하는 게 아니라 **깨지는지
+// 두드려 보는 것**이다. 여기 세 모드가 그 세 가지 두드림이다.
+//
+//   xswf    — 파라미터 5가 고원인가 뾰족한 봉우리인가(민감도) + "그때 골랐을 파라미터"로
+//             굴렸어도 성적이 남는가(워크포워드 OOS). 사후에 고른 5의 이득을 벗겨낸다.
+//   usxsmom — 같은 규칙을 미국 시장에 그대로 옮겼을 때도 알파가 남는가. 24차에서 추세돌파는
+//             미국에서 전패했다 — 그 역질문이다.
+//   combo   — 기준선과 xsmom을 반반 섞으면 낙폭이 줄어드는가(두 슬리브 상관계수 포함).
+//
+// ── 규칙 1(미래참조 금지) 준수 ─────────────────────────────────────────────
+//   · 워크포워드 선택은 **그 해 1월 1일 이전에 끝난 해들**의 누적 성적만 본다. 선택 대상
+//     연도(그리고 그 이후)의 성적은 선택식에 들어가지 않는다 — `wfPick`이 `y < year`로
+//     자른다. 학습 표본이 최소 연수에 못 미치면 사후지식 없이 기본값을 쓴다.
+//   · 결합(combo)은 **당일까지 확정된 두 곡선의 일수익률**만 합성하고, 월 첫 거래일에
+//     날짜만 보고 가중을 되돌린다. 미래 수익률을 보고 가중을 고르지 않는다.
+//   · 환율 환산은 **직전(포함) 환율 이월**만 한다 — 결측일에 다음 환율을 당겨오면
+//     그 자체가 미래참조다(`valueAsOf`는 과거 방향으로만 탐색한다).
+//   · 집행자는 `tests/idealab.test.ts`의 워크포워드 불변성·결합 산술·절단 불변성 케이스다.
+//
+// ⚠️ 메모리: 후보별로 **연도별 상대곡선**만 들고 있고(그 해 시작=1.0), 표에 남기는 것은
+//    요약 스칼라다. 조합 수만큼 전체 매매이력을 쌓지 않는다(2026-08-02 OOM 재발 방지).
+
+/** 곡선에서 `date` **이하** 마지막 값. 없으면 null. 이월은 과거 방향으로만 한다(규칙 1). */
+export function valueAsOf(curve: { date: string; equity: number }[], date: string): number | null {
+  let lo = 0
+  let hi = curve.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (curve[mid].date <= date) lo = mid + 1
+    else hi = mid
+  }
+  return lo > 0 ? curve[lo - 1].equity : null
+}
+
+/** 곡선의 [시작일, 종료일]. 빈 곡선이면 빈 문자열. */
+export function spanOf(curve: { date: string; equity: number }[]): [string, string] {
+  return curve.length ? [curve[0].date, curve[curve.length - 1].date] : ['', '']
+}
+
+/**
+ * 두 곡선을 **겹치는 구간**의 날짜 합집합으로 정렬한다. 한쪽에 봉이 없는 날은 그 곡선의
+ * 직전 값을 이월한다(= 그날 수익률 0). 겹치지 않는 구간은 애초에 비교가 성립하지 않으므로
+ * 버린다 — 한쪽만 있는 구간을 넣으면 그 구간이 통째로 그 곡선의 성적이 된다.
+ */
+export function alignCurves(
+  a: { date: string; equity: number }[],
+  b: { date: string; equity: number }[],
+): { dates: string[]; ea: number[]; eb: number[] } {
+  if (a.length < 1 || b.length < 1) return { dates: [], ea: [], eb: [] }
+  const start = a[0].date > b[0].date ? a[0].date : b[0].date
+  const end = a[a.length - 1].date < b[b.length - 1].date ? a[a.length - 1].date : b[b.length - 1].date
+  if (start > end) return { dates: [], ea: [], eb: [] }
+  const set = new Set<string>()
+  for (const p of a) if (p.date >= start && p.date <= end) set.add(p.date)
+  for (const p of b) if (p.date >= start && p.date <= end) set.add(p.date)
+  const dates = [...set].sort()
+  const ea: number[] = []
+  const eb: number[] = []
+  for (const d of dates) {
+    ea.push(valueAsOf(a, d)!)
+    eb.push(valueAsOf(b, d)!)
+  }
+  return { dates, ea, eb }
+}
+
+/**
+ * 두 슬리브를 가중 `wA : 1−wA`로 섞되 **월 첫 거래일에 가중을 되돌린다**.
+ * 달 안에서는 각 슬리브가 제 수익률대로 표류하고, 달이 바뀌는 첫 거래일 **시작 시점에**
+ * 총자산을 다시 wA:1−wA로 나눈다. 리밸런스 판단에 쓰는 정보는 **날짜뿐**이라
+ * 미래참조가 원천적으로 불가능하다.
+ * 반환 곡선은 시작 1.0 배수다.
+ */
+export function blendMonthlyRebalanced(dates: string[], ea: number[], eb: number[], wA: number): number[] {
+  if (dates.length < 1) return []
+  let vA = wA
+  let vB = 1 - wA
+  let curYm = ymOf(dates[0])
+  const out: number[] = [vA + vB]
+  for (let i = 1; i < dates.length; i++) {
+    const ym = ymOf(dates[i])
+    if (ym !== curYm) {
+      curYm = ym
+      const v = vA + vB
+      vA = v * wA
+      vB = v * (1 - wA)
+    }
+    const ra = ea[i - 1] > 0 ? ea[i] / ea[i - 1] : 1
+    const rb = eb[i - 1] > 0 ? eb[i] / eb[i - 1] : 1
+    vA *= ra
+    vB *= rb
+    out.push(vA + vB)
+  }
+  return out
+}
+
+/** 두 곡선의 월 가중 결합 — `alignCurves` + `blendMonthlyRebalanced` 묶음. */
+export function blendCurves(
+  a: { date: string; equity: number }[],
+  b: { date: string; equity: number }[],
+  wA: number,
+): { date: string; equity: number }[] {
+  const { dates, ea, eb } = alignCurves(a, b)
+  const v = blendMonthlyRebalanced(dates, ea, eb, wA)
+  return dates.map((date, i) => ({ date, equity: v[i] }))
+}
+
+/** 월별 수익률(종가→종가, 달 마지막 값 기준). key `YYYY-MM`. */
+export function monthlyReturnsOf(curve: { date: string; equity: number }[]): Map<string, number> {
+  const last = new Map<string, number>()
+  for (const p of curve) last.set(ymOf(p.date), p.equity)
+  const keys = [...last.keys()].sort()
+  const out = new Map<string, number>()
+  for (let i = 1; i < keys.length; i++) {
+    const prev = last.get(keys[i - 1])!
+    const cur = last.get(keys[i])!
+    if (prev > 0) out.set(keys[i], cur / prev - 1)
+  }
+  return out
+}
+
+/** 피어슨 상관계수. 표본 3 미만이거나 한쪽이 상수면 null. */
+export function pearson(xs: number[], ys: number[]): number | null {
+  const n = Math.min(xs.length, ys.length)
+  if (n < 3) return null
+  let mx = 0
+  let my = 0
+  for (let i = 0; i < n; i++) {
+    mx += xs[i]
+    my += ys[i]
+  }
+  mx /= n
+  my /= n
+  let sxy = 0
+  let sxx = 0
+  let syy = 0
+  for (let i = 0; i < n; i++) {
+    const dx = xs[i] - mx
+    const dy = ys[i] - my
+    sxy += dx * dy
+    sxx += dx * dx
+    syy += dy * dy
+  }
+  if (!(sxx > 0) || !(syy > 0)) return null
+  return sxy / Math.sqrt(sxx * syy)
+}
+
+/** 두 곡선의 **공통 월**에서만 월수익률 상관을 잰다. */
+export function monthlyCorrelation(
+  a: { date: string; equity: number }[],
+  b: { date: string; equity: number }[],
+): { r: number | null; n: number } {
+  const ma = monthlyReturnsOf(a)
+  const mb = monthlyReturnsOf(b)
+  const xs: number[] = []
+  const ys: number[] = []
+  for (const [k, v] of ma) {
+    const w = mb.get(k)
+    if (w == null) continue
+    xs.push(v)
+    ys.push(w)
+  }
+  return { r: pearson(xs, ys), n: xs.length }
+}
+
+/** 그 해 **연초 대비 고점 기준** 최대 낙폭(%, 음수). 해당 연도 점이 2개 미만이면 null. */
+export function yearMaxDrawdown(curve: { date: string; equity: number }[], year: number): number | null {
+  const win = curve.filter((p) => yearOf(p.date) === year)
+  if (win.length < 2) return null
+  let peak = win[0].equity
+  let mdd = 0
+  for (const p of win) {
+    if (p.equity > peak) peak = p.equity
+    else mdd = Math.min(mdd, (p.equity / peak - 1) * 100)
+  }
+  return mdd
+}
+
+/** 연도별 수익비(그 해 마지막 값 ÷ 직전 해 마지막 값). 점이 없는 해는 1(현금). */
+export function perYearOfCurve(
+  curve: { date: string; equity: number }[],
+  years: number[],
+): { y: number; ret: number; mapped: string }[] {
+  return years.map((y) => {
+    const end = valueAsOf(curve, `${y}-12-31`)
+    const prev = valueAsOf(curve, `${y - 1}-12-31`) ?? (curve.length ? curve[0].equity : null)
+    const has = curve.some((p) => yearOf(p.date) === y)
+    if (!has || end == null || prev == null || !(prev > 0)) return { y, ret: 1, mapped: '' }
+    return { y, ret: end / prev, mapped: '' }
+  })
+}
+
+/** 임의의 자산곡선을 `StratRow`로 접는다(매매 집계가 없는 결합·벤치 곡선용). */
+export function curveStrat(
+  label: string,
+  equity: { date: string; equity: number }[],
+  benchEq: { date: string; equity: number }[],
+  years: number[],
+  halfYear = HALF_YEAR,
+): StratRow {
+  return summarizeStrat(
+    label,
+    { equity, perYear: perYearOfCurve(equity, years), closed: 0, wins: 0 },
+    benchEq,
+    halfYear,
+  )
+}
+
+/** 단순보유 비교 행. 전략 연쇄와 **같은 구간**으로 잘라 계산한다. */
+export interface HoldRow {
+  label: string
+  curve: { date: string; equity: number }[]
+  note?: string
+}
+
+export function holdTable(title: string, rows: HoldRow[], from: string, to: string) {
+  log('')
+  log(`## ${title}`)
+  log(`비교 구간 ${from} ~ ${to} — 전략 연쇄와 겹치는 구간에서만 자른다.`)
+  log('"실제 구간"이 더 짧으면 그 벤치의 데이터가 늦게 시작한 것이며, 그만큼 직접 비교가 약해진다.')
+  log('| 비교 대상 | 총수익 | CAGR | MDD | 수익÷MDD | 실제 구간 | 비고 |')
+  log('|---|---|---|---|---|---|---|')
+  for (const r of rows) {
+    const w = r.curve.filter((e) => e.date >= from && e.date <= to)
+    if (w.length < 2) {
+      log(`| ${r.label} | — | — | — | — | 데이터 없음 | ${r.note ?? ''} |`)
+      continue
+    }
+    const p = perfOf(w)
+    log(
+      `| ${r.label} | ${f1(p.total)}% | ${f1(p.cagr)}% | ${f1(p.mdd)}% | ${p.obj?.toFixed(1) ?? '—'} | ` +
+        `${w[0].date}~${w[w.length - 1].date} | ${r.note ?? ''} |`,
+    )
+  }
+}
+
+// ---- QQQ 원화 환산 벤치 (2026-08-02 대표 추가 지시) ---------------------------
+//
+// 대표 지시: "벤치 비교에 KODEX 200만 말고 QQQ도 넣어라."
+// QQQ는 달러 자산이라 원화 성적과 그대로 비교하면 환율 변동분이 통째로 빠진다.
+// 그래서 KR 모드에서는 **QQQ(총수익 보정) × 원/달러 종가**로 원화 곡선을 만들어 비교한다.
+// 환율 결측일은 **직전 환율 이월**이다(다음 환율을 당겨오면 미래참조).
+//
+// ⚠️ 알파 판정 벤치는 바뀌지 않는다 — KR은 KODEX 200, US는 SPY다(규칙 5).
+//    QQQ는 "그 돈으로 나스닥100을 사서 들고 있었으면?"을 보여주는 **참고 행**이다.
+
+/** 달러 곡선(총수익 보정 봉) × 환율 = 원화 곡선. 환율이 아직 없는 앞 구간은 버린다. */
+export function toKrwCurve(usd: DailyBar[], fx: DailyBar[]): { date: string; equity: number }[] {
+  const fxCurve = fx.filter((b) => b.c > 0).map((b) => ({ date: b.date, equity: b.c }))
+  const out: { date: string; equity: number }[] = []
+  for (const b of usd) {
+    if (!(b.c > 0)) continue
+    const rate = valueAsOf(fxCurve, b.date) // 그 날짜 이하 마지막 환율 = 직전 이월
+    if (rate == null || !(rate > 0)) continue
+    out.push({ date: b.date, equity: b.c * rate })
+  }
+  return out
+}
+
+export const FX_KRW = 'KRW=X'
+export const FX_NOTE = '환산: Yahoo KRW=X 종가 기준 · 결측일은 직전 환율 이월'
+
+/** QQQ 원화 환산 보유 곡선. 로드 실패 시 null(비교 행만 생략하고 모드는 계속 돈다). */
+async function loadQqqKrwCurve(range = 'since:1999-01-01'): Promise<HoldRow | null> {
+  try {
+    const qqq = await fetchDaily('QQQ', range)
+    await sleep(120)
+    const fx = await fetchDaily(FX_KRW, range)
+    const curve = toKrwCurve(qqq, fx)
+    if (curve.length < 2) {
+      log(`⚠️ QQQ 원화 환산 실패 — 환율(${FX_KRW}) 구간이 겹치지 않는다. 비교 행 생략.`)
+      return null
+    }
+    return {
+      label: 'QQQ 원화 환산 보유 [참고]',
+      curve,
+      note: `${FX_NOTE} · QQQ ${qqq.length}봉 / 환율 ${fx.length}봉`,
+    }
+  } catch (e) {
+    log(`⚠️ QQQ·환율 로드 실패 — 비교 행 생략 (${String(e)})`)
+    return null
+  }
+}
+
+/** 달러 그대로의 QQQ 보유 곡선(미장 모드용 — 같은 통화라 환산 불필요). */
+async function loadQqqUsdCurve(range = 'since:1999-01-01'): Promise<HoldRow | null> {
+  try {
+    const qqq = await fetchDaily('QQQ', range)
+    if (qqq.length < 2) return null
+    return { label: 'QQQ 보유 (USD) [참고]', curve: benchCurve(qqq), note: '총수익 보정(adjclose 계수) · 환율 미반영' }
+  } catch (e) {
+    log(`⚠️ QQQ 로드 실패 — 비교 행 생략 (${String(e)})`)
+    return null
+  }
+}
+
+// ============================================================================
+// MODE=xswf — 워크포워드 + 슬롯 민감도
+// ============================================================================
+//
+// 25차에서 "상위 5 + 절대모멘텀 게이트"가 이겼다. 문제는 그 5가 **결과를 다 보고 고른 5**라는
+// 점이다. 두 가지를 본다.
+//
+//   ① 슬롯 민감도 — N=3~8 × 게이트 on/off를 전 기간에 다 돌려 표로 편다. 5 옆의 4·6이 같이
+//      좋으면 **고원**(파라미터가 아니라 현상이 있는 것), 5만 튀면 **뾰족한 봉우리**(잡음에
+//      맞춘 것)다. 봉우리면 실전에서 5를 골랐을 리도 없고, 골랐어도 못 유지한다.
+//   ② 워크포워드 — 매년 초에 **그때까지의 누적 성적(수익÷MDD)**으로 N∈{4,5,6}×게이트 중
+//      하나를 골라 그 해에 쓴다. 최소 학습 5년, 그 전에는 기본값(5+게이트)이다. 이렇게 굴린
+//      OOS 연쇄를 "사후에 고른 고정 5+게이트"·기준선과 나란히 놓는다. 둘의 격차가 곧
+//      **사후선택 프리미엄**이며, 그게 크면 25차 성적의 상당 부분은 실전에서 못 얻는다.
+
+/** 워크포워드 후보 — 25차 승자(5) 주변만 본다. 후보를 넓힐수록 선택 잡음이 커진다. */
+export interface WfCand {
+  slots: number
+  gate: boolean
+}
+export const WF_CANDS: WfCand[] = [4, 5, 6].flatMap((slots) => [false, true].map((gate) => ({ slots, gate })))
+export const WF_DEFAULT: WfCand = { slots: 5, gate: true }
+export const WF_MIN_YEARS = 5
+export const wfLabel = (c: WfCand) => `상위${c.slots}${c.gate ? '+게이트' : ''}`
+
+/** 슬롯 민감도 격자 — 5가 고원인지 보려면 양옆이 넉넉해야 한다. */
+export const SENS_SLOTS = [3, 4, 5, 6, 7, 8] as const
+
+/**
+ * 한 해의 상대 자산곡선. `rel`은 그 해 시작=1.0 배수이고, `endFactor`는 **연말 정산 근사
+ * (미청산 비중 × 매도측 비용)까지 반영한** 그 해의 이월 배수다. `runCustomChain`이 쓰는
+ * 계산과 같은 식이라, 전 연도를 이어붙이면 `runCustomChain`의 곡선과 점 단위로 일치한다.
+ */
+export interface YearCurve {
+  y: number
+  rel: { date: string; rel: number }[]
+  endFactor: number
+}
+
+/** 후보 하나를 연도별 상대곡선으로 분해한다(연쇄 산술은 `runCustomChain`과 동일). */
+export function yearCurvesOf(
+  yearly: YearSlice[],
+  runYear: (v: YearSlice) => CustomYearRun,
+  cost: CostSettings,
+  slots: number,
+  applyHaircut = true,
+): YearCurve[] {
+  const out: YearCurve[] = []
+  for (const v of yearly) {
+    if (v.syms.length < 5) {
+      out.push({ y: v.y, rel: [], endFactor: 1 })
+      continue
+    }
+    const r = runYear(v)
+    const rel = r.equity.map((e) => ({ date: e.date, rel: e.equity / cost.initialCapital }))
+    const finalEq = r.equity.length ? r.equity[r.equity.length - 1].equity : cost.initialCapital
+    const segRet = finalEq / cost.initialCapital
+    const frac = applyHaircut ? Math.min(1, Math.max(0, r.openAtEnd / Math.max(1, slots))) : 0
+    out.push({ y: v.y, rel, endFactor: segRet * (1 - frac * ((cost.feePct + cost.taxPct + cost.slippagePct) / 100)) })
+  }
+  return out
+}
+
+/** 연도별 상대곡선을 이어붙여 절대 곡선(시작 1.0)으로 만든다. */
+export function stitchYears(curves: YearCurve[]): { date: string; equity: number }[] {
+  let factor = 1
+  const out: { date: string; equity: number }[] = []
+  for (const c of curves) {
+    const base = factor
+    for (const p of c.rel) out.push({ date: p.date, equity: base * p.rel })
+    factor = base * c.endFactor
+  }
+  return out
+}
+
+export type WfTable = { cand: WfCand; years: YearCurve[] }[]
+
+/**
+ * `year`에 쓸 후보를 고른다. **`y < year`인 해만** 본다 — 선택 대상 연도와 그 이후의
+ * 성적은 어떤 형태로도 선택식에 들어가지 않는다(규칙 1). 점수는 누적 수익÷MDD다.
+ * 학습 표본(실제로 매매가 있었던 해)이 `minYears` 미만이면 사후지식 없는 기본값을 쓴다.
+ */
+export function wfPick(
+  table: WfTable,
+  year: number,
+  minYears = WF_MIN_YEARS,
+  fallback = WF_DEFAULT,
+): { pick: WfCand; score: number | null; trained: number } {
+  if (table.length === 0) return { pick: fallback, score: null, trained: 0 }
+  const trained = table[0].years.filter((c) => c.y < year && c.rel.length > 0).length
+  if (trained < minYears) return { pick: fallback, score: null, trained }
+  let best: WfCand | null = null
+  let bestScore = Number.NEGATIVE_INFINITY
+  for (const row of table) {
+    const eq = stitchYears(row.years.filter((c) => c.y < year))
+    const p = perfOf(eq)
+    // MDD가 사실상 0인 구간은 나눗셈이 성립하지 않는다 — 부호로만 순서를 준다.
+    const score = p.obj ?? (p.total > 0 ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY)
+    if (score > bestScore) {
+      bestScore = score
+      best = row.cand
+    }
+  }
+  return { pick: best ?? fallback, score: Number.isFinite(bestScore) ? bestScore : null, trained }
+}
+
+export interface WfPickRow {
+  y: number
+  pick: WfCand
+  score: number | null
+  trained: number
+  ret: number
+}
+
+export interface WfResult {
+  picks: WfPickRow[]
+  equity: { date: string; equity: number }[]
+  perYear: { y: number; ret: number; mapped: string }[]
+}
+
+/** 워크포워드 연쇄 — 해마다 `wfPick`이 고른 후보의 그 해 곡선만 이어붙인다. */
+export function runWalkForward(
+  table: WfTable,
+  years: number[],
+  minYears = WF_MIN_YEARS,
+  fallback = WF_DEFAULT,
+): WfResult {
+  const picks: WfPickRow[] = []
+  const equity: { date: string; equity: number }[] = []
+  const perYear: { y: number; ret: number; mapped: string }[] = []
+  let factor = 1
+  for (const y of years) {
+    const { pick, score, trained } = wfPick(table, y, minYears, fallback)
+    const row = table.find((t) => t.cand.slots === pick.slots && t.cand.gate === pick.gate)
+    const yc = row?.years.find((c) => c.y === y)
+    const base = factor
+    if (yc) {
+      for (const p of yc.rel) equity.push({ date: p.date, equity: base * p.rel })
+      factor = base * yc.endFactor
+    }
+    const ret = factor / base
+    picks.push({ y, pick, score, trained, ret })
+    perYear.push({ y, ret, mapped: '' })
+  }
+  return { picks, equity, perYear }
+}
+
+/**
+ * "5가 고원인가 봉우리인가" 판정. `objs[idx]`가 중심(N=5)이고 양옆이 이웃이다.
+ * 이웃 평균이 중심의 70% 이상이면 고원으로 본다 — 임계값 0.7은 자의적이며, 판정문에
+ * 비율을 그대로 찍어 읽는 사람이 다시 판단할 수 있게 남긴다.
+ */
+export function plateauness(
+  objs: (number | null)[],
+  idx: number,
+  ratioThreshold = 0.7,
+): { ratio: number | null; verdict: string } {
+  const center = objs[idx]
+  const near = [objs[idx - 1], objs[idx + 1]].filter((v): v is number => v != null)
+  if (center == null || !(center > 0) || near.length === 0)
+    return { ratio: null, verdict: '판정 불가(중심 또는 이웃 값 없음)' }
+  const mean = near.reduce((s, v) => s + v, 0) / near.length
+  const ratio = mean / center
+  return {
+    ratio,
+    verdict:
+      ratio >= ratioThreshold
+        ? '고원 — 이웃 슬롯도 비슷하게 좋다(파라미터가 아니라 현상일 가능성)'
+        : '뾰족한 봉우리 — 이웃 슬롯이 급락한다(잡음에 맞춘 것일 가능성이 높다)',
+  }
+}
+
+async function xswf() {
+  log('# MODE=xswf — 횡단면 모멘텀 워크포워드 + 슬롯 민감도')
+  log('')
+  log('25차에서 "12-1 모멘텀 상위 5 + 절대모멘텀 게이트"가 기준선을 압도했다. 그 5는 **결과를 다 보고**')
+  log('고른 값이다. 여기서는 ①옆 슬롯도 같이 좋은지(고원/봉우리) ②그때그때 골랐어도 성적이 남는지')
+  log('(워크포워드 OOS)를 본다. 둘 다 못 넘기면 25차 성적은 실전에서 재현되지 않는다.')
+  log('')
+  const { years, histories, bench } = await loadPitHistories()
+  const yearly = buildYearly(histories, years)
+  if (yearly.every((v) => v.syms.length < 5)) {
+    log('❌ 시세 로드 실패로 실행할 해가 없다 — 중단')
+    return
+  }
+  const benchEq = benchCurve(bench)
+  const qqqKrw = await loadQqqKrwCurve()
+  log(`연도별 매핑률: ${yearly.map((v) => `${v.y} ${v.mapped}`).join(' · ')}`)
+  log(`벤치 ${BENCH} 데이터 시작 ${bench[0]?.date ?? '—'} — 알파는 이 날짜 이후 겹치는 구간에서만 계산한다.`)
+
+  // ---- 1) 슬롯 민감도 -------------------------------------------------------
+  const baseChain = runSpecChain(yearly, baselineSpec, COST)
+  const rows: StratRow[] = [summarizeStrat(BASELINE_LABEL, baseChain, benchEq)]
+  const objByGate: Record<'off' | 'on', (number | null)[]> = { off: [], on: [] }
+  for (const gate of [false, true]) {
+    for (const slots of SENS_SLOTS) {
+      // 변형별 자산곡선은 이 블록 안에서만 살아 있다 — 요약 후 즉시 회수된다(메모리)
+      const chain = runCustomChain(
+        yearly,
+        (v) => simulateXsMomYear(v.hist, `${v.y}-01-01`, v.syms, COST, { slots, gate }),
+        COST,
+        slots,
+      )
+      const row = summarizeStrat(`XSM ${wfLabel({ slots, gate })}`, chain, benchEq)
+      rows.push(row)
+      objByGate[gate ? 'on' : 'off'].push(row.full.obj)
+    }
+  }
+
+  log('')
+  log('## 1) 슬롯 민감도 — N=3~8 × 게이트 on/off (전 기간)')
+  stratTable(rows)
+  baselineCrossCheck(yearly)
+
+  log('')
+  log('### 5는 고원인가 뾰족한 봉우리인가')
+  log('| 게이트 | ' + SENS_SLOTS.map((n) => `N=${n}`).join(' | ') + ' | 5 대비 이웃(4·6) 평균 | 판정 |')
+  log(`|---|${SENS_SLOTS.map(() => '---').join('|')}|---|---|`)
+  const idx5 = SENS_SLOTS.indexOf(5)
+  for (const g of ['off', 'on'] as const) {
+    const objs = objByGate[g]
+    const pl = plateauness(objs, idx5)
+    log(
+      `| ${g === 'on' ? '게이트 ON' : '게이트 OFF'} | ${objs.map((v) => v?.toFixed(1) ?? '—').join(' | ')} | ` +
+        `${pl.ratio != null ? `${(pl.ratio * 100).toFixed(0)}%` : '—'} | ${pl.verdict} |`,
+    )
+  }
+  log('(값은 **수익÷MDD**다. 5 옆이 같이 높으면 고원, 5만 솟아 있으면 그 5는 잡음에 맞춘 값이다.)')
+
+  // ---- 2) 워크포워드 --------------------------------------------------------
+  log('')
+  log(`## 2) 워크포워드 — 매년 초 N∈{4,5,6}×게이트 중 **직전까지의 누적 수익÷MDD** 1위를 채택`)
+  log(`선택은 그 해 1월 1일 **이전에 끝난 해들**만 본다. 학습 표본 ${WF_MIN_YEARS}년 미만인 초기에는`)
+  log(`사후지식 없는 기본값(${wfLabel(WF_DEFAULT)})을 쓴다 — 초기 구간에 "이미 알고 있던 정답"을 넣지 않기 위해서다.`)
+
+  const table: WfTable = WF_CANDS.map((cand) => ({
+    cand,
+    years: yearCurvesOf(
+      yearly,
+      (v) => simulateXsMomYear(v.hist, `${v.y}-01-01`, v.syms, COST, cand),
+      COST,
+      cand.slots,
+    ),
+  }))
+  const wf = runWalkForward(table, years, WF_MIN_YEARS, WF_DEFAULT)
+  const fixedRow = table.find((t) => t.cand.slots === WF_DEFAULT.slots && t.cand.gate === WF_DEFAULT.gate)!
+  const fixedEq = stitchYears(fixedRow.years)
+
+  const oosRows: StratRow[] = [
+    summarizeStrat(BASELINE_LABEL, baseChain, benchEq),
+    curveStrat(`고정 ${wfLabel(WF_DEFAULT)} (사후선택)`, fixedEq, benchEq, years),
+    curveStrat(`워크포워드 OOS (최소학습 ${WF_MIN_YEARS}년)`, wf.equity, benchEq, years),
+  ]
+  log('')
+  stratTable(oosRows)
+  log('※ 고정·워크포워드 행의 "매매(청산완료)·승률"이 0/—인 것은 **매매가 없었다는 뜻이 아니다** —')
+  log('  연도별 곡선만 남기고 매매 이력은 버리는 경로(메모리 보호)라 집계가 안 잡힌 것이다.')
+  log(`  실제 매매수는 위 민감도 표의 같은 파라미터 행(XSM ${wfLabel(WF_DEFAULT)})에서 읽는다.`)
+
+  const fixedP = oosRows[1].full
+  const oosP = oosRows[2].full
+  log('')
+  log('### 사후선택 프리미엄')
+  log(
+    `고정 ${wfLabel(WF_DEFAULT)} CAGR ${f1(fixedP.cagr)}% vs 워크포워드 OOS CAGR ${f1(oosP.cagr)}% → ` +
+      `차이 ${f1(fixedP.cagr - oosP.cagr)}%p.`,
+  )
+  log('이 차이가 "결과를 보고 5를 고른 덕"이다. 실전에서는 OOS 쪽이 실제로 손에 쥐었을 성적에 더 가깝다.')
+  log('OOS가 기준선을 못 이기면, 25차의 승리는 파라미터 사후선택으로 상당 부분 설명된다.')
+
+  log('')
+  log('### 연도별 선택 이력 (그 해에 실제로 무엇을 골랐나)')
+  log('| 연도 | 채택 | 학습 표본(년) | 선택 시점 누적 수익÷MDD | 그 해 수익 |')
+  log('|---|---|---|---|---|')
+  for (const p of wf.picks)
+    log(
+      `| ${p.y} | ${wfLabel(p.pick)}${p.trained < WF_MIN_YEARS ? ' (기본값)' : ''} | ${p.trained} | ` +
+        `${p.score != null ? p.score.toFixed(1) : '—'} | ${f1((p.ret - 1) * 100)}% |`,
+    )
+  const switches = wf.picks.filter((p, i) => i > 0 && wfLabel(p.pick) !== wfLabel(wf.picks[i - 1].pick)).length
+  log('')
+  log(`파라미터 교체 횟수 ${switches}회 — 잦으면 선택 규칙 자체가 잡음을 쫓고 있다는 신호다.`)
+
+  const [from, to] = spanOf(baseChain.equity)
+  const holds: HoldRow[] = [{ label: `${BENCH} 보유 (KODEX 200 · 알파 판정 벤치)`, curve: benchEq, note: '총수익 보정' }]
+  if (qqqKrw) holds.push(qqqKrw)
+  holdTable('3) 단순보유 비교 행', holds, from, to)
+  log('')
+  log('⚠️ QQQ 행은 **참고**다. 알파(규칙 5) 판정 벤치는 국내 전략이므로 KODEX 200을 유지한다 —')
+  log('   통화·시장·세제가 다른 자산을 판정 기준으로 바꾸면 "실력"과 "환율·시장 선택"이 뒤섞인다.')
+
+  perYearTable(oosRows)
+  const winners = verdictTable(rows)
+  multipleTestingNote(rows.length - 1, winners)
+
+  log('')
+  log('## 이 실험의 구조적 한계')
+  log(`· 워크포워드 후보가 ${WF_CANDS.length}개(N∈{4,5,6}×게이트)뿐이다. 후보를 25차 승자 주변으로 좁힌 것`)
+  log('  자체가 약한 사후지식이다 — 진짜 OOS라면 2000년에 그 범위를 알 수 없었다. 여기 OOS 성적도')
+  log('  그만큼은 낙관적으로 읽어야 한다.')
+  log('· 선택 점수가 누적 수익÷MDD 하나뿐이라 초반 몇 해의 우연이 오래 남는다(고착). 교체 횟수를')
+  log('  같이 보는 이유다.')
+  log('· 연 단위 선택이라 그 해 안에서는 파라미터를 못 바꾼다. 실제 운용은 더 자주 흔들릴 수 있다.')
+  log('· 민감도 표는 같은 데이터에 12개 변형을 돌린 결과다 — 그중 최고를 골라 읽는 순간 곡선맞춤이다.')
+  unverifiedNote()
+  disclaimer()
+}
+
+// ============================================================================
+// MODE=usxsmom — 미장 교차 실행 (24차의 역질문)
+// ============================================================================
+//
+// 24차에서 **추세돌파 계열은 미국에서 전패**했다(같은 조건식이 KR에서는 알파를 내고 US에서는
+// 못 냈다). 그렇다면 역질문이 남는다 — **횡단면 모멘텀은 미국에서도 되는가?**
+//   · 된다면: 25차 결과가 한국 표본 특유의 잡음이 아니라는 방증이 하나 붙는다.
+//   · 안 된다면: 25차 성적은 "한국 대형주 20종목·26년"이라는 한 표본에만 있는 것이다.
+// 어느 쪽이든 결론이 나오는 실험이라 돌릴 가치가 있다.
+//
+// 유니버스는 `src/features/backtest/usPitUniverse.ts`(그 해 시총 상위 20 [추정])를 **수정 없이**
+// import한다. 비용은 MODE=uspit과 같은 값을 쓴다(수수료 0.1% · 매도 거래세 0 · 슬리피지 0.1%) —
+// spec-backtest.entry.ts의 COST_US 정의를 그대로 옮긴 것이며 그 파일은 건드리지 않았다.
+
+/** MODE=uspit의 COST_US 사본. 미국은 매도 거래세가 없다(KR 0.15% → 0). 수수료 0.1%는 [추정]. */
+export const COST_US: CostSettings = { initialCapital: 10_000_000, feePct: 0.1, taxPct: 0, slippagePct: 0.1 }
+export const BENCH_US = 'SPY'
+
+/** 24차 미장 수익률 1위 추세 조합 — 미장 기준선으로 같은 유니버스에서 재실행한다. */
+export const US_TREND = { ma: 10, hb: 20, xm: 80, buf: 2 } as const
+export const US_TREND_LABEL = `미장 추세 기준선 MA${US_TREND.ma}×신고${US_TREND.hb}→${US_TREND.xm}선·버퍼${US_TREND.buf}%`
+
+export function usTrendSpec(symbols: string[]): StrategySpec {
+  return {
+    version: SPEC_VERSION,
+    id: 'idea-lab-us-trend',
+    name: US_TREND_LABEL,
+    source: '24차 uspit 수익률 1위',
+    universe: {
+      markets: ['KOSPI', 'KOSDAQ'], // symbols가 있으면 엔진이 markets를 쓰지 않는다(conditionScreen)
+      excludeAdministrative: true,
+      excludeSuspended: true,
+      excludeLiquidation: true,
+      excludePreferred: true,
+      excludeEtf: true,
+      symbols,
+    },
+    entry: {
+      op: 'and',
+      nodes: [
+        c(`${US_TREND.ma}일선돌파`, { kind: 'maCross', period: US_TREND.ma, dir: 'above' }),
+        c(`${US_TREND.hb}일신고가`, { kind: 'highBreak', days: US_TREND.hb }),
+      ],
+    },
+    ranking: { by: 'tradingValue', dir: 'desc' },
+    exits: [{ kind: 'maBreak', maPeriod: US_TREND.xm, pct: US_TREND.buf }],
+    sizing: { maxPositions: MAX_POSITIONS, mode: 'equalSlot' },
+    execution: { timing: 'sameClose', orderType: 'market' },
+    regime: null,
+  }
+}
+
+/**
+ * 미국 연도별 유니버스 슬라이스. 그 시점 티커 → 조회 티커 매핑은 `resolveUsTicker`가 한다
+ * (재사용 티커는 매핑 거부 = 정직한 실패). 그 해 6월 30일 이전 상장분만 편입하는 규칙은
+ * KR `buildYearly`와 동일하게 맞춘다 — 두 시장 표를 나란히 읽으려면 규칙이 같아야 한다.
+ */
+export function buildYearlyUs(histories: Record<string, DailyBar[]>, years: number[]): YearSlice[] {
+  return years.map((y) => {
+    const codes = usPitCodes(y)
+    const syms: string[] = []
+    for (const cd of codes) {
+      const r = resolveUsTicker(cd, (s) => !!histories[s]?.length)
+      if (!r) continue
+      if ((histories[r][0]?.date ?? '9999') > `${y}-06-30`) continue
+      if (!syms.includes(r)) syms.push(r)
+    }
+    const end = `${y}-12-31`
+    const hist: Record<string, DailyBar[]> = {}
+    for (const s of syms) hist[s] = histories[s].filter((b) => b.date <= end)
+    return { y, syms, hist, mapped: `${syms.length}/${codes.length}` }
+  })
+}
+
+async function loadUsPitHistories(range = 'since:1999-01-01') {
+  const years = US_PIT_YEARS
+  const union = US_PIT_UNION
+  const histories: Record<string, DailyBar[]> = {}
+  const failed: string[] = []
+  for (const ticker of union) {
+    try {
+      const bars = await fetchDaily(ticker, range)
+      if (bars.length >= 200) histories[ticker] = bars
+      else failed.push(ticker)
+    } catch {
+      failed.push(ticker) // 상폐 티커는 Yahoo 404 — 정상적인 결과다
+    }
+    await sleep(120)
+  }
+  log(`시세 로드 ${Object.keys(histories).length}/${union.length} · 실패(상폐·데이터 부족) ${failed.length}`)
+  if (failed.length) {
+    const shown = failed.slice(0, 25).map((t) => `${t}(${US_COMPANY_NAMES[t]?.split(' —')[0] ?? '?'})`)
+    log(`실패 티커: ${shown.join(', ')}${failed.length > 25 ? ` … 외 ${failed.length - 25}개` : ''}`)
+    log('  ↑ 이들이 빠지는 것이 곧 잔존 생존편향이다 — 연도별 매핑률로 크기를 잰다.')
+  }
+  const bench = await fetchDaily(BENCH_US, range)
+  return { years, histories, bench }
+}
+
+async function usxsmom() {
+  log('# MODE=usxsmom — 횡단면 모멘텀 미장 교차 실행 (24차의 역질문)')
+  log('')
+  log('24차에서 추세돌파 계열은 미국에서 전패했다. 같은 규칙을 미국 시총 상위20 [추정] 유니버스에')
+  log('그대로 옮겼을 때 **횡단면 모멘텀은 알파를 내는가**를 본다. 미국에서도 되면 25차 결과가')
+  log('한국 표본 특유의 잡음이 아니라는 방증이 되고, 안 되면 25차는 한 표본에만 있는 성적이다.')
+  log('')
+  log(`⚠️ ${US_PIT_SOURCE_NOTE}`)
+  log(
+    `비용: 수수료 ${COST_US.feePct}% · 거래세 ${COST_US.taxPct}%(미국은 매도 거래세 없음) · ` +
+      `슬리피지 ${COST_US.slippagePct}% [추정] — MODE=uspit과 같은 값이다.`,
+  )
+  log('⚠️ 환율 미반영 — 전 구간 USD 기준 수익률이다. 원화 환산 시 원/달러 변동이 그대로 더해진다.')
+  log('')
+
+  const { years, histories, bench } = await loadUsPitHistories()
+  const yearly = buildYearlyUs(histories, years)
+  if (yearly.every((v) => v.syms.length < 5)) {
+    log('❌ 시세 로드 실패로 실행할 해가 없다 — 중단')
+    return
+  }
+  const benchEq = benchCurve(bench)
+  const qqqUsd = await loadQqqUsdCurve()
+  log(`연도별 매핑률: ${yearly.map((v) => `${v.y} ${v.mapped}`).join(' · ')}`)
+  log('매핑률이 100%가 아닌 만큼이 상폐·재사용 티커로 빠진 표본이다 — 그 구간 성적은 실제보다 후하다.')
+  log(`벤치 ${BENCH_US} 데이터 시작 ${bench[0]?.date ?? '—'} — 알파는 이 날짜 이후 겹치는 구간에서만 계산한다.`)
+
+  // 기준선(rows[0])은 **미장 추세 기준선**이다 — 판정은 "미장에서 추세 대비 모멘텀"이다.
+  const trendChain = runSpecChain(yearly, usTrendSpec, COST_US)
+  const rows: StratRow[] = [summarizeStrat(US_TREND_LABEL, trendChain, benchEq)]
+  for (const slots of [4, 5, 6]) {
+    for (const gate of [false, true]) {
+      const chain = runCustomChain(
+        yearly,
+        (v) => simulateXsMomYear(v.hist, `${v.y}-01-01`, v.syms, COST_US, { slots, gate }),
+        COST_US,
+        slots,
+      )
+      rows.push(summarizeStrat(`XSM ${wfLabel({ slots, gate })}`, chain, benchEq))
+    }
+  }
+
+  log('')
+  log('## 성적 (미국 연도별 상위20 교체 유니버스 · 알파는 vs SPY)')
+  stratTable(rows)
+
+  const [from, to] = spanOf(trendChain.equity)
+  const holds: HoldRow[] = [
+    { label: `${BENCH_US} 보유 (알파 판정 벤치)`, curve: benchEq, note: '총수익 보정(adjclose 계수)' },
+  ]
+  if (qqqUsd) holds.push(qqqUsd)
+  holdTable('단순보유 비교 행 (같은 통화 — 환산 불필요)', holds, from, to)
+
+  // ---- 판정: 미국에서 xsmom 알파가 양(+)인가 --------------------------------
+  const xsRows = rows.slice(1)
+  const posFull = xsRows.filter((r) => (r.alphaFull ?? -1) > 0)
+  const posBoth = xsRows.filter((r) => (r.alphaA ?? -1) > 0 && (r.alphaB ?? -1) > 0)
+  log('')
+  log('## 판정 — 미국에서 횡단면 모멘텀 알파가 양(+)인가')
+  log(`| 항목 | 결과 |`)
+  log('|---|---|')
+  log(`| 변형 수 | ${xsRows.length} |`)
+  log(`| 전 구간 알파 > 0 | ${posFull.length}/${xsRows.length} (${posFull.map((r) => r.label).join(', ') || '없음'}) |`)
+  log(`| 전·후반 **모두** 알파 > 0 | ${posBoth.length}/${xsRows.length} (${posBoth.map((r) => r.label).join(', ') || '없음'}) |`)
+  log(
+    `| 미장 추세 기준선 알파 | ${pctOrDash(rows[0].alphaFull)} (24차 "추세는 미국에서 전패" 재현 여부를 여기서 확인한다) |`,
+  )
+  log('')
+  if (posBoth.length === 0) {
+    log('→ **미국에서는 전·후반 모두 알파를 낸 변형이 없다.** 25차 한국 결과는 이 표본 밖으로')
+    log('   넘어가지 않는다고 읽어야 한다 — 시장 교차 검증에서 떨어진 것이다.')
+  } else {
+    log(`→ **${posBoth.length}개 변형이 전·후반 모두 알파 양(+)이다.** 추세돌파가 미국에서 전패했던 것과 대비되며,`)
+    log('   횡단면 모멘텀이 시장을 건너 살아남는다는 방증이 하나 붙는다. 다만 아래 한계를 함께 읽는다.')
+  }
+
+  const winners = verdictTable(rows)
+  perYearTable(rows)
+  multipleTestingNote(rows.length - 1, winners)
+
+  log('')
+  log('## 이 실험의 구조적 한계')
+  log('· 유니버스가 연 20종목이라 "상위 4~6"은 상위 20~30% 분위다. 학계의 상위 10% 분위 모멘텀보다')
+  log('  신호가 훨씬 묽다 — 알파가 안 나와도 "미국에서 모멘텀이 죽었다"가 아니라 "이 표본에서는')
+  log('  분위가 안 갈린다"일 수 있다.')
+  log('· 미국 대형주 상위 20은 서로 상관이 매우 높다(같은 지수·같은 매크로). 분산 효과가 작아')
+  log('  KR 결과와 직접 비교할 때 유니버스 성격 차이를 감안해야 한다.')
+  log('· 비용 0.1%는 국내 증권사 해외주식 수수료 [추정]이며 환전 스프레드·최소수수료가 빠져 있다.')
+  log('· 상폐 종목은 가격 부재로 빠진다 — 매핑률로 크기를 드러냈을 뿐 편향이 제거된 것은 아니다.')
+  log('· 배당은 adjclose 계수로 OHLC에 반영했지만 **미국 배당세(원천징수 15%)는 반영하지 않았다** —')
+  log('  실제 세후 수익은 이보다 낮다.')
+  unverifiedNote()
+  disclaimer({ segmentExit: true })
+}
+
+// ============================================================================
+// MODE=combo — 기준선 + 횡단면 모멘텀 반반 결합
+// ============================================================================
+//
+// 두 전략이 **서로 다른 때에 벌면** 섞었을 때 수익은 평균으로 가되 낙폭은 평균보다 줄어든다.
+// 기준선(MA25×신고10→80선)은 추세 추종이고 xsmom(상위5+게이트)은 횡단면 랭킹이라 신호원이
+// 다르다 — 실제로 상관이 낮은지, 낮다면 낙폭이 얼마나 완화되는지를 잰다.
+//
+// 결합 방식: 월 첫 거래일에 두 슬리브 가중을 목표치로 되돌리고, 달 안에서는 각자 표류한다.
+// **일수익률 가중 합성**이라 미래참조가 들어갈 자리가 없다(가중 결정에 쓰는 정보는 날짜뿐).
+// 리밸런스 비용은 반영하지 않았다 — 슬리브 간 이체를 0원으로 본 낙관적 가정이다(아래 한계).
+
+export const COMBO_WEIGHTS = [0.75, 0.5, 0.25] as const
+export const COMBO_XSMOM: WfCand = { slots: 5, gate: true }
+
+async function combo() {
+  log('# MODE=combo — 기준선 + 횡단면 모멘텀 반반 결합')
+  log('')
+  log(`슬리브 A = ${BASELINE_LABEL}(추세 추종) · 슬리브 B = XSM ${wfLabel(COMBO_XSMOM)}(횡단면 랭킹).`)
+  log('월 첫 거래일에 두 슬리브 가중을 목표치로 되돌린다. 신호원이 다르면 수익은 평균으로 가되')
+  log('낙폭은 평균보다 줄어야 한다 — 그게 결합의 유일한 존재 이유다. 안 줄면 섞을 이유가 없다.')
+  log('')
+  const { years, histories, bench } = await loadPitHistories()
+  const yearly = buildYearly(histories, years)
+  if (yearly.every((v) => v.syms.length < 5)) {
+    log('❌ 시세 로드 실패로 실행할 해가 없다 — 중단')
+    return
+  }
+  const benchEq = benchCurve(bench)
+  const qqqKrw = await loadQqqKrwCurve()
+  log(`연도별 매핑률: ${yearly.map((v) => `${v.y} ${v.mapped}`).join(' · ')}`)
+
+  const chainA = runSpecChain(yearly, baselineSpec, COST)
+  const chainB = runCustomChain(
+    yearly,
+    (v) => simulateXsMomYear(v.hist, `${v.y}-01-01`, v.syms, COST, COMBO_XSMOM),
+    COST,
+    COMBO_XSMOM.slots,
+  )
+
+  const rows: StratRow[] = [
+    summarizeStrat(`A 단독 · ${BASELINE_LABEL}`, chainA, benchEq),
+    summarizeStrat(`B 단독 · XSM ${wfLabel(COMBO_XSMOM)}`, chainB, benchEq),
+  ]
+  const blends = COMBO_WEIGHTS.map((wA) => ({
+    wA,
+    curve: blendCurves(chainA.equity, chainB.equity, wA),
+  }))
+  for (const b of blends)
+    rows.push(
+      curveStrat(
+        `결합 A${(b.wA * 100).toFixed(0)}:B${((1 - b.wA) * 100).toFixed(0)}${b.wA === 0.5 ? ' ★' : ' [참고]'}`,
+        b.curve,
+        benchEq,
+        years,
+      ),
+    )
+
+  log('')
+  log('## 성적 — 단독 vs 결합')
+  stratTable(rows)
+  log('(★ = 대표 지시 기본안 50:50. 25/75·75/25는 가중 민감도를 보기 위한 참고 행이다.)')
+  log('※ 결합 행의 "매매·승률"이 0/—인 것은 매매가 없다는 뜻이 아니라, 결합이 **두 슬리브 곡선의**')
+  log('  합성이라 매매 원장이 한쪽에 귀속되지 않기 때문이다. 매매수는 A·B 단독 행에서 읽는다.')
+
+  // ---- 상관계수 -------------------------------------------------------------
+  const { r, n } = monthlyCorrelation(chainA.equity, chainB.equity)
+  log('')
+  log('## 두 슬리브 월수익률 상관계수')
+  log(`ρ = ${r != null ? r.toFixed(3) : '—'} (공통 월 ${n}개)`)
+  if (r != null) {
+    log(
+      r < 0.3
+        ? '→ 상관이 낮다. 신호원이 실제로 다르게 작동했다는 뜻이며, 결합의 낙폭 완화 효과가 클 조건이다.'
+        : r < 0.7
+          ? '→ 상관이 중간이다. 완화 효과는 있으나 제한적이다.'
+          : '→ 상관이 높다. 사실상 같은 것을 두 번 사는 셈이라 섞는 이득이 거의 없다.',
+    )
+  }
+  log('⚠️ 상관은 **평균적인 값**이다. 위기 구간에서는 대부분의 롱 전략 상관이 1에 붙는다 —')
+  log('   정작 낙폭이 필요한 순간에 분산이 사라진다는 뜻이며, 아래 연도별 낙폭표에서 확인한다.')
+
+  // ---- 낙폭 곡선 비교 -------------------------------------------------------
+  const half = blends.find((b) => b.wA === 0.5)!
+  const mddA = rows[0].full.mdd
+  const mddB = rows[1].full.mdd
+  const mddC = perfOf(half.curve).mdd
+  const worstSolo = Math.min(mddA, mddB)
+  log('')
+  log('## 낙폭 완화 폭 (최심 MDD)')
+  log('| 곡선 | 전 구간 MDD |')
+  log('|---|---|')
+  log(`| A 단독 | ${f1(mddA)}% |`)
+  log(`| B 단독 | ${f1(mddB)}% |`)
+  log(`| 결합 50:50 | ${f1(mddC)}% |`)
+  log('')
+  log(
+    `더 깊었던 단독(${f1(worstSolo)}%) 대비 결합의 완화 폭 = ${f1(mddC - worstSolo)}%p · ` +
+      `두 단독 평균(${f1((mddA + mddB) / 2)}%) 대비 = ${f1(mddC - (mddA + mddB) / 2)}%p.`,
+  )
+  log('두 단독 **평균보다** 얕아야 진짜 분산 효과다. 단순히 더 깊은 쪽보다 얕은 것은')
+  log('"덜 나쁜 쪽을 절반 섞었으니 당연한" 산술이라 분산의 증거가 아니다.')
+
+  log('')
+  log('### 연도별 최대 낙폭 (그 해 안의 고점 기준)')
+  log('| 연도 | A 단독 | B 단독 | 결합 50:50 | 결합 − 두 단독 평균 |')
+  log('|---|---|---|---|---|')
+  for (const y of years) {
+    const a = yearMaxDrawdown(chainA.equity, y)
+    const b = yearMaxDrawdown(chainB.equity, y)
+    const cmb = yearMaxDrawdown(half.curve, y)
+    const gap = a != null && b != null && cmb != null ? f1(cmb - (a + b) / 2) : '—'
+    if (a == null && b == null && cmb == null) continue
+    log(
+      `| ${y} | ${a != null ? `${f1(a)}%` : '—'} | ${b != null ? `${f1(b)}%` : '—'} | ` +
+        `${cmb != null ? `${f1(cmb)}%` : '—'} | ${gap}%p |`,
+    )
+  }
+  log('마지막 열이 음수인 해가 결합이 실제로 도움이 된 해다. 양수인 해가 섞여 있다면 그 해에는')
+  log('두 슬리브가 같이 무너졌다는 뜻이다.')
+
+  const [from, to] = spanOf(chainA.equity)
+  const holds: HoldRow[] = [{ label: `${BENCH} 보유 (KODEX 200 · 알파 판정 벤치)`, curve: benchEq, note: '총수익 보정' }]
+  if (qqqKrw) holds.push(qqqKrw)
+  holdTable('단순보유 비교 행', holds, from, to)
+  log('')
+  log('⚠️ QQQ 행은 **참고**다. 알파(규칙 5) 판정 벤치는 KODEX 200을 유지한다.')
+
+  perYearTable(rows)
+  const winners = verdictTable(rows)
+  multipleTestingNote(rows.length - 1, winners)
+
+  log('')
+  log('## 이 실험의 구조적 한계')
+  log('· **리밸런스 비용 미반영.** 월마다 두 슬리브 사이에서 자금을 옮기려면 실제로는 한쪽을 팔고')
+  log('  다른 쪽을 사야 한다(수수료·거래세·슬리피지). 그 비용을 0으로 본 낙관적 상한이며, 월 12회')
+  log('  ×26년이면 누적 차이가 작지 않다.')
+  log('· 두 슬리브를 **각각 전액 투자 기준**으로 돌린 뒤 곡선을 합성했다. 실제로는 자본을 반씩 나눠')
+  log('  운용하므로 슬롯당 금액이 절반이 되고, 최소 주문 단위·단주 반올림에서 미세한 차이가 난다.')
+  log('· 가중 3종(75/50/25)을 같이 돌렸다 — 그중 가장 좋아 보이는 가중을 골라 읽으면 그것도 곡선맞춤이다.')
+  log('  기본안은 대표 지시대로 50:50이며, 나머지는 민감도 확인용이다.')
+  log('· 상관계수는 전 구간 평균이라 위기 구간의 상관 급등을 감추지 못한다 — 연도별 낙폭표를 같이 본다.')
+  unverifiedNote()
+  disclaimer()
+}
+
+// ============================================================================
 
 const MODES: Record<string, () => Promise<void>> = {
   seasonal,
@@ -2559,6 +3520,9 @@ const MODES: Record<string, () => Promise<void>> = {
   xsmom,
   volbrk,
   rsirev,
+  xswf,
+  usxsmom,
+  combo,
 }
 
 // 런처(scripts/idea-lab.mjs)만 IDEA_LAB_RUN=1을 넘긴다. 테스트가 이 모듈을
