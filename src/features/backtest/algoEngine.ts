@@ -15,6 +15,26 @@
 import type { DailyBar, EquityPoint, SimEvent, SimResult, SimSettings, Trade } from './types'
 import { computeMetrics, initBenchmark } from './metrics'
 
+// ---- 결과 귀속(identity) ---------------------------------------------------
+// 한 엔진을 여러 모델이 공유한다(같은 기법 · 다른 종목). 그래서 결과의
+// strategyId를 엔진 이름으로 하드코딩하면 "이 결과가 어느 모델 것인지"를 잘못
+// 말하게 되고 기록이 섞인다. 호출자(portfolio.ts)가 모델 id·이름을 넘긴다.
+// 기본값은 원저 세팅 모델 — 인자를 안 넘기는 기존 호출(테스트 등)의 결과가
+// 한 자리도 바뀌지 않도록 종전 값을 그대로 유지한다.
+export interface AlgoIdentity {
+  strategyId: string
+  strategyName: string
+}
+
+const IB_DEFAULT_IDENTITY: AlgoIdentity = {
+  strategyId: 'infinite-buying',
+  strategyName: '라오어 무한매수법 (근사)',
+}
+const VR_DEFAULT_IDENTITY: AlgoIdentity = {
+  strategyId: 'value-rebalancing',
+  strategyName: '라오어 VR 밸류 리밸런싱 (근사)',
+}
+
 // ---- 무한매수법 (Infinite Buying) -----------------------------------------
 // v1 근사: 원금을 T분할(기본 40). 사이클 첫날 1회분 매수, 이후 매일
 //  · 정액매수 0.5회분 — 항상 종가 체결 (원저의 "큰수 LOC")
@@ -35,6 +55,7 @@ export function runInfiniteBuying(
   startIdx: number,
   params: InfiniteBuyingParams,
   settings: SimSettings,
+  identity: AlgoIdentity = IB_DEFAULT_IDENTITY,
 ): SimResult {
   const n = bars.length
   if (startIdx < 1 || startIdx >= n - 1) throw new Error('시뮬레이션 시작 시점이 데이터 범위를 벗어났습니다')
@@ -168,8 +189,8 @@ export function runInfiniteBuying(
   }
 
   return {
-    strategyId: 'infinite-buying',
-    strategyName: '라오어 무한매수법 (근사)',
+    strategyId: identity.strategyId,
+    strategyName: identity.strategyName,
     trades,
     equity,
     metrics: computeMetrics(equity, trades, settings.initialCapital, daysHolding),
@@ -199,6 +220,7 @@ export function runValueRebalancing(
   startIdx: number,
   params: VRParams,
   settings: SimSettings,
+  identity: AlgoIdentity = VR_DEFAULT_IDENTITY,
 ): SimResult {
   const n = bars.length
   if (startIdx < 1 || startIdx >= n - 1) throw new Error('시뮬레이션 시작 시점이 데이터 범위를 벗어났습니다')
@@ -288,8 +310,8 @@ export function runValueRebalancing(
 
   // VR은 라운드트립 개념이 없어 trades는 비운다(지표의 승률·매매횟수는 '—').
   return {
-    strategyId: 'value-rebalancing',
-    strategyName: '라오어 VR 밸류 리밸런싱 (근사)',
+    strategyId: identity.strategyId,
+    strategyName: identity.strategyName,
     trades: [],
     equity,
     metrics: computeMetrics(equity, [], settings.initialCapital, daysHolding),

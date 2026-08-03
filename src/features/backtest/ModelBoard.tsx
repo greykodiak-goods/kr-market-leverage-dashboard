@@ -53,6 +53,9 @@ export function ModelBoard({ configs, board, enrollments, busy, progress, onOpen
                 <strong>{meta.short}</strong>
                 <span className="bt-card-stage">
                   {enr ? `🧪 모의운용 ${enr.enrolledAt}~` : '백테스트 단계'}
+                  {/* 승격 관문을 통과한 적 없는 모델은 목록에서부터 구분한다 —
+                      "검증 통과 프리셋"으로 오인되지 않게(규칙 3·4). */}
+                  {meta.unvalidated && ' · 🔬 기법 재현 · 검증 전'}
                 </span>
               </div>
               <div className="bt-card-universe">
