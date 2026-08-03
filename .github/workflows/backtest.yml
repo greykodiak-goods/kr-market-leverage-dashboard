@@ -54,10 +54,32 @@ jobs:
             overfit:*) SCRIPT="overfit-lab.mjs"; RUN_MODE="${RAW#overfit:}";;
             value:*) SCRIPT="value-lab.mjs"; RUN_MODE="${RAW#value:}";;
             plateau:*) SCRIPT="plateau-lab.mjs"; RUN_MODE="${RAW#plateau:}";;
+            # `uspit:`를 `us:`보다 **위에** 둔다 — case는 위에서부터 매칭이라 순서가 뒤바뀌면
+            # `us:*`가 `uspit:collect`를 삼켜 us-lab이 MODE=pit:collect로 돈다(조용한 오작동).
+            uspit:*) SCRIPT="us-pit-collect.mjs"; RUN_MODE="${RAW#uspit:}";;
             us:*) SCRIPT="us-lab.mjs"; RUN_MODE="${RAW#us:}";;
           esac
           [ -n "${{ inputs.grid }}" ] && export PIT_GRID="${{ inputs.grid }}"
           env MODE="$RUN_MODE" NODE_OPTIONS=--max-old-space-size=4096 node "scripts/$SCRIPT"
+
+      # ---- uspit:* — 실측 PIT 유니버스 산출물 커밋 ----
+      # 수집기가 전량 실패하면 스스로 exit 1 하므로 여기까지 오지 않는다(빈 파일 커밋 방지).
+      - name: 미장 실측 유니버스 커밋
+        if: startsWith(inputs.mode, 'uspit:')
+        run: |
+          set -eu
+          DIR=public/data/us-pit
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # `git diff --quiet`는 추적되지 않는 파일을 못 본다 — status --porcelain이 신규·수정 둘 다 잡는다.
+          if [ -z "$(git status --porcelain -- "$DIR")" ]; then
+            echo "변경 없음 — 커밋 스킵"
+            exit 0
+          fi
+          git add "$DIR"
+          git commit -m "data(us-pit): 미장 실측 PIT 유니버스 수집 [skip ci]"
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git push origin "HEAD:$GITHUB_REF_NAME"
 
       # ---- MODE=presets — 프리셋 사전계산 (화면 로딩 시간 단축용 산출물) ----
       - name: 프리셋 사전계산
