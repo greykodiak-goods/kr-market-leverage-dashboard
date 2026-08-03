@@ -1,0 +1,102 @@
+{
+ "version": 1,
+ "inception": "2026-07-31",
+ "updatedAt": "2026-08-03T07:10:00.861Z",
+ "lastRunDate": "2026-08-03",
+ "strategies": {
+  "ma20-all80": {
+   "id": "ma20-all80",
+   "label": "MA20×신고20·느린청산 (승자)",
+   "inception": "2026-07-31",
+   "initialCapital": 20000000,
+   "cash": 20000000,
+   "positions": [],
+   "trades": [],
+   "realizedPnl": 0,
+   "equityHistory": [
+    {
+     "date": "2026-08-03",
+     "equity": 20000000
+    }
+   ]
+  },
+  "ma15-all80": {
+   "id": "ma15-all80",
+   "label": "MA15×신고20·느린청산 (도전자)",
+   "inception": "2026-07-31",
+   "initialCapital": 20000000,
+   "cash": 20000000,
+   "positions": [],
+   "trades": [],
+   "realizedPnl": 0,
+   "equityHistory": [
+    {
+     "date": "2026-08-03",
+     "equity": 20000000
+    }
+   ]
+  },
+  "ma20-kosdaq": {
+   "id": "ma20-kosdaq",
+   "label": "MA20×신고20 (코스닥40·저MDD)",
+   "inception": "2026-07-31",
+   "initialCapital": 20000000,
+   "cash": 20000000,
+   "positions": [],
+   "trades": [],
+   "realizedPnl": 0,
+   "equityHistory": [
+    {
+     "date": "2026-08-03",
+     "equity": 20000000
+    }
+   ]
+  },
+  "ma20-surge": {
+   "id": "ma20-surge",
+   "label": "MA20×급증×신고20 (방어형)",
+   "inception": "2026-07-31",
+   "initialCapital": 20000000,
+   "cash": 20000000,
+   "positions": [],
+   "trades": [],
+   "realizedPnl": 0,
+   "equityHistory": [
+    {
+     "date": "2026-08-03",
+     "equity": 20000000
+    }
+   ]
+  },
+  "bench-hold": {
+   "id": "bench-hold",
+   "label": "KODEX200 보유 (대조군)",
+   "inception": "2026-07-31",
+   "initialCapital": 20000000,
+   "cash": 20000000,
+   "positions": [],
+   "trades": [],
+   "realizedPnl": 0,
+   "equityHistory": [
+    {
+     "date": "2026-08-03",
+     "equity": 20000000
+    }
+   ]
+  }
+ },
+ "phases": {
+  "2026-08-01": {
+   "sells": true
+  },
+  "2026-08-02": {
+   "sells": true
+  },
+  "2026-08-03": {
+   "sells": true,
+   "confirm": true,
+   "buys": true,
+   "close": true
+  }
+ }
+}

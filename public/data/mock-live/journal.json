@@ -1,0 +1,1329 @@
+[
+ {
+  "at": "2026-08-01T03:41:11.200Z",
+  "date": "2026-08-01",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": true
+ },
+ {
+  "at": "2026-08-01T16:35:23.113Z",
+  "date": "2026-08-02",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": false
+ },
+ {
+  "at": "2026-08-01T16:57:47.334Z",
+  "date": "2026-08-02",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": false
+ },
+ {
+  "at": "2026-08-02T00:32:16.704Z",
+  "date": "2026-08-02",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": true
+ },
+ {
+  "at": "2026-08-02T00:38:15.315Z",
+  "date": "2026-08-02",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": true
+ },
+ {
+  "at": "2026-08-02T00:43:56.805Z",
+  "date": "2026-08-02",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": true
+ },
+ {
+  "at": "2026-08-02T02:00:15.042Z",
+  "date": "2026-08-02",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": true
+ },
+ {
+  "at": "2026-08-02T02:07:39.132Z",
+  "date": "2026-08-02",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": true
+ },
+ {
+  "at": "2026-08-02T02:23:24.280Z",
+  "date": "2026-08-02",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": true
+ },
+ {
+  "at": "2026-08-02T06:33:23.981Z",
+  "date": "2026-08-02",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": true
+ },
+ {
+  "at": "2026-08-02T06:44:31.154Z",
+  "date": "2026-08-02",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": true
+ },
+ {
+  "at": "2026-08-02T06:53:18.767Z",
+  "date": "2026-08-02",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": true
+ },
+ {
+  "at": "2026-08-02T07:31:11.828Z",
+  "date": "2026-08-02",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": true
+ },
+ {
+  "at": "2026-08-02T07:36:08.173Z",
+  "date": "2026-08-02",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": true
+ },
+ {
+  "at": "2026-08-02T08:57:22.093Z",
+  "date": "2026-08-02",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": true
+ },
+ {
+  "at": "2026-08-02T23:30:24.575Z",
+  "date": "2026-08-03",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": true
+ },
+ {
+  "at": "2026-08-03T01:37:19.025Z",
+  "date": "2026-08-03",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": true
+ },
+ {
+  "at": "2026-08-03T01:49:01.921Z",
+  "date": "2026-08-03",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": true
+ },
+ {
+  "at": "2026-08-03T02:14:47.708Z",
+  "date": "2026-08-03",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": true
+ },
+ {
+  "at": "2026-08-03T02:21:33.241Z",
+  "date": "2026-08-03",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": true
+ },
+ {
+  "at": "2026-08-03T05:18:50.571Z",
+  "date": "2026-08-03",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": true
+ },
+ {
+  "at": "2026-08-03T05:25:31.834Z",
+  "date": "2026-08-03",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": true
+ },
+ {
+  "at": "2026-08-03T05:30:12.091Z",
+  "date": "2026-08-03",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": true
+ },
+ {
+  "at": "2026-08-03T05:36:09.796Z",
+  "date": "2026-08-03",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": true
+ },
+ {
+  "at": "2026-08-03T05:46:07.110Z",
+  "date": "2026-08-03",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": true
+ },
+ {
+  "at": "2026-08-03T06:20:25.303Z",
+  "date": "2026-08-03",
+  "runner": "investing-daemon",
+  "phase": "buys",
+  "mode": "dryRun",
+  "server": "https://mockapi.kiwoom.com",
+  "halted": false,
+  "capital": {
+   "perStrategyKrw": 20000000,
+   "slots": 10,
+   "accountCashCapKrw": 100000000,
+   "accountCashEstimated": false,
+   "accountTotalAssetKrw": 0
+  },
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [
+     "069500.KS"
+    ],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "orders": [
+   {
+    "strategyId": "bench-hold",
+    "side": "buy",
+    "symbol": "069500.KS",
+    "code": "069500",
+    "qty": 202,
+    "price": 98700,
+    "reason": "대조군 최초 매수 후 보유",
+    "kind": "매수",
+    "apiId": "kt10000",
+    "dryRun": true,
+    "at": "2026-08-03T06:20:25.302Z",
+    "plan": {
+     "side": "buy",
+     "symbol": "069500",
+     "qty": 202,
+     "price": 98700,
+     "orderType": "limit",
+     "amountKrw": 19937400
+    },
+    "gate": {
+     "ok": false,
+     "reason": "1회 주문액 한도 초과 — 19,937,400원 > 15,000,000원",
+     "amountKrw": 19937400,
+     "dailyCount": 0,
+     "limits": {
+      "maxOrderAmountKrw": 15000000,
+      "maxDailyOrders": 30
+     }
+    },
+    "sent": false,
+    "blocked": true,
+    "ok": false
+   }
+  ],
+  "ledgerApplied": 0,
+  "ledgerRejected": [],
+  "skipped": [],
+  "warnings": [],
+  "excluded": []
+ },
+ {
+  "at": "2026-08-03T06:21:38.774Z",
+  "date": "2026-08-03",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": true
+ },
+ {
+  "at": "2026-08-03T06:42:48.070Z",
+  "date": "2026-08-03",
+  "runner": "investing-daemon",
+  "phase": "preload",
+  "asOf": "2026-07-31",
+  "sells": [],
+  "signals": {
+   "ma20-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma15-all80": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-kosdaq": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "ma20-surge": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   },
+   "bench-hold": {
+    "entries": [],
+    "exits": [],
+    "engineOpen": 0,
+    "ledgerOpen": 0
+   }
+  },
+  "skipped": [],
+  "excluded": [],
+  "tokenWarm": true
+ },
+ {
+  "at": "2026-08-03T07:10:00.946Z",
+  "date": "2026-08-03",
+  "runner": "investing-daemon",
+  "phase": "close",
+  "mode": "dryRun",
+  "tradingDay": true,
+  "notes": [
+   "프리로드 2026-07-31 기준 · 청산 0건 · 시세 79종목",
+   "프리로드 2026-07-31 기준 · 청산 0건 · 시세 79종목",
+   "프리로드 2026-07-31 기준 · 청산 0건 · 시세 79종목",
+   "프리로드 2026-07-31 기준 · 청산 0건 · 시세 79종목",
+   "프리로드 2026-07-31 기준 · 청산 0건 · 시세 79종목",
+   "프리로드 2026-07-31 기준 · 청산 0건 · 시세 79종목",
+   "프리로드 2026-07-31 기준 · 청산 0건 · 시세 79종목",
+   "프리로드 2026-07-31 기준 · 청산 0건 · 시세 79종목",
+   "프리로드 2026-07-31 기준 · 청산 0건 · 시세 79종목",
+   "프리로드 2026-07-31 기준 · 청산 0건 · 시세 79종목",
+   "프리로드 2026-07-31 기준 · 청산 0건 · 시세 79종목",
+   "프리로드 2026-07-31 기준 · 청산 0건 · 시세 79종목"
+  ],
+  "summary": [
+   {
+    "id": "ma20-all80",
+    "equity": 20000000,
+    "totalPct": 0,
+    "alphaPct": 0,
+    "positions": 0,
+    "closedTrades": 0,
+    "winRatePct": null
+   },
+   {
+    "id": "ma15-all80",
+    "equity": 20000000,
+    "totalPct": 0,
+    "alphaPct": 0,
+    "positions": 0,
+    "closedTrades": 0,
+    "winRatePct": null
+   },
+   {
+    "id": "ma20-kosdaq",
+    "equity": 20000000,
+    "totalPct": 0,
+    "alphaPct": 0,
+    "positions": 0,
+    "closedTrades": 0,
+    "winRatePct": null
+   },
+   {
+    "id": "ma20-surge",
+    "equity": 20000000,
+    "totalPct": 0,
+    "alphaPct": 0,
+    "positions": 0,
+    "closedTrades": 0,
+    "winRatePct": null
+   },
+   {
+    "id": "bench-hold",
+    "equity": 20000000,
+    "totalPct": 0,
+    "alphaPct": null,
+    "positions": 0,
+    "closedTrades": 0,
+    "winRatePct": null
+   }
+  ],
+  "totals": {
+   "equity": 100000000,
+   "initialCapital": 100000000,
+   "totalPct": 0
+  },
+  "dataNote": "장부는 **주문 전송가를 체결가로 가정**한다(지정가 미체결·부분체결·실제 체결가 차이 미반영). 시세는 Yahoo 일봉(비공식·총수익 보정)이고 15:20 종가는 미확정값이다. 동결 유니버스라 생존편향이 있고 환율·거래세 외 세금은 반영하지 않는다. 실체결 대조는 2단계 게이트에서 한다."
+ }
+]
