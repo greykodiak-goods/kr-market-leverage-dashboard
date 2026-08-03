@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'MODE (예: pit1010 / idea:seasonal — idea: 접두면 idea-lab.mjs / short:all — short: 접두면 shortterm-lab.mjs / presets = 프리셋 사전계산+커밋)'
+        description: 'MODE (예: pit1010 / idea:seasonal — idea: 접두면 idea-lab.mjs / short:all — short: 접두면 shortterm-lab.mjs / overfit:overfit — overfit: 접두면 overfit-lab.mjs(과최적화 채점, 네트워크 불필요) / presets = 프리셋 사전계산+커밋)'
         type: string
         required: true
       grid:
@@ -50,6 +50,7 @@ jobs:
           case "$RAW" in
             idea:*) SCRIPT="idea-lab.mjs"; RUN_MODE="${RAW#idea:}";;
             short:*) SCRIPT="shortterm-lab.mjs"; RUN_MODE="${RAW#short:}";;
+            overfit:*) SCRIPT="overfit-lab.mjs"; RUN_MODE="${RAW#overfit:}";;
           esac
           [ -n "${{ inputs.grid }}" ] && export PIT_GRID="${{ inputs.grid }}"
           env MODE="$RUN_MODE" NODE_OPTIONS=--max-old-space-size=4096 node "scripts/$SCRIPT"
