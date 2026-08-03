@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'MODE (예: pit1010 / idea:seasonal — idea: 접두면 idea-lab.mjs / short:all — short: 접두면 shortterm-lab.mjs / overfit:overfit — overfit: 접두면 overfit-lab.mjs(과최적화 채점, 네트워크 불필요) / value:all — value: 접두면 value-lab.mjs(밸류·퀄리티 18변형, 시세·재무는 커밋된 정본·야후는 벤치만) / presets = 프리셋 사전계산+커밋)'
+        description: 'MODE (예: pit1010 / idea:seasonal — idea: 접두면 idea-lab.mjs / short:all — short: 접두면 shortterm-lab.mjs / overfit:overfit — overfit: 접두면 overfit-lab.mjs(과최적화 채점, 네트워크 불필요) / value:all — value: 접두면 value-lab.mjs(밸류·퀄리티 18변형, 시세·재무는 커밋된 정본·야후는 벤치만) / plateau:plateau — plateau: 접두면 plateau-lab.mjs(39차 고원 격자 405셀 · 시세는 KRX 커밋 정본·야후는 벤치·벽만 · plateau:quick 축소판 / plateau:offline 네트워크 불필요 / plateau:selftest 합성) / presets = 프리셋 사전계산+커밋)'
         type: string
         required: true
       grid:
@@ -52,6 +52,7 @@ jobs:
             short:*) SCRIPT="shortterm-lab.mjs"; RUN_MODE="${RAW#short:}";;
             overfit:*) SCRIPT="overfit-lab.mjs"; RUN_MODE="${RAW#overfit:}";;
             value:*) SCRIPT="value-lab.mjs"; RUN_MODE="${RAW#value:}";;
+            plateau:*) SCRIPT="plateau-lab.mjs"; RUN_MODE="${RAW#plateau:}";;
           esac
           [ -n "${{ inputs.grid }}" ] && export PIT_GRID="${{ inputs.grid }}"
           env MODE="$RUN_MODE" NODE_OPTIONS=--max-old-space-size=4096 node "scripts/$SCRIPT"
