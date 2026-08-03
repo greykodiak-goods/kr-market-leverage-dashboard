@@ -2,7 +2,8 @@
 #
 # 실행 장소 규칙:
 #   - 여기(GHA 러너, 2코어·7GB): Yahoo 일봉만 쓰는 모드 전부 — pit1010(+wide)·fullmar·decade·
-#     slots·tune·usprobe·idea:seasonal/monthpat/pairprem 등. 사업 서버 무접촉·메모리 여유.
+#     slots·tune·usprobe·idea:seasonal/monthpat/pairprem·**us:\*(41차 미장 랩 — 미장 시세는
+#     KRX Open API 밖이라 전량 Yahoo다)** 등. 사업 서버 무접촉·메모리 여유.
 #   - EC2(awning-ops deploy-investing.yml): 국내 IP·키움 키가 필요한 것만 — pityear(KRX)·
 #     probe:flow·backfill:flow(키움 수급)·모의투자 데몬.
 #   - 랭킹 수집과 재검증은 **분리돼 있다**: EC2 MODE=pityear가 KRX 실측 랭킹을
@@ -17,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'MODE (예: pit1010 / idea:seasonal — idea: 접두면 idea-lab.mjs / short:all — short: 접두면 shortterm-lab.mjs / overfit:overfit — overfit: 접두면 overfit-lab.mjs(과최적화 채점, 네트워크 불필요) / value:all — value: 접두면 value-lab.mjs(밸류·퀄리티 18변형, 시세·재무는 커밋된 정본·야후는 벤치만) / plateau:plateau — plateau: 접두면 plateau-lab.mjs(39차 고원 격자 405셀 · 시세는 KRX 커밋 정본·야후는 벤치·벽만 · plateau:quick 축소판 / plateau:offline 네트워크 불필요 / plateau:selftest 합성) / presets = 프리셋 사전계산+커밋)'
+        description: 'MODE (예: pit1010 / idea:seasonal — idea: 접두면 idea-lab.mjs / short:all — short: 접두면 shortterm-lab.mjs / overfit:overfit — overfit: 접두면 overfit-lab.mjs(과최적화 채점, 네트워크 불필요) / value:all — value: 접두면 value-lab.mjs(밸류·퀄리티 18변형, 시세·재무는 커밋된 정본·야후는 벤치만) / plateau:plateau — plateau: 접두면 plateau-lab.mjs(39차 고원 격자 405셀 · 시세는 KRX 커밋 정본·야후는 벤치·벽만 · plateau:quick 축소판 / plateau:offline 네트워크 불필요 / plateau:selftest 합성) / us:all — us: 접두면 us-lab.mjs(41차 미장 탐색 48변형: 27차 재현 8 + 다섯 계열 분위 격자 40 · 시세는 전량 야후 · us:xsmom 재현+모멘텀 분위 16 / us:quantile 계열 분위 40 / us:quick 스모크 4 / us:selftest 합성·네트워크 불필요) / presets = 프리셋 사전계산+커밋)'
         type: string
         required: true
       grid:
@@ -53,6 +54,7 @@ jobs:
             overfit:*) SCRIPT="overfit-lab.mjs"; RUN_MODE="${RAW#overfit:}";;
             value:*) SCRIPT="value-lab.mjs"; RUN_MODE="${RAW#value:}";;
             plateau:*) SCRIPT="plateau-lab.mjs"; RUN_MODE="${RAW#plateau:}";;
+            us:*) SCRIPT="us-lab.mjs"; RUN_MODE="${RAW#us:}";;
           esac
           [ -n "${{ inputs.grid }}" ] && export PIT_GRID="${{ inputs.grid }}"
           env MODE="$RUN_MODE" NODE_OPTIONS=--max-old-space-size=4096 node "scripts/$SCRIPT"
