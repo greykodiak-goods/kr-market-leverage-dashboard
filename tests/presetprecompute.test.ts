@@ -28,8 +28,10 @@ import {
   COMBO_WEIGHTS,
   DEFAULT_COST,
   GOLD_WEIGHTS,
+  KRXCAL_QQQ_WALL,
   MOM_SLOT_CHOICES,
   PRESETS,
+  PRESET_BANNER,
   normalizeGoldW,
 } from '../src/features/backtest/presets'
 import { augmentPresetLabel, mddChip, tenYearChip } from '../src/features/backtest/precomputed'
@@ -218,7 +220,14 @@ function fakeResult(over: Partial<PitChainResult> = {}): PitChainResult {
   eq('프리셋 수', payload.presets.length, 2)
   check('스키마 버전 존재', typeof payload.schema === 'number')
   check('비용 전제 기록', payload.cost.initialCapital === DEFAULT_COST.initialCapital)
-  check('[추정] 고지 포함', payload.note.includes('[추정]'))
+  // 34차 이후 note는 "[추정] 목록"이 아니라 **실측 유니버스**를 말한다. 대신 남아 있는 한계
+  // (가격 생존편향·2010 이전 부재)와 규칙 4 고지가 반드시 붙어야 한다.
+  check('실측 유니버스 명시', payload.note.includes('실측'))
+  check('가격 생존편향 고지', payload.note.includes('생존편향'))
+  check('2010 이전 부재 고지', payload.note.includes('2010'))
+  check('매수 권유 아님 고지', payload.note.includes('매수 권유가 아니다'))
+  check('벽이 판정 벤치가 아님을 명시', payload.note.includes('판정 벤치가 아니다'))
+  eq('walls 기본값은 빈 배열', payload.walls.length, 0)
 
   // JSON 왕복 — 화면이 fetch로 읽는 형태 그대로
   const round = JSON.parse(JSON.stringify(payload))
@@ -236,69 +245,77 @@ section('④ presets.ts 불변식 — 화면과 사전계산이 같은 배열을
   eq('id 중복 없음', new Set(ids).size, ids.length)
   check('모든 프리셋에 라벨', PRESETS.every((p) => p.label.length > 0))
 
-  // 2026-08-02 대표 지시로 추가한 고수익 프리셋 2개
-  const hi = PRESETS.find((p) => p.id === 'xsmom-3-gate')
-  check('xsmom-3-gate 존재', hi != null)
-  check('xsmom-3-gate는 모멘텀·상위3·게이트 on', hi?.kind === 'momentum' && hi.mom.slots === 3 && hi.mom.gate === true)
-  const combo25 = PRESETS.find((p) => p.id === 'combo-25-75')
-  check('combo-25-75 존재', combo25 != null)
-  check('combo-25-75는 결합·wA 0.25', combo25?.kind === 'combo' && combo25.wA === 0.25)
+  // ── 34차 전면 교체(2026-08-03) ────────────────────────────────────────────
+  // 구 10종은 전부 [추정] 목록(PIT1010) 위에서 고른 것이라 33차에서 무효가 됐다.
+  // 화면 목록에 그중 하나라도 되살아나면 서로 다른 전제의 수치를 같은 이름으로 비교하게 된다.
+  eq('프리셋은 34차 판정 통과 2종뿐', PRESETS.length, 2)
+  eq('프리셋 id는 실측 2종', ids.slice().sort().join(','), 'krx-xsmom3g,krx-xsmom5g')
+  for (const dead of ['pit-base', 'pit-top', 'pit-maxret', 'pit-maxratio', 'xsmom-5-gate', 'xsmom-5', 'xsmom-3-gate', 'combo-50', 'combo-25-75', 'calmar-max'])
+    check(`구 프리셋 ${dead}는 목록에 없다`, !ids.includes(dead))
 
-  // 2026-08-03 대표 지시로 추가한 32차 칼마 1위
-  const cal = PRESETS.find((p) => p.id === 'calmar-max')
-  check('calmar-max 존재', cal != null)
-  check(
-    'calmar-max는 결합·wA 0.5·상위5+게이트·시장게이트 on·금 20%',
-    cal?.kind === 'combo' &&
-      cal.wA === 0.5 &&
-      cal.mom.slots === 5 &&
-      cal.mom.gate === true &&
-      cal.marketGate === true &&
-      normalizeGoldW(cal.goldW) === 0.2,
-  )
-  const calNote = cal?.kind === 'combo' ? cal.note : ''
-  // 구간이 다르다는 사실은 이 프리셋에서 **가장 잘 오해되는 지점**이라 note에서 강제한다
-  check('calmar-max: 곡선 시작(2004-11) 명시', calNote.includes('2004-11'))
-  check('calmar-max: 닷컴 붕괴 제외 명시', calNote.includes('닷컴'))
-  check('calmar-max: 리밸런스 비용 미반영 경고', calNote.includes('리밸런스 비용 미반영'))
-  check('calmar-max: 달러 노출 의존 경고', calNote.includes('달러'))
-  check('calmar-max: 국내 대체품·세제 미반영 경고', calNote.includes('세제'))
-  // 게이트 달의 청산·재매수 비용이 반영된다는 사실을 note가 밝혀야 한다
-  // (예전 커브 마스크 구현에서는 이 비용이 빠져 있었고, 그게 폐기 사유였다)
-  check('calmar-max: 게이트 달 청산 비용 반영 명시', calNote.includes('청산'))
-  check('calmar-max: 커브 마스크 시절의 "실측치와 불일치" 문구가 남아 있지 않다', !calNote.includes('일치하지 않는다'))
-  check('calmar-max: 매수 권유 아님 명시', calNote.includes('매수 권유가 아니다'))
-  // 금 슬리브가 붙은 프리셋은 반드시 시장게이트 옵션 유무와 무관하게 비중이 선택지 안이어야 한다
-  for (const p of PRESETS) {
-    if (p.kind !== 'combo') continue
-    check(
-      `${p.id}: 금 비중이 화면 선택지 안에 있다`,
-      (GOLD_WEIGHTS as readonly number[]).includes(normalizeGoldW(p.goldW)),
-      `goldW=${p.goldW}`,
-    )
-  }
+  const p3 = PRESETS.find((p) => p.id === 'krx-xsmom3g')
+  const p5 = PRESETS.find((p) => p.id === 'krx-xsmom5g')
+  check('krx-xsmom3g 존재', p3 != null)
+  check('krx-xsmom5g 존재', p5 != null)
+  check('krx-xsmom3g는 모멘텀·상위3·게이트 on', p3?.kind === 'momentum' && p3.mom.slots === 3 && p3.mom.gate === true)
+  check('krx-xsmom5g는 모멘텀·상위5·게이트 on', p5?.kind === 'momentum' && p5.mom.slots === 5 && p5.mom.gate === true)
 
   // 화면에서 고를 수 없는 값이 프리셋에 들어가면 셀렉트가 빈칸이 된다(2026-08-02 실제로 걸림)
   for (const p of PRESETS) {
     if (p.kind === 'momentum' || p.kind === 'combo')
       check(`${p.id}: 슬롯이 화면 선택지 안에 있다`, (MOM_SLOT_CHOICES as readonly number[]).includes(p.mom.slots), `slots=${p.mom.slots}`)
-    if (p.kind === 'combo')
+    if (p.kind === 'combo') {
       check(`${p.id}: 가중이 화면 선택지 안에 있다`, (COMBO_WEIGHTS as readonly number[]).includes(p.wA), `wA=${p.wA}`)
+      check(`${p.id}: 금 비중이 화면 선택지 안에 있다`, (GOLD_WEIGHTS as readonly number[]).includes(normalizeGoldW(p.goldW)), `goldW=${p.goldW}`)
+    }
   }
 
-  // 규칙 4 — 낙폭·다중검정 경고가 note에 남아 있어야 한다(수익률만 보고 고르는 것을 막는 장치)
+  // ── note 필수 병기(규칙 3·4) ──────────────────────────────────────────────
+  // 34차의 결론은 "판정은 통과했지만 벽은 못 넘었다"이다. 그 사실이 note에서 빠지면
+  // 가장 덜 나쁜 칸을 성공처럼 제시하는 것이 되고, 그것이 33차가 무너진 경로다.
+  const NOTE_MUST: [string, string][] = [
+    ['34차 실측 표기', '34차'],
+    ['칼마 수치', '칼마'],
+    ['CAGR 수치', 'CAGR'],
+    ['MDD 수치', 'MDD'],
+    ['전반 알파', '전반'],
+    ['후반 알파', '후반'],
+    ['QQQ 벽을 넘지 못했다', '넘지 못했다'],
+    ['QQQ 벽 칼마 0.670', '0.670'],
+    ['35변형 다중검정', '35변형'],
+    ['우연 가능성 병기', '우연'],
+    ['17년 표본', '17년'],
+    ['가격 생존편향', '생존편향'],
+    ['상폐 23종목', '23종목'],
+    ['2010 이전 부재', '2010년 이전'],
+    ['매수 권유 아님', '매수 권유가 아니다'],
+  ]
   for (const p of PRESETS) {
-    if (p.kind === 'condition') continue
-    check(`${p.id}: note에 MDD 경고`, p.note.includes('MDD') || p.note.includes('낙폭'))
-    check(`${p.id}: note에 과최적화·다중검정 경고`, p.note.includes('과최적화') || p.note.includes('다중'))
+    const note = p.kind === 'condition' ? (p.note ?? '') : p.note
+    for (const [what, needle] of NOTE_MUST)
+      check(`${p.id}: note에 ${what}`, note.includes(needle), `'${needle}' 없음`)
+    check(`${p.id}: note에 낙폭 경고`, note.includes('MDD') || note.includes('낙폭'))
+    check(`${p.id}: note에 과최적화·다중검정 경고`, note.includes('과최적화') || note.includes('다중'))
   }
-  const hiNote = hi?.kind === 'momentum' ? hi.note : ''
-  check('xsmom-3-gate: 집중도 위험 경고', hiNote.includes('집중도'))
-  check('xsmom-3-gate: 매수 권유 아님 명시', hiNote.includes('매수 권유가 아니다'))
-  const c25Note = combo25?.kind === 'combo' ? combo25.note : ''
-  check('combo-25-75: 곡선맞춤 경고', c25Note.includes('곡선맞춤'))
-  check('combo-25-75: 리밸런스 비용 미반영 경고', c25Note.includes('리밸런스 비용 미반영'))
-  check('combo-25-75: 기본안 50:50 명시', c25Note.includes('50:50'))
+
+  // 각 프리셋의 고유 실측 수치가 서로 뒤바뀌지 않았는지(복사 실수 방지)
+  const n3 = p3?.kind === 'momentum' ? p3.note : ''
+  const n5 = p5?.kind === 'momentum' ? p5.note : ''
+  check('krx-xsmom3g: 칼마 0.335·CAGR 19.3%·MDD −57.4%', n3.includes('0.335') && n3.includes('19.3') && n3.includes('57.4'))
+  check('krx-xsmom3g: 전반 +0.7%p · 후반 +15.4%p', n3.includes('+0.7%p') && n3.includes('+15.4%p'))
+  check('krx-xsmom5g: 칼마 0.260·CAGR 13.9%·MDD −53.5%', n5.includes('0.260') && n5.includes('13.9') && n5.includes('53.5'))
+  check('krx-xsmom5g: 전반 +2.5%p · 후반 +2.7%p', n5.includes('+2.5%p') && n5.includes('+2.7%p'))
+  check('krx-xsmom3g: 집중도 위험 경고', n3.includes('집중도'))
+
+  // 상시 안내 배너 — 화면 상단에 항상 뜬다(프리셋을 고르지 않아도 보여야 한다)
+  check('배너: KRX 실측 기반 명시', PRESET_BANNER.includes('KRX 실측'))
+  check('배너: 34차 명시', PRESET_BANNER.includes('34차'))
+  check('배너: 33차 사후선택 편향 명시', PRESET_BANNER.includes('33차') && PRESET_BANNER.includes('편향'))
+
+  // 34차 벽 상수 — 화면이 사전계산 없이 강등할 때 쓰는 값
+  eq('벽 칼마 상수', KRXCAL_QQQ_WALL.calmar, 0.67)
+  eq('벽 CAGR 상수', KRXCAL_QQQ_WALL.cagrPct, 20.3)
+  check('벽 MDD 상수는 음수', KRXCAL_QQQ_WALL.mddPct < 0)
 
   // presets.ts는 UI 무의존이어야 한다 — React가 들어오면 스크립트 번들이 오염된다
   const src = readFileSync(join(ROOT, 'src', 'features', 'backtest', 'presets.ts'), 'utf8')

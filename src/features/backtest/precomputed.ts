@@ -20,17 +20,35 @@ import type { CostSettings } from './conditionScreen'
 import type { StrategyKind } from './presets'
 import type { EquityRow } from './EquityChart'
 
-/** 굽는 쪽이 지금 쓰는 산출물 스키마 버전(2 = 표준 성과 지표 세트 추가). */
-export const PRECOMPUTE_SCHEMA = 2
+/** 굽는 쪽이 지금 쓰는 산출물 스키마 버전(3 = 참고 벽(walls) 추가 · KRX 실측 유니버스). */
+export const PRECOMPUTE_SCHEMA = 3
 
 /**
  * 화면이 **읽을 수 있는** 스키마 버전들. 모르는 버전이면 없는 셈 친다(우아한 강등).
  *
- * 1 → 2는 **필드 추가만** 했으므로 옛 산출물도 그대로 읽는다. 다만 schema 1 파일에는
- * 신규 지표(변동성·샤프·소르티노·최장 낙폭 기간·손익비·PF)가 없으므로 그 카드는
- * `undefined`로 남아 화면에서 '—'가 된다 — 없는 값을 0으로 채우지 않는다(규칙 3).
+ * 1 → 2 → 3은 전부 **필드 추가만** 했으므로 옛 산출물도 그대로 읽는다. 다만 schema 1 파일에는
+ * 신규 지표(변동성·샤프·소르티노·최장 낙폭 기간·손익비·PF)가, schema 1·2 파일에는 참고 벽(walls)이
+ * 없으므로 그 자리는 `undefined`로 남아 화면에서 '—'이거나 상수로 강등된다 —
+ * 없는 값을 0으로 채우지 않는다(규칙 3).
  */
-export const SUPPORTED_PRECOMPUTE_SCHEMAS: readonly number[] = [1, 2]
+export const SUPPORTED_PRECOMPUTE_SCHEMAS: readonly number[] = [1, 2, 3]
+
+/**
+ * 참고 벽 — 같은 구간 단순보유를 **다시 재서** 나란히 놓는 값(34차 규약).
+ * 옮겨 적은 수치가 아니라 산출물이 그 실행에서 계산한 것이다.
+ * ⚠️ 참고이지 알파 판정 벤치가 아니다(판정 벤치는 규칙 5대로 KODEX 200).
+ */
+export interface PrecomputedWall {
+  /** 벽 종류 — 화면이 찾아 쓰는 키 */
+  kind: 'qqqKrw' | 'benchKr'
+  label: string
+  /** CAGR ÷ |MDD| */
+  calmar: number
+  cagrPct: number
+  mddPct: number
+  startDate: string
+  endDate: string
+}
 
 /** [날짜, 자산(원), 벤치마크(원)] */
 export type CurveTuple = [string, number, number]
@@ -83,6 +101,8 @@ export interface PrecomputedFile {
   cost: CostSettings
   note: string
   presets: PrecomputedPreset[]
+  /** 참고 벽(schema 3~). 옛 산출물에는 없다 → undefined */
+  walls?: PrecomputedWall[]
 }
 
 export interface PrecomputedIndex {
@@ -94,6 +114,8 @@ export interface PrecomputedIndex {
   /** 이 산출물의 스키마 버전 — 화면이 "옛 산출물이라 신규 지표가 없다"를 말할 때 쓴다 */
   schema: number
   byId: Record<string, PrecomputedPreset>
+  /** 참고 벽(schema 3~) — 없으면 undefined이고 화면은 34차 상수로 강등한다 */
+  walls?: PrecomputedWall[]
 }
 
 /**
@@ -119,6 +141,18 @@ export function toPrecomputedIndex(raw: unknown): PrecomputedIndex | null {
     note: typeof f.note === 'string' ? f.note : '',
     schema: f.schema,
     byId,
+    // 모르는 모양의 벽은 통째로 버린다 — 반쪽짜리 수치를 화면에 올리느니 상수로 강등하는 편이 낫다.
+    walls: Array.isArray(f.walls)
+      ? f.walls.filter(
+          (w): w is PrecomputedWall =>
+            w != null &&
+            typeof w === 'object' &&
+            (w.kind === 'qqqKrw' || w.kind === 'benchKr') &&
+            Number.isFinite(w.calmar) &&
+            Number.isFinite(w.cagrPct) &&
+            Number.isFinite(w.mddPct),
+        )
+      : undefined,
   }
 }
 

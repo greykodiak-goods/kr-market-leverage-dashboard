@@ -315,9 +315,11 @@ function fakeResult(over: Partial<PitChainResult> = {}): PitChainResult {
 }
 
 {
-  eq('굽는 쪽 스키마는 2', PRECOMPUTE_SCHEMA, 2)
+  // 3 = 참고 벽(walls) 추가(34차). 필드 추가만이라 옛 산출물도 계속 읽힌다.
+  eq('굽는 쪽 스키마는 3', PRECOMPUTE_SCHEMA, 3)
   check('화면은 1도 읽는다', SUPPORTED_PRECOMPUTE_SCHEMAS.includes(1))
   check('화면은 2도 읽는다', SUPPORTED_PRECOMPUTE_SCHEMAS.includes(2))
+  check('화면은 3도 읽는다', SUPPORTED_PRECOMPUTE_SCHEMAS.includes(3))
 
   const row = summarizePreset({ id: 'x-1', label: '테스트', kind: 'momentum' }, fakeResult(), 10_000_000)
   for (const k of ['volAnnPct', 'sharpe', 'sortino', 'maxDdDays', 'maxDdRecovered', 'payoffRatio', 'profitFactor'])
@@ -333,13 +335,13 @@ function fakeResult(over: Partial<PitChainResult> = {}): PitChainResult {
   eq('결합 PF null', combo.profitFactor, null)
   check('결합도 곡선 지표는 있다', combo.sharpe != null)
 
-  // ---- 화면 로더 왕복: schema 2 ----
+  // ---- 화면 로더 왕복: 현행 스키마 ----
   const payload = buildPayload([row, combo], '2026-08-01', '2026-08-02T00:00:00.000Z', DEFAULT_COST)
-  eq('payload 스키마 2', payload.schema, 2)
+  eq('payload 스키마 3', payload.schema, 3)
   check('note에 무위험 0% 가정 명시', payload.note.includes('무위험수익률 0%'))
   const idx2 = toPrecomputedIndex(JSON.parse(JSON.stringify(payload)))
-  check('schema 2 파일을 읽는다', idx2 != null)
-  eq('읽은 스키마 기록', idx2?.schema, 2)
+  check('현행 스키마 파일을 읽는다', idx2 != null)
+  eq('읽은 스키마 기록', idx2?.schema, 3)
   close('왕복 후 샤프 유지', idx2?.byId['x-1'].sharpe as number, row.sharpe as number, 1e-12)
   eq('왕복 후 결합 PF는 null 유지', idx2?.byId['c-1'].profitFactor, null)
 

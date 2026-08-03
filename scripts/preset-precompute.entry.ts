@@ -25,7 +25,7 @@
 //
 // 실행: node scripts/preset-precompute.mjs   (GHA backtest.yml MODE=presets)
 
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { CostSettings } from '../src/features/backtest/conditionScreen'
 import { annualize, runPitChained, yearsBetween, type PitChainResult } from '../src/features/backtest/pitChain'
@@ -38,7 +38,14 @@ import {
   type Curve,
 } from '../src/features/backtest/marketGate'
 import { perfStatFields, type PerfStatFields } from '../src/features/backtest/perfStats'
-import { PIT_UNION, PIT_YEARS, pitCodes } from '../src/features/backtest/pitUniverse'
+// 유니버스는 **KRX 실측 파일**에서 온다 — [추정] 목록(pitUniverse)이 아니다(34차).
+// 화면(SpecSimulator)과 **같은 파생 함수**(deriveKrxUniverse)를 쓰므로 두 쪽 유니버스가 갈릴 수 없다.
+import { KRX_PIT_PATH, parseKrxPitUniverse } from '../src/features/backtest/krxPitUniverse'
+import {
+  DEFAULT_KRX_TOP_N,
+  deriveKrxUniverse,
+  type DerivedKrxUniverse,
+} from '../src/features/backtest/krxUniverseSource'
 import {
   BENCH_SYMBOL,
   DEFAULT_COST,
@@ -61,9 +68,10 @@ const OUT_PATH = join(root, 'public', 'data', 'presets-precomputed.json')
 /**
  * 산출물 스키마 버전 — 화면이 모르는 버전이면 무시하고 우아하게 강등한다.
  * 2 (2026-08-02): 표준 성과 지표 세트(변동성·샤프·소르티노·최장 낙폭 기간·손익비·PF) **추가**.
- * 필드 추가만이라 화면(precomputed.ts)은 schema 1 산출물도 계속 읽는다(신규 지표만 '—').
+ * 3 (2026-08-03): 참고 벽(walls — 같은 구간 QQQ 원화·KODEX 200 단순보유) **추가**.
+ * 전부 필드 추가만이라 화면(precomputed.ts)은 schema 1·2 산출물도 계속 읽는다(없는 값은 '—'·상수 강등).
  */
-export const PRECOMPUTE_SCHEMA = 2
+export const PRECOMPUTE_SCHEMA = 3
 
 /**
  * 화면의 `getDailyHistory(sym, BACKTEST_HISTORY_RANGE)`와 **같은 구간**을 받는다.
@@ -76,7 +84,19 @@ export const PRECOMPUTE_SCHEMA = 2
  * `runPitChained`/`runXsmomChained`가 PIT_YEARS(2000~) 단위로 돌기 때문에 1999년 봉은
  * 지표 창을 채우는 데만 쓰인다.
  */
+/**
+ * 화면(`getDailyHistory(sym, BACKTEST_HISTORY_RANGE)` = `max1999`)과 **같은 구간**을 유지한다.
+ * 여기서 구간이 어긋나면 사전계산 수치와 화면의 "직접 다시 돌리기" 수치가 달라진다.
+ *
+ * 34차로 유니버스가 **KRX 실측 2010~**이 되면서 앞 구간은 대부분 워밍업으로만 쓰이지만,
+ * 범위를 좁히지 않았다 — 12-1 모멘텀은 첫 리밸런스(2010년 1월) 시점에 **12개월 앞선 봉**을
+ * 요구하므로 여유 없이 자르면 첫 해만 조용히 다르게 돈다. 넉넉한 워밍업이 그 위험보다 싸다.
+ * **백테스트 시작(곡선 시작)은 2010년**이다(실행 연도가 실측 유니버스로 고정되기 때문).
+ */
 const RANGE = 'since:1999-01-01'
+
+/** 참고 벽 — 34차가 "어떤 조합도 넘지 못했다"고 판정한 기준선. 판정 벤치가 아니다(규칙 5). */
+const QQQ_SYMBOL = 'QQQ'
 
 function log(msg: string) {
   console.log(msg)
@@ -169,6 +189,8 @@ export interface PrecomputedFile {
   cost: CostSettings
   note: string
   presets: PrecomputedPreset[]
+  /** 참고 벽(schema 3~) — 같은 구간 단순보유를 다시 잰 값. 판정 벤치가 아니다. */
+  walls: WallStats[]
 }
 
 /** `YYYY-MM-DD`에서 n년 뺀 문자열. 문자열 비교로만 쓰므로 2/29 같은 날도 사전순으로 안전하다. */
@@ -228,6 +250,42 @@ export function drawdownExtremes(curve: { equity: number }[]): {
 /** 부분집합 곡선에서 다시 잰 MDD(%) — 다운샘플이 낙폭을 얕게 만들지 않았는지 검증용 */
 export function mddPctOf(curve: { equity: number }[]): number {
   return drawdownExtremes(curve).mddPct
+}
+
+// ---- 참고 벽 (34차) ---------------------------------------------------------
+
+/**
+ * 같은 구간 단순보유의 칼마·CAGR·MDD. **옮겨 적지 않고 다시 잰다** —
+ * 구간이 다른 칼마를 나란히 놓으면 그 비교는 거짓이기 때문이다(34차 규약).
+ *
+ * 규칙 1과의 관계: 이미 확정된 가격 곡선의 사후 요약이며, 판정·신호로 되먹임되지 않는다.
+ */
+export interface WallStats {
+  kind: 'qqqKrw' | 'benchKr'
+  label: string
+  calmar: number
+  cagrPct: number
+  mddPct: number
+  startDate: string
+  endDate: string
+}
+
+export function wallStats(
+  kind: WallStats['kind'],
+  label: string,
+  curve: { date: string; equity: number }[],
+  from: string,
+  to: string,
+): WallStats | null {
+  const seg = curve.filter((p) => p.date >= from && p.date <= to && p.equity > 0)
+  if (seg.length < 2) return null
+  const first = seg[0]
+  const last = seg[seg.length - 1]
+  const cagrPct = annualize(last.equity / first.equity, yearsBetween(first.date, last.date))
+  const mddPct = mddPctOf(seg)
+  // 낙폭이 0이면 칼마가 무한대가 된다 — 그 경우는 0으로 두고 화면이 오해하지 않게 한다.
+  const calmar = Math.abs(mddPct) > 1e-9 ? cagrPct / Math.abs(mddPct) : 0
+  return { kind, label, calmar, cagrPct, mddPct, startDate: first.date, endDate: last.date }
 }
 
 /** 에포크 기준 주 번호 — 요일 정의는 무엇이든 상관없고 **일관성**만 있으면 된다. */
@@ -301,6 +359,7 @@ export function buildPayload(
   asOf: string,
   computedAt: string,
   cost: CostSettings,
+  walls: WallStats[] = [],
 ): PrecomputedFile {
   return {
     schema: PRECOMPUTE_SCHEMA,
@@ -309,15 +368,20 @@ export function buildPayload(
     curveInterval: 'weekly',
     cost,
     note:
-      '시뮬레이터 프리셋을 화면과 같은 엔진·같은 비용으로 미리 돌린 [추정] 산출물이다. ' +
+      '시뮬레이터 프리셋을 화면과 같은 엔진·같은 비용으로 미리 돌린 산출물이다. ' +
       '곡선은 주 1점으로 줄였고(최저점·최종일 보존), 요약 수치는 줄이기 전 원곡선에서 쟀다. ' +
-      '유니버스는 연도별 시총 상위 10+10 [추정]이며 상장폐지 종목의 가격 부재로 생존편향이 남아 있다. ' +
-      '⚠️ 금(GLD 원화) 슬리브가 붙은 프리셋은 곡선이 **2004-11부터** 시작한다(GLD 상장) — ' +
-      '2000년부터 시작하는 다른 프리셋과 구간이 달라 MDD·CAGR을 직접 비교하면 거짓이다. 각 행의 startDate를 보라. ' +
+      '유니버스는 **KRX Open API 실측** 연도별 시총 상위 10+10(2010~)이다 — 랭킹이 실측이라 ' +
+      '목록 선택편향은 없지만, 상장폐지 종목의 **가격**이 없어 유니버스에서 빠지므로 ' +
+      '**가격 생존편향은 남아 있고** 그만큼 성적이 실제보다 후하다. ' +
+      '⚠️ **2010년 이전은 수집 자체가 불가능**하다(KRX Open API 시작) — 2008 금융위기 전반부가 빠져 있어 ' +
+      '2000년부터 돌던 옛 회차([추정] 목록) 수치와 직접 비교하면 거짓이다. ' +
+      '⚠️ walls는 **같은 구간으로 다시 잰** 단순보유 참고선이며 알파 판정 벤치가 아니다(판정 벤치는 KODEX 200). ' +
+      '34차 실측에서 35변형 중 QQQ 원화 보유의 칼마를 넘은 조합은 하나도 없었다. ' +
       '샤프·소르티노는 무위험수익률 0% 가정이라 실제 국고채 수익률만큼 낮아진다. ' +
       `${KR_LOAD_NOTE} ` +
       '매수 권유가 아니다.',
     presets,
+    walls,
   }
 }
 
@@ -344,6 +408,8 @@ export function runPreset(
   symOf: Record<string, string>,
   bench: DailyBar[] | undefined,
   cost: CostSettings,
+  /** 실행 유니버스 — 화면과 **같은 파생 함수**가 만든 것이다(수치가 갈릴 수 없다). */
+  universe: DerivedKrxUniverse,
   extra: ExtraSeries = {},
 ): PitChainResult {
   const resolve = (code: string) => symOf[code]
@@ -366,8 +432,8 @@ export function runPreset(
       slots,
       gate,
       exposure,
-      years: PIT_YEARS,
-      codesFor: pitCodes,
+      years: universe.years,
+      codesFor: universe.codesFor,
       resolve,
       bench,
       applyLiquidationHaircut: true,
@@ -396,15 +462,41 @@ export function runPreset(
   }).result
 }
 
+/**
+ * KRX 실측 유니버스 파일을 읽어 파생한다(파일 직접 읽기 — 스크립트 경로).
+ * **[추정] 목록으로 폴백하지 않는다** — 못 읽으면 굽기를 중단한다(33차 재발 방지).
+ */
+export function loadKrxUniverseFile(rootDir: string): DerivedKrxUniverse {
+  const path = join(rootDir, KRX_PIT_PATH)
+  let raw: unknown
+  try {
+    raw = JSON.parse(readFileSync(path, 'utf8'))
+  } catch (e) {
+    throw new Error(
+      `KRX 실측 유니버스(${path})를 읽지 못했습니다 — 사전계산을 중단합니다. ` +
+        `[추정] 목록으로 대신 굽지 않습니다(33차에서 [추정] 목록발 알파가 무너졌습니다). (${String(e)})`,
+    )
+  }
+  return deriveKrxUniverse(parseKrxPitUniverse(raw), DEFAULT_KRX_TOP_N)
+}
+
 async function main(): Promise<void> {
   log('# 프리셋 사전계산 — 화면과 같은 엔진으로 전 프리셋 실행')
-  log(`유니버스 ${PIT_UNION.length}종목 · 연도 ${PIT_YEARS[0]}~${PIT_YEARS[PIT_YEARS.length - 1]} · 구간 ${RANGE}`)
+
+  // ---- 유니버스(KRX 실측) — 화면과 같은 파생 함수로 만든다 ----
+  const universe = loadKrxUniverseFile(root)
+  log(`⚠️ ${universe.sourceNote}`)
+  log(
+    `유니버스 ${universe.label} · 실행 연도 ${universe.years[0]}~${universe.years[universe.years.length - 1]}` +
+      ` (${universe.years.length}년) · 시세 구간 ${RANGE}`,
+  )
+  log(`프리셋 ${PRESETS.length}종 — ${PRESETS.map((p) => p.id).join(', ')}`)
 
   // ---- 시세 로딩 — 화면·연구 러너와 **같은 듀얼 소스 규약**(.KQ/.KS 둘 다 · 긴 이력 채택 · 200봉 게이트) ----
   const histories: Record<string, DailyBar[]> = {}
   const symOf: Record<string, string> = {}
   const failed: string[] = []
-  for (const code of PIT_UNION) {
+  for (const code of universe.union) {
     const picked = await loadKrDual(code, (sym) => fetchDaily(sym), (bars) => bars.length, {
       betweenAttempts: () => sleep(120),
     })
@@ -415,9 +507,11 @@ async function main(): Promise<void> {
   }
   const okCount = Object.keys(symOf).length
   log(
-    `시세 로드 ${okCount}/${PIT_UNION.length} · .KQ/.KS 긴 이력 채택 · ${KR_MIN_BARS}봉 미만 제외` +
+    `시세 로드 ${okCount}/${universe.union.length} · .KQ/.KS 긴 이력 채택 · ${KR_MIN_BARS}봉 미만 제외` +
       `${failed.length ? ` · 가격 없음(상장폐지·짧은 응답): ${failed.join(', ')}` : ''}`,
   )
+  if (failed.length)
+    log('  ↑ 랭킹은 실측이라 선택편향이 없지만, 상폐 종목의 **가격**이 없어 빠진다 — 잔존 가격 생존편향이다.')
   if (okCount === 0) throw new Error('시세를 하나도 받지 못했습니다 — Yahoo 응답을 확인하세요')
 
   // ---- 벤치마크(KODEX 200) — 알파 판정 기준(규칙 5) ----
@@ -497,7 +591,7 @@ async function main(): Promise<void> {
   const out: PrecomputedPreset[] = []
   for (const preset of PRESETS) {
     const t0 = Date.now()
-    const result = runPreset(preset, histories, symOf, bench, cost, extra)
+    const result = runPreset(preset, histories, symOf, bench, cost, universe, extra)
     const row = summarizePreset(preset, result, cost.initialCapital)
     out.push(row)
     log(
@@ -511,11 +605,55 @@ async function main(): Promise<void> {
     )
   }
 
-  const payload = buildPayload(out, asOf, new Date().toISOString(), cost)
+  // ---- 참고 벽 — 전략과 **같은 구간으로 다시 잰다** (34차 규약) ----------------
+  //
+  // 옮겨 적은 수치를 두면 구간이 다른 칼마를 나란히 놓게 되고 그 비교는 거짓이 된다.
+  // 실패해도 굽기를 막지 않는다 — 벽 없이 구우면 화면이 34차 상수로 강등한다(규칙 3).
+  const walls: WallStats[] = []
+  if (out.length > 0) {
+    const from = out.reduce((a, p) => (p.startDate < a ? p.startDate : a), out[0].startDate)
+    const to = out.reduce((a, p) => (p.endDate > a ? p.endDate : a), out[0].endDate)
+    log(`\n참고 벽 구간 ${from} ~ ${to} — 전략 실행 구간으로 잘라 다시 잰다(옮겨 적은 값이 아니다).`)
+    try {
+      const q = await fetchDaily(QQQ_SYMBOL)
+      await sleep(120)
+      const fx = await fetchDaily(FX_SYMBOL)
+      const krw = toKrwCurve(q, fx)
+      const w = wallStats('qqqKrw', 'QQQ 원화 보유', krw, from, to)
+      if (w) walls.push(w)
+      else log('⚠️ QQQ 원화 곡선이 구간과 겹치지 않습니다 — 벽 없이 굽습니다')
+    } catch (e) {
+      log(`⚠️ QQQ·환율 로드 실패 — QQQ 벽 없이 굽습니다 (${String(e)})`)
+    }
+    if (bench) {
+      const bc = bench.filter((b) => b.c > 0).map((b) => ({ date: b.date, equity: b.c }))
+      const w = wallStats('benchKr', `${BENCH_SYMBOL} KODEX 200 보유`, bc, from, to)
+      if (w) walls.push(w)
+    }
+    for (const w of walls)
+      log(
+        `· 벽 ${w.label.padEnd(24)} 칼마 ${w.calmar.toFixed(3)} · CAGR ${w.cagrPct.toFixed(1)}% · ` +
+          `MDD ${w.mddPct.toFixed(1)}% · ${w.startDate}~${w.endDate}`,
+      )
+    const qqq = walls.find((w) => w.kind === 'qqqKrw')
+    if (qqq) {
+      const over = out.filter((p) => Math.abs(p.mddPct) > 1e-9 && p.cagrPct / Math.abs(p.mddPct) > qqq.calmar)
+      log(
+        over.length === 0
+          ? `→ QQQ 원화 보유 벽(칼마 ${qqq.calmar.toFixed(3)})을 넘은 프리셋: **없음** (34차 결론과 같다)`
+          : `→ QQQ 벽을 넘은 프리셋: ${over.map((p) => p.id).join(', ')}`,
+      )
+    }
+  }
+
+  const payload = buildPayload(out, asOf, new Date().toISOString(), cost, walls)
   mkdirSync(dirname(OUT_PATH), { recursive: true })
   writeFileSync(OUT_PATH, `${JSON.stringify(payload)}\n`, 'utf8')
-  log(`\n✅ ${OUT_PATH} · 프리셋 ${out.length}개 · asOf ${asOf}`)
-  log('⚠️ [추정] 산출물 — 생존편향(상폐 종목 가격 부재)·결합의 리밸런스 비용 미반영이 그대로 남아 있다. 매수 권유가 아니다.')
+  log(`\n✅ ${OUT_PATH} · 프리셋 ${out.length}개 · 참고 벽 ${walls.length}개 · asOf ${asOf}`)
+  log(
+    '⚠️ 랭킹은 KRX 실측이라 목록 선택편향이 없지만 **가격 생존편향(상폐 종목 시세 부재)은 남아 있고**, ' +
+      '2010년 이전은 수집 자체가 불가능하다(2008 위기 전반부 부재). 매수 권유가 아니다.',
+  )
 }
 
 // 런처(scripts/preset-precompute.mjs)만 이 값을 넘긴다.

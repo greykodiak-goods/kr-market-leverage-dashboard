@@ -16,8 +16,16 @@
 //   살아남아 커진 종목만 표본에 들어가 성적이 부풀려진다(승자편향) — 같은 조건식이
 //   고정 80 유니버스에서 총 +42,103%인데 연도별 그 해 상위 10+10으로 바꾸면 +841%로
 //   무너졌다(21차 실측). 그래서 **고정 표본 입력·시총상위 퀵버튼·고정 유니버스 전제
-//   프리셋을 전부 제거**하고, 유니버스는 항상 "그 해 연초 상위 10+10 [추정]" 하나다
-//   (목록 pitUniverse.ts · 연쇄 실행 pitChain.ts — 헤드리스 러너와 같은 코드).
+//   프리셋을 전부 제거**하고, 유니버스는 "그 해 연초 상위 10+10" 하나로 고정했다.
+//
+// 2026-08-03 유니버스 실측 전환 (34차):
+//   그 목록은 [추정](pitUniverse.ts PIT1010)이었고, 33차에서 **틀렸다는 것이 드러났다**
+//   (xsmom 알파 +21.9%p → 실측 +2.6%p). 목록이 틀리면 그 위에서 고른 파라미터도 같이
+//   무효이므로, 화면 실행 경로를 **KRX 실측**(public/data/krx-pit/universe.json ·
+//   파서 krxPitUniverse.ts · 파생 krxUniverseSource.ts)으로 바꾸고 프리셋도 34차에서
+//   다시 고른 2종으로 전면 교체했다. 실측 파일을 못 읽으면 **[추정]으로 폴백하지 않고
+//   실행을 막는다** — 조용한 폴백이 33차와 같은 사고를 눈에 안 띄게 되풀이하기 때문이다.
+//   (연쇄 실행 pitChain.ts·xsmomChain.ts는 그대로 — 헤드리스 러너와 같은 코드.)
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { BACKTEST_HISTORY_RANGE, KR_LOAD_NOTE, getDailyHistory, loadKrDual } from '../../lib/history'
@@ -32,7 +40,19 @@ import {
   summarizeGate,
   toKrwCurve as toKrwSeries,
 } from './marketGate'
-import { PIT_UNION, PIT_YEARS, pitCodes } from './pitUniverse'
+// 유니버스는 **KRX 실측**(public/data/krx-pit/universe.json)에서 온다 — [추정] 목록(pitUniverse)이
+// 아니다. 로드 실패 시 조용한 폴백은 없다(krxUniverseSource.ts 머리말 참조 · 33차 재발 방지).
+import type { KrxPitUniverse } from './krxPitUniverse'
+import {
+  DEFAULT_KRX_TOP_N,
+  KRX_TOP_N_CHOICES,
+  KRX_UNIVERSE_START_DATE,
+  deriveKrxUniverse,
+  loadKrxUniverse,
+  normalizeTopN,
+  type DerivedKrxUniverse,
+  type KrxTopN,
+} from './krxUniverseSource'
 import {
   SPEC_VERSION,
   conditionLabel,
@@ -55,8 +75,10 @@ import {
   GOLD_SYMBOL,
   GOLD_WEIGHTS,
   KOSPI_REGIME,
+  KRXCAL_QQQ_WALL,
   MOM_SLOT_CHOICES,
   PRESETS,
+  PRESET_BANNER,
   PRESET_PIT_BASE,
   REGIME_FALLBACK_SYMBOL,
   normalizeGoldW,
@@ -90,7 +112,11 @@ import { displaySymbol } from '../../lib/krNames'
 
 // v1 저장본에는 고정 표본(symbolsText)과 데이터 범위(range)가 들어 있었다 — 둘 다 사라졌으므로
 // 키를 올려 옛 저장본을 불러오지 않는다(지운 입력이 되살아나는 혼선 방지).
-const STORE_KEY = 'spec-simulator:v2'
+//
+// v2 → v3 (2026-08-03 · 34차): 유니버스가 [추정] 10+10(2000~)에서 **KRX 실측 10+10(2010~)**으로
+// 바뀌었다. 저장된 시작일·전략 유형이 옛 구간 전제로 남아 있으면 새 유니버스 위에서 조용히
+// 다른 구간을 돌게 되므로 키를 올려 새로 시작한다.
+const STORE_KEY = 'spec-simulator:v3'
 
 interface Saved {
   /** 전략 유형 — 없으면(구 저장본) 조건식 모드 */
@@ -103,6 +129,8 @@ interface Saved {
   marketGate?: boolean
   /** 결합 모드의 금(GLD 원화) 슬리브 비중 — 없으면 0(금 없음) */
   goldW?: number
+  /** 실측 유니버스 폭(각 시장 상위 N) — 없으면 기본 10(=10+10 · 34차 판정이 나온 폭) */
+  topN?: number
   spec: StrategySpec
   startDate: string
   /** 종료일 — 이 날짜 이후 봉을 잘라내고 실행한다. 없거나 빈 문자열이면 데이터 끝까지.
@@ -127,8 +155,37 @@ const QQQ_LABEL = 'QQQ(원화 환산)'
 const QLD_SYMBOL = 'QLD'
 const QLD_LABEL = 'QLD(원화 환산 · 2배 레버리지)'
 
-/** 유니버스는 하나뿐이다 — 시세는 전 연도 합집합을 한 번만 받아 모든 해가 나눠 쓴다. */
-const UNIVERSE_LABEL = `연도별 그 해 시총 상위 10+10 [추정] · ${PIT_YEARS[0]}~${PIT_YEARS[PIT_YEARS.length - 1]} · 고유 ${PIT_UNION.length}종목`
+// ---- 유니버스 로드 (KRX 실측) ----------------------------------------------
+//
+// 유니버스는 이제 **런타임에 파일에서** 온다(모듈 상수가 아니다). 그래서 로딩·실패 상태가
+// 생겼고, 화면은 그 셋을 구분해 보여준다: 로딩 중 / 준비됨 / **실패(실행 불가)**.
+//
+// ⚠️ 실패 시 [추정] 목록으로 내려가지 않는다. 33차가 무너진 경로가 "틀린 목록 위에서 조용히
+//    계속 도는 것"이었고, 폴백은 그 사고를 눈에 안 띄게 재발시키는 장치다.
+
+type UniverseState =
+  | { status: 'loading' }
+  | { status: 'ready'; uni: KrxPitUniverse }
+  | { status: 'error'; message: string }
+
+/** 실측 유니버스 파일을 한 번 읽는다. 실패는 삼키지 않고 상태로 남긴다. */
+function useKrxUniverseFile(): UniverseState {
+  const [state, setState] = useState<UniverseState>({ status: 'loading' })
+  useEffect(() => {
+    let alive = true
+    loadKrxUniverse(import.meta.env.BASE_URL, (url) => fetch(url))
+      .then((uni) => {
+        if (alive) setState({ status: 'ready', uni })
+      })
+      .catch((e: unknown) => {
+        if (alive) setState({ status: 'error', message: e instanceof Error ? e.message : String(e) })
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+  return state
+}
 
 // ---- 프리셋 ----------------------------------------------------------------
 //
@@ -167,19 +224,26 @@ function loadSaved(): Saved {
           comboWA: normalizeWA(s.comboWA),
           marketGate: s.marketGate === true,
           goldW: normalizeGoldW(s.goldW),
+          topN: normalizeTopN(s.topN),
         }
     }
   } catch {
     /* 손상 저장본은 기본값으로 */
   }
   return {
-    kind: 'condition',
+    // 기본 유형은 **모멘텀**이다 — 34차 판정을 통과한 프리셋 2종이 둘 다 모멘텀이라
+    // 기본 화면 상태가 실제 프리셋과 같은 계열을 가리키게 맞춘다.
+    // ('combo' 선택지는 그대로 남아 있다 — 연구·향후 재검증용.)
+    kind: 'momentum',
     mom: DEFAULT_MOM,
     comboWA: DEFAULT_COMBO_WA,
     marketGate: false,
     goldW: DEFAULT_GOLD_W,
+    topN: DEFAULT_KRX_TOP_N,
+    // 조건식 편집기의 시작 스펙일 뿐, 화면 프리셋 목록에는 없다(34차에서 조건식 계열은 전멸).
     spec: PRESET_PIT_BASE,
-    startDate: '',
+    // 실측 유니버스가 덮는 첫 해와 맞춘다(2010~). 옛 기본값은 ''(데이터 전 구간)이었다.
+    startDate: KRX_UNIVERSE_START_DATE,
     endDate: '',
     cost: DEFAULT_COST,
   }
@@ -839,6 +903,25 @@ export function SpecSimulator() {
   const [endDate, setEndDate] = useState(saved.endDate ?? '')
   const [cost, setCost] = useState<CostSettings>(saved.cost)
 
+  // ---- 유니버스 (KRX 실측) --------------------------------------------------
+  const [topN, setTopN] = useState<KrxTopN>(normalizeTopN(saved.topN))
+  const uniState = useKrxUniverseFile()
+  /**
+   * 파생 실패(결측 연도·빈 목록)도 로드 실패와 **같은 취급**이다 — 둘 다 실행 불가이며,
+   * [추정] 목록으로 대신 돌리지 않는다.
+   */
+  const universe = useMemo<{ ok: DerivedKrxUniverse } | { err: string } | null>(() => {
+    if (uniState.status === 'loading') return null
+    if (uniState.status === 'error') return { err: uniState.message }
+    try {
+      return { ok: deriveKrxUniverse(uniState.uni, topN) }
+    } catch (e) {
+      return { err: e instanceof Error ? e.message : String(e) }
+    }
+  }, [uniState, topN])
+  const uni = universe && 'ok' in universe ? universe.ok : null
+  const uniError = universe && 'err' in universe ? universe.err : null
+
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -872,6 +955,15 @@ export function SpecSimulator() {
 
   /** 사전계산 산출물(없으면 null) — 라벨 병기와 "프리셋 즉시 표시"에 쓴다 */
   const precomputed = usePrecomputedPresets()
+
+  /**
+   * QQQ 원화 보유 **벽** — 34차가 "어떤 조합도 넘지 못했다"고 판정한 기준선.
+   * 사전계산 산출물에 같은 구간으로 다시 잰 값이 있으면 **그 실측값**을 쓰고, 없으면
+   * 34차 실행값 상수로 강등한다(하드코딩이 유일한 근거가 되는 경우는 배지로 구분한다 — 규칙 3).
+   * ⚠️ 이것은 참고 벽이지 알파 판정 벤치가 아니다(판정 벤치는 규칙 5대로 KODEX 200).
+   */
+  const wallFromFile = precomputed?.walls?.find((w) => w.kind === 'qqqKrw') ?? null
+  const wall = wallFromFile ?? KRXCAL_QQQ_WALL
   /**
    * 지금 화면에 띄운 사전계산 결과. 프리셋을 고르면 채워지고,
    * 「직접 다시 돌리기」(= 실행)를 누르면 비워진다 — 실행 결과가 그 자리를 대신한다.
@@ -891,18 +983,18 @@ export function SpecSimulator() {
     try {
       localStorage.setItem(
         STORE_KEY,
-        JSON.stringify({ kind, mom, comboWA, marketGate, goldW, spec, startDate, endDate, cost } satisfies Saved),
+        JSON.stringify({ kind, mom, comboWA, marketGate, goldW, topN, spec, startDate, endDate, cost } satisfies Saved),
       )
     } catch {
       /* 저장 실패는 치명적이지 않다 */
     }
-  }, [kind, mom, comboWA, marketGate, goldW, spec, startDate, endDate, cost])
+  }, [kind, mom, comboWA, marketGate, goldW, topN, spec, startDate, endDate, cost])
 
   const flat = useMemo(() => asFlatAnd(spec.entry), [spec.entry])
   // 종목 목록은 실행 시 그 해 유니버스로 주입되므로, 검증에는 대표로 첫 해 목록을 쓴다.
   const issues = useMemo(
-    () => validateSpec({ ...spec, universe: { ...spec.universe, symbols: PIT_UNION } }),
-    [spec],
+    () => validateSpec({ ...spec, universe: { ...spec.universe, symbols: uni?.union ?? [] } }),
+    [spec, uni],
   )
 
   /** 전략 설정 지문 — 사전계산 블록이 지금 설정과 같은 전략을 가리키는지 판정한다 */
@@ -963,7 +1055,7 @@ export function SpecSimulator() {
   const dispSym = (sym?: string) => (sym ? displaySymbol(sym, nameMap) : '—')
 
   /**
-   * 실행 — 전 연도 합집합(67종목) 시세를 한 번만 받아 연도별 유니버스 연쇄 백테스트를 돌린다.
+   * 실행 — 전 연도 합집합(KRX 실측) 시세를 한 번만 받아 연도별 유니버스 연쇄 백테스트를 돌린다.
    *
    * 심볼 매핑: 유니버스 목록은 6자리 코드다. Yahoo는 시장 접미사를 요구하므로 `.KQ`/`.KS`
    * **양쪽을 조회해 긴 이력을 채택**한다(`loadKrDual` — 연구 러너 `fetchKrDual`과 같은 규약).
@@ -980,7 +1072,10 @@ export function SpecSimulator() {
     setNotes([])
     try {
       if (dateError) throw new Error(dateError)
-      const codes = PIT_UNION
+      // 유니버스가 없으면 **여기서 멈춘다** — [추정] 목록으로 대신 돌리지 않는다(33차 재발 방지).
+      if (uniError) throw new Error(uniError)
+      if (!uni) throw new Error('KRX 실측 유니버스를 아직 읽는 중입니다 — 잠시 후 다시 실행하세요.')
+      const codes = uni.union
       const histories: Record<string, DailyBar[]> = {}
       /** 유니버스 코드 → 실제로 시세를 받은 심볼 */
       const symOf: Record<string, string> = {}
@@ -1099,8 +1194,8 @@ export function SpecSimulator() {
           slots: mom.slots,
           gate: mom.gate,
           exposure,
-          years: PIT_YEARS,
-          codesFor: pitCodes,
+          years: uni.years,
+          codesFor: uni.codesFor,
           resolve: (code) => symOf[code],
           startDate,
           endDate,
@@ -1777,15 +1872,46 @@ export function SpecSimulator() {
       <div className="bt-controls bt-settings">
         <label>
           유니버스 (고정 불가)
-          <InfoTip text="종목을 직접 고르는 입력은 없앴습니다. 오늘 살아남은 대형주를 표본으로 고정하면 과거 성적이 크게 부풀려지기 때문입니다(승자편향 — 같은 조건식이 고정 80 표본에서 총 +42,103%, 연도별 그 해 상위 10+10에서 +841%). 매년 1월 1일에 그 해 유니버스로 교체하고, 그 해를 독립 실행한 뒤 연말 평가액을 다음 해 자본으로 이월합니다." />
+          <InfoTip text="종목을 직접 고르는 입력은 없앴습니다. 오늘 살아남은 대형주를 표본으로 고정하면 과거 성적이 크게 부풀려지기 때문입니다(승자편향). 목록은 KRX Open API 실측 랭킹이며, 매년 1월 1일에 그 해 유니버스로 교체하고 그 해를 독립 실행한 뒤 연말 평가액을 다음 해 자본으로 이월합니다. 실측 파일을 읽지 못하면 [추정] 목록으로 대신 돌리지 않고 실행을 막습니다 — 33차에서 [추정] 목록발 알파가 무너졌기 때문입니다." />
+        </label>
+        <label>
+          유니버스 폭
+          <select
+            value={topN}
+            disabled={busy}
+            onChange={(e) => setTopN(normalizeTopN(Number(e.target.value)))}
+            title="각 시장 상위 N을 잘라 씁니다 — 34차 판정이 나온 폭은 10+10입니다"
+          >
+            {KRX_TOP_N_CHOICES.map((n) => (
+              <option key={n} value={n}>
+                {n}+{n}
+              </option>
+            ))}
+          </select>
         </label>
         <div className="bt-note" style={{ width: '100%' }}>
-          <strong>{UNIVERSE_LABEL}</strong> <span className="badge sample">[추정] 목록 · KRX 실측 아님</span>
-          <div style={{ marginTop: 4, fontSize: 12 }}>
-            매년 1/1 그 해 목록으로 교체 → 연 단위 독립 실행 → 연말 평가액 이월(연말 청산 근사). 상장폐지 종목은
-            가격이 없어 빠지므로 <strong>생존편향이 완전히 사라지지는 않습니다</strong> — 아래 연도별 표의 매핑률로
-            확인하세요. 매핑 5종목 미만인 해는 현금 보유로 처리합니다.
-          </div>
+          {uniError ? (
+            <div className="bt-warn" role="alert">
+              ⛔ {uniError}
+            </div>
+          ) : !uni ? (
+            <strong>KRX 실측 유니버스 읽는 중…</strong>
+          ) : (
+            <>
+              <strong>{uni.label}</strong> <span className="badge">KRX 실측</span>
+              <div style={{ marginTop: 4, fontSize: 12 }}>
+                {uni.sourceNote}
+              </div>
+              <div style={{ marginTop: 4, fontSize: 12 }}>
+                매년 1/1 그 해 목록으로 교체 → 연 단위 독립 실행 → 연말 평가액 이월(연말 청산 근사).{' '}
+                <strong>랭킹은 실측이라 목록 선택편향이 없습니다.</strong> 다만 상장폐지 종목은 가격이 없어 빠지므로{' '}
+                <strong>가격 생존편향은 남아 있고</strong>, 그만큼 성적이 실제보다 후합니다 — 아래 연도별 표의
+                매핑률로 확인하세요. 매핑 5종목 미만인 해는 현금 보유로 처리합니다.{' '}
+                <strong>2010년 이전은 수집 자체가 불가능</strong>합니다(KRX Open API 시작) — 2008 금융위기 전반부가
+                빠져 있어 2000년부터 돌던 옛 회차 수치와 직접 비교하면 거짓입니다.
+              </div>
+            </>
+          )}
         </div>
         <div className="bt-controls bt-settings" style={{ padding: 0, border: 'none' }}>
           <label>
@@ -1836,10 +1962,18 @@ export function SpecSimulator() {
         <button
           type="button"
           className="bt-btn-run"
-          disabled={busy || dateError != null || (kind !== 'momentum' && issues.some((i) => i.level === 'error'))}
+          disabled={
+            busy || dateError != null || uni == null || (kind !== 'momentum' && issues.some((i) => i.level === 'error'))
+          }
           onClick={run}
         >
-          {busy ? (progress ?? '실행 중…') : '▶ 백테스트 실행 (2차 검증)'}
+          {busy
+            ? (progress ?? '실행 중…')
+            : uniError
+              ? '유니버스 로드 실패 — 실행 불가'
+              : uni == null
+                ? '유니버스 읽는 중…'
+                : '▶ 백테스트 실행 (2차 검증)'}
         </button>
         {kind !== 'momentum' && (
           <button type="button" className="bt-btn-mini" onClick={exportJson}>
@@ -1892,6 +2026,7 @@ export function SpecSimulator() {
           <option value="" disabled>
             프리셋 불러오기…
           </option>
+          {/* 프리셋은 2종뿐이다(34차 판정 통과분). 구 10종은 [추정] 목록 위에서 고른 것이라 전부 뺐다. */}
           {/* 라벨의 MDD·10년 연평균은 **사전계산 산출물에서 온다** — 하드코딩이 아니라
               GHA가 파일을 갱신하면 라벨도 따라 바뀐다. 파일이 없으면 원래 라벨 그대로. */}
           {PRESETS.map((p) => (
@@ -1900,6 +2035,17 @@ export function SpecSimulator() {
             </option>
           ))}
         </select>
+      </div>
+      {/* 상시 안내 — 프리셋이 어떤 유니버스 위에서 나왔는지, 왜 구 프리셋이 사라졌는지 한 줄로 못 박는다.
+          이 줄은 프리셋을 고르지 않아도 항상 보인다(고르고 나서야 알게 되면 늦다). */}
+      <div className="bt-note">
+        <strong>{PRESET_BANNER}</strong>
+        <div style={{ marginTop: 4, fontSize: 12 }}>
+          ⚠️ 34차 35변형 중 <strong>같은 구간 QQQ 원화 보유(칼마 {wall.calmar.toFixed(3)} · CAGR{' '}
+          {fmtPct(wall.cagrPct)} · MDD {fmtPct(wall.mddPct)})를 넘은 조합은 하나도 없습니다</strong> — 아래 두
+          프리셋은 판정(전·후반 알파 양수)만 통과한 기록이지 그 벽을 넘은 답이 아닙니다.
+          {wallFromFile && ' (이 벽 수치는 사전계산 산출물에서 같은 구간으로 다시 잰 실측값입니다.)'}
+        </div>
       </div>
       {error && (
         <div className="bt-warn" role="alert">
