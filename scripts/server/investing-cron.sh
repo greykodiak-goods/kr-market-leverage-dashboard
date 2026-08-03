@@ -11,7 +11,15 @@
 #
 # 서브커맨드:
 #   mock-trade [--live]   평일 15:20 KST — 모의운용 러너(기본 dryRun, --live는 검증 후 크론 재설치로)
-#   weekly-backfill       토 09:30 KST — 5분봉 백필 → 검증(FAIL이면 커밋 없이 중단) → 데이터 커밋·푸시
+#   daily-intraday        평일 16:15 KST — 5분봉 **증분**(당일분) 수집 → 검증 → 데이터 커밋·푸시
+#   weekly-backfill       토 09:30 KST — 5분봉 **소급 보정**(과거 구간) → 검증 → 데이터 커밋·푸시
+#
+# daily vs weekly (둘 다 같은 스크립트·같은 저장소, 소급 범위만 다르다):
+#   daily  = 저장소 최신 봉 뒤부터만 받는다(최근 7일 한도). 종목당 1~2요청 [추정].
+#            감시목록(네이버 시총 상위 40+40 ∪ 기존 누적)과 index.json도 이 잡이 갱신한다.
+#   weekly = 연속조회로 서버 소급 한도까지 당겨 과거 구멍을 메운다(종목당 수십 요청).
+#   키움은 등록 IP를 요구해 GitHub Actions에서 못 돈다 — 매일 수집이 EC2로 온 이유다
+#   (2026-08-03 대표 지시 "5분봉도 키움으로 전환", 구 GHA intraday-cron.yml 폐지).
 set -euo pipefail
 
 DIR="$HOME/investing"
@@ -38,15 +46,21 @@ case "${1:-}" in
     COMMIT_PATHS="public/data/mock-live"
     MSG="data: 모의운용 일일 갱신 (EC2 cron)"
     ;;
+  daily-intraday)
+    nice -n 10 "${DOPPLER[@]}" node scripts/kiwoom-backfill.mjs --daily
+    # 검증 게이트 — FAIL이면 종료 코드 1 → set -e로 여기서 중단되어 오염 데이터가 커밋되지 않는다
+    nice -n 10 "${DOPPLER[@]}" node scripts/verify-intraday.mjs
+    COMMIT_PATHS="public/data/intraday"
+    MSG="data: 키움 5분봉 일일 증분 (EC2 cron, 3층 검증 통과)"
+    ;;
   weekly-backfill)
     nice -n 10 "${DOPPLER[@]}" node scripts/kiwoom-backfill.mjs
-    # 검증 게이트 — FAIL이면 종료 코드 1 → set -e로 여기서 중단되어 오염 데이터가 커밋되지 않는다
     nice -n 10 "${DOPPLER[@]}" node scripts/verify-intraday.mjs
     COMMIT_PATHS="public/data/intraday"
     MSG="data: 키움 5분봉 주간 백필 (EC2 cron, 3층 검증 통과)"
     ;;
   *)
-    echo "사용법: investing-cron.sh {mock-trade [--live]|weekly-backfill}" >&2
+    echo "사용법: investing-cron.sh {mock-trade [--live]|daily-intraday|weekly-backfill}" >&2
     exit 2
     ;;
 esac

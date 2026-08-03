@@ -183,15 +183,34 @@ doppler run --project investing-ops --config prd -- node scripts/mock-trade-dail
 - 장부에는 있는데 엔진은 안 들고 있는 종목(주문 차단·미체결로 갈라진 흔적)은 `표류` 로 저널에 남는다.
   누적되면 장부와 계좌가 벌어지고 있다는 뜻이므로 확인한다.
 
-### ④ 5분봉 백필 + 정확성 검증 (백테스트 데이터 게이트)
+### ④ 5분봉 수집(증분·백필) + 정확성 검증 (백테스트 데이터 게이트)
+
+> **2026-08-03 대표 지시로 매일 수집도 키움으로 전환**했다. 구 경로(Yahoo v8 5분봉 ·
+> GitHub Actions `intraday-cron.yml` · `scripts/fetch-intraday.mjs`)는 삭제됐다.
+> 키움은 등록 IP를 요구해 GHA 러너에서 돌지 않는다 → **EC2 크론이 정본 실행처**다.
 
 ```powershell
-# 백필 — 키움 5분봉을 서버 소급 한도(실측 395일)까지 수집·병합. 이어받기 지원.
+# ⓐ 매일 증분 — 그날(및 최근 결측분) 5분봉만. 종목당 1~2요청 [추정].
+#    감시목록(네이버 시총 상위 40+40 ∪ 기존 누적)과 index.json도 이 모드가 갱신한다.
+doppler run --project investing-ops --config prd -- node scripts/kiwoom-backfill.mjs --daily
+
+# ⓑ 소급 백필 — 서버 소급 한도(실측 395일)까지 연속조회로 과거를 채운다. 이어받기 지원.
 doppler run --project investing-ops --config prd -- node scripts/kiwoom-backfill.mjs
 
-# 검증 — 백필 직후·주기 재실행마다 반드시 함께 돌린다. FAIL이면 종료 코드 1.
+# 검증 — ⓐ·ⓑ 직후 반드시 함께 돌린다. FAIL이면 종료 코드 1.
 doppler run --project investing-ops --config prd -- node scripts/verify-intraday.mjs
 ```
+
+| | 언제 | 소급 범위 | 감시목록 | 요청 수 [추정] |
+| --- | --- | --- | --- | --- |
+| `--daily` | 평일 16:15 KST (EC2 `daily-intraday`) | 저장소 최신 봉 −1일, 바닥 `--max-days=7` | 랭킹으로 **갱신**(신규 편입은 오늘부터 누적, 이탈 종목도 계속 수집) | 종목당 1~2 · 전체 80~160 |
+| (옵션 없음) | 토 09:30 KST (EC2 `weekly-backfill`) | `--max-days=730`까지 연속조회 | 기존 저장소 그대로(넓히지 않음) | 종목당 수십 · 전체 수천 |
+
+- 두 모드는 **같은 저장소·같은 병합 규칙**을 쓴다(신규 값 우선). 겹쳐 받아도 멱등이다.
+- 랭킹 조회(네이버 m.stock API)가 실패하면 정적 시드 + 기존 누적 종목으로 진행한다 —
+  수집이 멈추지는 않는다.
+- **2026-08-03 이전 구간에는 Yahoo로 받은 봉이 남아 있다**(같은 파일에 병합). 그래서
+  수집기는 겹침 구간 종가를 항상 대조해 보고하고, `index.json`의 `note`에 이 사실을 남긴다(규칙 3).
 
 `verify-intraday.mjs` 는 세 층으로 데이터를 의심한다:
 
@@ -266,7 +285,8 @@ pm2 logs investing-daemon   # 로그(시크릿·계좌번호는 남지 않는다
 
 - **처음 최소 1주일은 `--live` 없이** 돌려 계획만 쌓고, 저널을 눈으로 검토한 뒤 `--live` 를 붙인다.
 - 데몬을 켜면 크론의 `mock-trade` 항목을 **반드시 뺀다**(`scripts/server/investing-cron.sh`
-  의 `weekly-backfill` 은 그대로 둔다). 이중 실행 시 같은 날 장부가 두 경로로 갱신된다.
+  의 데이터 잡 `daily-intraday`·`weekly-backfill` 은 그대로 둔다 — 장부가 아니라 5분봉
+  저장소를 갱신하므로 데몬과 겹치지 않는다). 이중 실행 시 같은 날 장부가 두 경로로 갱신된다.
 - 커밋은 **main 브랜치에서만** 한다(다른 브랜치면 생략하고 로그만 남긴다). `--no-git` 으로 끌 수 있다.
 
 ### 폴백 — 일회성 러너 `mock-trade-daily`

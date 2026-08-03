@@ -1,18 +1,23 @@
-// 5분봉 파싱·누적·집계 검증.
+// 5분봉 누적·집계·감시목록 검증.
 // 핵심: 누적이 데이터를 잃거나 중복시키지 않는가, 5분봉→일봉 집계가 맞는가,
-//       커버리지 구멍을 실제로 잡아내는가.
+//       커버리지 구멍을 실제로 잡아내는가, 증분 수집의 소급 하한과 index 순서가 맞는가.
+//
+// 수집 소스는 키움(ka10080)이다 — 키움 응답 파서는 tests/kiwoom.test.ts가 검증한다.
+// 구 Yahoo 5분봉 수집 경로는 2026-08-03에 제거됐다(파서도 함께 삭제).
 
 import { check, close, eq, finish, section } from './harness'
 // @ts-expect-error — .mjs 라이브러리(타입 선언 없음). esbuild가 번들한다.
 import {
   buildWatchlist,
   coverage,
+  dailyCutoffTs,
   KR_BARS_PER_DAY,
   kstDate,
   mergeBars,
+  orderIndexSymbols,
   packBars,
-  parseYahooIntraday,
   rankingToSymbols,
+  SEED_SYMBOLS,
   toDailyBars,
   unpackBars,
 } from '../scripts/lib/intraday.mjs'
@@ -21,77 +26,8 @@ import {
 const D0 = Math.floor(Date.UTC(2026, 6, 28, 0, 0, 0) / 1000)
 const FIVE_MIN = 300
 
-function yahoo(over: Record<string, unknown> = {}) {
-  return {
-    chart: {
-      result: [
-        {
-          meta: { dataGranularity: '5m', exchangeTimezoneName: 'Asia/Seoul', gmtoffset: 32400 },
-          timestamp: [D0, D0 + FIVE_MIN, D0 + 2 * FIVE_MIN],
-          indicators: {
-            quote: [
-              {
-                open: [100, 101, 102],
-                high: [101, 102, 103],
-                low: [99, 100, 101],
-                close: [101, 102, 103],
-                volume: [1000, 2000, 3000],
-              },
-            ],
-          },
-          ...over,
-        },
-      ],
-    },
-  }
-}
-
-// -------------------------------------------------------------- 1) 파싱
-section('1) Yahoo 5분봉 파싱')
-{
-  const r = parseYahooIntraday(yahoo())
-  eq('봉 3개', r.bars.length, 3)
-  eq('granularity 5m', r.granularity, '5m')
-  eq('타임존', r.tz, 'Asia/Seoul')
-  eq('gmtoffset', r.gmtoffset, 32400)
-  eq('첫 봉 ts', r.bars[0].ts, D0)
-  eq('첫 봉 종가', r.bars[0].c, 101)
-  eq('결측 0', r.dropped, 0)
-
-  // 결측 봉은 버리고 개수를 보고한다 (장중 미완성 봉은 null로 온다)
-  const withNull = yahoo({
-    timestamp: [D0, D0 + FIVE_MIN, D0 + 2 * FIVE_MIN],
-    indicators: {
-      quote: [
-        { open: [100, null, 102], high: [101, null, 103], low: [99, null, 101], close: [101, null, 103], volume: [1, null, 3] },
-      ],
-    },
-  })
-  const rn = parseYahooIntraday(withNull)
-  eq('결측 봉 제외', rn.bars.length, 2)
-  eq('버린 개수 보고', rn.dropped, 1)
-  check('버린 봉의 ts는 없음', !rn.bars.some((b: { ts: number }) => b.ts === D0 + FIVE_MIN))
-
-  // volume이 null이면 0으로 (가격은 있으니 봉을 버리진 않는다)
-  const noVol = yahoo({
-    timestamp: [D0],
-    indicators: { quote: [{ open: [100], high: [101], low: [99], close: [100], volume: [null] }] },
-  })
-  eq('거래량 null → 0', parseYahooIntraday(noVol).bars[0].v, 0)
-
-  // 에러 응답
-  let threw = false
-  try {
-    parseYahooIntraday({ chart: { result: null, error: { description: '심볼 없음' } } })
-  } catch (e) {
-    threw = true
-    check('에러 메시지에 사유 포함', String((e as Error).message).includes('심볼 없음'))
-  }
-  check('잘못된 응답은 예외', threw)
-}
-
-// -------------------------------------------------------------- 2) 누적 병합
-section('2) 누적 병합 (60일 제한 대응의 핵심)')
+// -------------------------------------------------------------- 1) 누적 병합
+section('1) 누적 병합 (증분 수집의 핵심 — 매일 겹쳐 받아도 안전한가)')
 {
   const a = [
     { ts: D0, o: 1, h: 1, l: 1, c: 1, v: 1 },
@@ -130,8 +66,8 @@ section('2) 누적 병합 (60일 제한 대응의 핵심)')
   eq('재병합 멱등', twice.length, 3)
 }
 
-// -------------------------------------------------------------- 3) 압축
-section('3) 컬럼형 압축')
+// -------------------------------------------------------------- 2) 압축
+section('2) 컬럼형 압축')
 {
   const bars = [
     { ts: D0, o: 1, h: 2, l: 0.5, c: 1.5, v: 10 },
@@ -153,8 +89,8 @@ section('3) 컬럼형 압축')
   check(`압축이 더 작음 (${packedSize} < ${rawSize})`, packedSize < rawSize * 0.6)
 }
 
-// ------------------------------------------------------------ 4) KST 날짜
-section('4) KST 날짜 변환')
+// ------------------------------------------------------------ 3) KST 날짜
+section('3) KST 날짜 변환')
 {
   eq('09:00 KST', kstDate(D0), '2026-07-28')
   // 15:30 KST = 06:30 UTC — 같은 날이어야 한다
@@ -163,8 +99,8 @@ section('4) KST 날짜 변환')
   eq('23:00 KST', kstDate(Math.floor(Date.UTC(2026, 6, 28, 14, 0, 0) / 1000)), '2026-07-28')
 }
 
-// ---------------------------------------------------------- 5) 커버리지
-section('5) 커버리지 — 구멍을 잡아내는가')
+// ---------------------------------------------------------- 4) 커버리지
+section('4) 커버리지 — 구멍을 잡아내는가')
 {
   eq('빈 입력', coverage([]).days, 0)
 
@@ -191,8 +127,8 @@ section('5) 커버리지 — 구멍을 잡아내는가')
   eq('구멍 날짜', ct.thinDays[0], '2026-07-30')
 }
 
-// -------------------------------------------------- 6) 5분봉 → 일봉 집계
-section('6) 5분봉 → 일봉 집계')
+// -------------------------------------------------- 5) 5분봉 → 일봉 집계
+section('5) 5분봉 → 일봉 집계')
 {
   // 하루 3봉: 시가는 첫 봉, 종가는 마지막 봉, 고저는 극값, 거래량은 합
   const bars = [
@@ -223,8 +159,8 @@ section('6) 5분봉 → 일봉 집계')
   eq('정렬 입력 시 종가 동일', sorted[0].c, 97)
 }
 
-// ------------------------------------------------ 7) 시총 랭킹 → 감시목록
-section('7) 랭킹 파싱 — 우선주·스팩 제외, topN 컷')
+// ------------------------------------------------ 6) 시총 랭킹 → 감시목록
+section('6) 랭킹 파싱 — 우선주·스팩 제외, topN 컷')
 {
   const json = {
     stocks: [
@@ -247,7 +183,7 @@ section('7) 랭킹 파싱 — 우선주·스팩 제외, topN 컷')
   eq('이름에 우 포함(끝 아님)은 유지', rankingToSymbols({ stocks: [{ itemCode: '111111', stockName: '우리금융지주' }] }, 'KOSPI', 5).length, 1)
 }
 
-section('8) 감시목록 조립 — 랭킹 ∪ 기존 누적, 폴백')
+section('7) 감시목록 조립 — 랭킹 ∪ 기존 누적, 폴백')
 {
   const ranked = [
     { symbol: 'A.KS', name: 'a' },
@@ -261,6 +197,53 @@ section('8) 감시목록 조립 — 랭킹 ∪ 기존 누적, 폴백')
   const fb = buildWatchlist([], ['C.KS'], ['S.KS', 'S2.KQ'])
   eq('폴백 = 기존 ∪ 시드', fb.sort().join(','), 'C.KS,S.KS,S2.KQ')
   eq('전부 비면 빈 목록', buildWatchlist([], [], []).length, 0)
+
+  // 랭킹 실패 시 쓰는 정적 시드 — 형식이 깨지면 폴백이 통째로 죽는다
+  const seed = SEED_SYMBOLS as string[]
+  check(`시드 종목 충분 (${seed.length})`, seed.length >= 60)
+  check('시드는 전부 6자리코드.시장 형식', seed.every((s) => /^\d{6}\.(KS|KQ)$/.test(s)))
+  eq('시드 중복 없음', new Set(seed).size, seed.length)
+  check('시드에 코스피·코스닥 둘 다', seed.some((s) => s.endsWith('.KS')) && seed.some((s) => s.endsWith('.KQ')))
+}
+
+// -------------------------------------------- 8) 증분 수집의 소급 하한
+section('8) dailyCutoffTs — 매일 증분은 어디까지 거슬러 받나')
+{
+  const now = D0 + 10 * 86400 // 기준 "현재"
+  // 저장소가 없으면(신규 편입 종목) 최대 소급일까지만 — 여기서부터 누적을 시작한다
+  eq('신규 종목 = 최대 소급일', dailyCutoffTs(null, now, 7), now - 7 * 86400)
+  eq('숫자 아닌 입력도 동일 취급', dailyCutoffTs(undefined, now, 7), now - 7 * 86400)
+
+  // 어제까지 쌓여 있으면 "최신 봉 − 하루"까지만 받는다(정렬·대조용 겹침)
+  const yesterday = now - 86400
+  eq('최신 봉 기준 하루 겹침', dailyCutoffTs(yesterday, now, 7), yesterday - 86400)
+  check('하한이 최대 소급일보다 나중', dailyCutoffTs(yesterday, now, 7) > now - 7 * 86400)
+
+  // 오래 멈춰 있었으면 최대 소급일이 바닥을 깐다 — 무한정 거슬러 올라가지 않는다
+  const longAgo = now - 60 * 86400
+  eq('오래된 저장소는 최대 소급일로 절단', dailyCutoffTs(longAgo, now, 7), now - 7 * 86400)
+  // 겹침 폭은 조정 가능
+  eq('겹침 폭 지정', dailyCutoffTs(yesterday, now, 7, 0), yesterday)
+}
+
+// ------------------------------------------------ 9) index.json 심볼 순서
+section('9) orderIndexSymbols — 랭킹 순서 보존 (spec-backtest가 상위 N을 자른다)')
+{
+  const preferred = ['A.KS', 'B.KS', 'C.KQ'] // 오늘 랭킹 순
+  const stored = ['C.KQ', 'B.KS', 'Z.KS', 'A.KS'] // 파일이 있는 종목(순서 무의미)
+  const o = orderIndexSymbols(preferred, stored) as string[]
+  eq('랭킹 순서가 앞', o.slice(0, 3).join(','), 'A.KS,B.KS,C.KQ')
+  eq('랭킹 이탈 누적 종목은 뒤에 유지', o[3], 'Z.KS')
+  eq('전체 개수', o.length, 4)
+
+  // 파일이 없는 종목은 싣지 않는다 (수집 실패 종목이 index에 유령으로 남지 않게)
+  const o2 = orderIndexSymbols(['A.KS', 'MISSING.KS'], ['A.KS']) as string[]
+  eq('파일 없는 심볼 제외', o2.join(','), 'A.KS')
+
+  // 중복·빈 입력 안전
+  eq('preferred 중복 제거', (orderIndexSymbols(['A.KS', 'A.KS'], ['A.KS']) as string[]).length, 1)
+  eq('preferred 비면 stored 코드순', (orderIndexSymbols([], ['B.KS', 'A.KS']) as string[]).join(','), 'A.KS,B.KS')
+  eq('stored 비면 빈 목록', (orderIndexSymbols(['A.KS'], []) as string[]).length, 0)
 }
 
 finish()

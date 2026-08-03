@@ -6,7 +6,8 @@
 #   병행 검증(§6 단계 3)이 끝나 프론트 URL을 전환하는 시점에 아래 schedule 블록을 켠다.
 #
 #     # schedule:
-#     #   - cron: '45 7 * * 1-5'  # 평일 07:45 UTC = 16:45 KST (intraday-cron 16:15 이후)
+#     #   - cron: '45 7 * * 1-5'  # 평일 07:45 UTC = 16:45 KST
+#     #                           # (EC2 크론 daily-intraday 16:15 KST가 푸시한 뒤)
 #
 # 시크릿(리포 Settings → Secrets → Actions. 값 입력은 대표만 · T0):
 #   CONVEX_URL            https://<deployment>.convex.site

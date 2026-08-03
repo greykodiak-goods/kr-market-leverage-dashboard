@@ -2,7 +2,7 @@
 //
 // 왜: Phase A의 목표는 "프론트가 URL만 바꿔 끼울 수 있는 백엔드"다. 그러려면 현재 정적
 //     파일로 만들어지는 데이터가 DB에도 같은 내용으로 들어가 있어야 한다. 수집 파이프라인
-//     (fetch-intraday / paper-trade)은 건드리지 않고, **그 산출물을 그대로 복사**한다.
+//     (kiwoom-backfill / paper-trade)은 건드리지 않고, **그 산출물을 그대로 복사**한다.
 //     이 단계에서는 정적 파일이 여전히 정본이고 DB는 사본이다 — 병행 검증 후 뒤집는다.
 //
 // 실행 (시크릿 단일 원본 = Doppler · ops governance/SECRETS-POLICY.md):

@@ -1,10 +1,11 @@
 // 5분봉 파싱·누적 병합 — 순수 함수만 둔다(테스트 가능).
 //
-// 왜 누적이 필요한가:
-//   Yahoo v8 chart는 interval=5m 을 지원하지만 **최근 60일치만** 준다(1m은 7일).
-//   백테스트에 쓰려면 매일 받아 쌓아야 한다. 60일 롤링 윈도우이므로 오늘부터
-//   모으면 시간이 갈수록 길어진다 — 6개월 뒤엔 6개월치가 된다.
-//   과거를 소급해 늘릴 방법은 (무료 경로에는) 없다. 이건 시간이 해결하는 종류의 제약이다.
+// 수집 소스 (2026-08-03 대표 지시 "5분봉도 키움으로 전환"):
+//   정본은 **키움 REST ka10080 분봉**이다(`scripts/kiwoom-backfill.mjs`).
+//   매일 증분(`--daily`)과 주간 소급 보정(옵션 없음)이 같은 저장소에 병합된다.
+//   구 수집 경로였던 Yahoo v8 5분봉(60일 롤링)은 제거됐다 — 다만 **2026-08-03 이전
+//   구간에는 Yahoo로 받은 봉이 저장소에 남아 있다**(같은 파일에 병합됨). 그래서
+//   병합·대조 함수는 소스 중립으로 유지한다.
 //
 // 저장 포맷은 컬럼형이다. 봉마다 키 이름을 반복하면 용량이 몇 배가 된다
 // (일봉 캐시에서 이미 localStorage 한도를 터뜨린 전례가 있어 같은 방식을 쓴다).
@@ -13,37 +14,24 @@
 export const KR_BARS_PER_DAY = 78
 
 /**
- * Yahoo v8 chart 응답 → 5분봉 배열.
- * ts는 epoch **초**(Yahoo 원본 그대로). 결측(null OHLC) 봉은 버리고 개수를 보고한다.
+ * 감시목록 폴백 시드 — 네이버 시총 랭킹 조회가 죽었을 때만 쓴다.
+ * [추정 스냅샷 2026-07 기준, 정본은 실행 시점 랭킹] 순위 정확성보다
+ * "유동성 있는 대형주 표본"이면 충분하다.
  */
-export function parseYahooIntraday(json) {
-  const res = json?.chart?.result?.[0]
-  if (!res) {
-    const msg = json?.chart?.error?.description ?? 'chart.result 없음'
-    throw new Error(`Yahoo 응답 파싱 실패: ${msg}`)
-  }
-  const ts = res.timestamp ?? []
-  const q = res.indicators?.quote?.[0] ?? {}
-  const granularity = res.meta?.dataGranularity ?? null
-  const tz = res.meta?.exchangeTimezoneName ?? null
-  const gmtoffset = res.meta?.gmtoffset ?? null
-
-  const bars = []
-  let dropped = 0
-  for (let i = 0; i < ts.length; i++) {
-    const o = q.open?.[i]
-    const h = q.high?.[i]
-    const l = q.low?.[i]
-    const c = q.close?.[i]
-    const v = q.volume?.[i]
-    if ([o, h, l, c].some((x) => x == null || !Number.isFinite(x))) {
-      dropped++
-      continue
-    }
-    bars.push({ ts: ts[i], o, h, l, c, v: Number.isFinite(v) ? v : 0 })
-  }
-  return { bars, dropped, granularity, tz, gmtoffset }
-}
+export const SEED_SYMBOLS = [
+  ...[
+    '005930', '000660', '373220', '207940', '005380', '000270', '068270', '105560', '035420', '329180',
+    '055550', '012450', '028260', '012330', '005490', '032830', '009540', '086790', '051910', '042660',
+    '138040', '000810', '035720', '006400', '033780', '096770', '066570', '034020', '017670', '316140',
+    '030200', '259960', '011200', '402340', '010130', '015760', '024110', '003550', '010140', '086280',
+  ].map((c) => `${c}.KS`),
+  ...[
+    '196170', '247540', '086520', '028300', '214450', '000250', '214150', '141080', '145020', '277810',
+    '087010', '950160', '348370', '035900', '041510', '257720', '058470', '068760', '310210', '078600',
+    '240810', '039030', '036930', '357780', '403870', '089030', '005290', '095340', '399720', '237690',
+    '225570', '293490', '112040', '263750', '328130', '376300',
+  ].map((c) => `${c}.KQ`),
+]
 
 /**
  * 기존 누적분 + 새로 받은 분을 병합한다.
@@ -154,6 +142,47 @@ export function buildWatchlist(ranked, existingSymbols, seedSymbols) {
   for (const s of existingSymbols ?? []) set.add(s)
   if (ranked.length === 0) for (const s of seedSymbols ?? []) set.add(s)
   return [...set]
+}
+
+/**
+ * 매일 증분 수집의 소급 하한(= 이 시각까지만 거슬러 받는다).
+ *
+ * 매일 도는 수집은 "어제까지 쌓인 것 뒤"만 받으면 된다. 그래서 기준은
+ * **저장소의 최신 봉**이고, 정렬·대조를 위해 하루치(overlapSec)를 겹쳐 받는다.
+ * 다만 오래 멈춰 있었거나 신규 편입 종목이면 무한정 거슬러 올라가게 되므로
+ * maxDays로 바닥을 깐다(그 이상의 소급은 주간 백필의 몫).
+ *
+ * @param {number|null} newestExistingTs 저장소 최신 봉 epoch초 (없으면 null)
+ * @param {number} nowSec 현재 epoch초
+ * @param {number} maxDays 최대 소급 일수 (기본 7)
+ * @param {number} overlapSec 겹침 여유 (기본 1일)
+ */
+export function dailyCutoffTs(newestExistingTs, nowSec, maxDays = 7, overlapSec = 86400) {
+  const floor = nowSec - maxDays * 86400
+  if (!Number.isFinite(newestExistingTs)) return floor
+  return Math.max(floor, newestExistingTs - overlapSec)
+}
+
+/**
+ * index.json에 실을 심볼 순서.
+ *
+ * 순서에 의미가 있다 — `scripts/spec-backtest.entry.ts`가 index.json의 순서를
+ * "수집 당시 시총 랭킹 순"으로 읽어 상위 20을 자른다. 그래서 오늘 랭킹(preferred)
+ * 순서를 앞에 두고, 랭킹에서 빠졌지만 계속 누적 중인 종목(고아)을 뒤에 코드순으로 붙인다.
+ * 실제 파일이 있는 심볼(stored)만 남긴다 — 수집 실패로 파일이 없는 종목은 싣지 않는다.
+ */
+export function orderIndexSymbols(preferred, stored) {
+  const have = new Set(stored ?? [])
+  const out = []
+  const seen = new Set()
+  for (const s of preferred ?? []) {
+    if (have.has(s) && !seen.has(s)) {
+      out.push(s)
+      seen.add(s)
+    }
+  }
+  for (const s of [...have].sort()) if (!seen.has(s)) out.push(s)
+  return out
 }
 
 /**

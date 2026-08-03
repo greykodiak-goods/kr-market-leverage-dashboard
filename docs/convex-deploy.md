@@ -11,7 +11,7 @@
 | **한다** | 정적 JSON(`public/data/**`)과 **같은 키 구조**를 주는 Convex HTTP 엔드포인트를 띄운다. |
 | **한다** | 정적 파일을 읽어 Convex로 밀어 넣는 업로더(`scripts/convex-sync.mjs`)를 제공한다. |
 | **안 한다** | 프론트 URL을 바꾸지 않는다. 이 배포는 **화면에 영향이 없다**. |
-| **안 한다** | 기존 크론(`intraday-cron`, `paper-trading`)을 건드리지 않는다. 정적 파일이 여전히 정본이다. |
+| **안 한다** | 기존 크론(EC2 `daily-intraday`, `paper-trading`)을 건드리지 않는다. 정적 파일이 여전히 정본이다. |
 | **안 한다** | 스케줄 자동 실행. `convex-sync` 워크플로는 `workflow_dispatch` 전용이다. |
 
 롤백은 "프론트를 안 바꿨으니 아무것도 안 해도 됨" 이다. 굳이 지우려면 새 테이블·라우트를
@@ -140,7 +140,8 @@ diff <(curl -s "$D/data/paper/all80.json") public/data/paper/all80.json && echo 
    - `CONVEX_URL`, `CONVEX_INGEST_SECRET` (3번과 같은 값)
 2. Actions 탭 → `convex-sync` → Run workflow (`recent=500`, `dry_run` 체크로 먼저 확인)
 3. 자동화까지 원하면 워크플로 상단 주석의 `schedule` 블록을 켠다
-   (평일 07:45 UTC = 16:45 KST — `intraday-cron`(16:15 KST)이 끝난 뒤).
+   (평일 07:45 UTC = 16:45 KST — EC2 5분봉 증분 크론 `daily-intraday`(16:15 KST)가
+   커밋을 푸시한 뒤. 2026-08-03 이전에는 GHA `intraday-cron`이 그 자리였다).
    **이건 병행 검증이 끝난 뒤에 한다.**
 
 ---
