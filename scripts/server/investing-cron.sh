@@ -57,13 +57,18 @@ case "${1:-}" in
     # 검증 범위를 **이번에 갱신된 종목**으로 좁힌다. 전체를 검증하면 관련 없는 종목 파일 하나가
     # FAIL일 때 set -e가 커밋·푸시까지 막아, 매일 수집이 조용히 얼어붙는다(알림 경로가 없다).
     SYMS="$(sed -n 's/^UPDATED_SYMBOLS=//p' "$RUNLOG" | tail -1)"
+    # 검증 범위를 **이번에 새로 들어온 날짜 이후**로도 좁힌다. 파일에 남은 야후 시절
+    # 누적분은 매일 14:55에 끊겨 있어(2026-08-03 실측 96.7%) 전 구간 검증은 매일 FAIL이고,
+    # 그러면 오늘 받은 정상 데이터까지 영원히 커밋되지 않는다 — 그동안 키움 소급 한도를
+    # 넘어간 날은 영구히 못 받는다. 절단 구간의 결함은 주간 전수 검증이 계속 들고 있다.
+    SINCE="$(sed -n 's/^UPDATED_FROM=//p' "$RUNLOG" | tail -1)"
     rm -f "$RUNLOG"
     if [ -z "$SYMS" ]; then
       echo "[daily-intraday] 갱신된 종목 없음(휴장일 등) — 검증·커밋 생략"
       exit 0
     fi
     # 검증 게이트 — FAIL이면 종료 코드 1 → set -e로 중단되어 오염 데이터가 커밋되지 않는다
-    nice -n 10 "${DOPPLER[@]}" node scripts/verify-intraday.mjs --symbols="$SYMS"
+    nice -n 10 "${DOPPLER[@]}" node scripts/verify-intraday.mjs --symbols="$SYMS" ${SINCE:+--since="$SINCE"}
     COMMIT_PATHS="public/data/intraday"
     MSG="data: 키움 5분봉 일일 증분 (EC2 cron, 갱신분 3층 검증 통과)"
     ;;

@@ -44,6 +44,7 @@ import {
   buildWatchlist,
   coverage,
   dailyCutoffTs,
+  kstDate,
   mergeBars,
   orderIndexSymbols,
   packBars,
@@ -221,6 +222,13 @@ let addedTotal = 0
 const collectedSyms = []
 /** 호출이 예외로 끝난 종목(토큰 만료·IP 미등록·서버 점검) — 휴장일의 "빈 응답"과 구분한다. */
 const erroredSyms = []
+/**
+ * 이번 회차에 받은 봉 중 **가장 이른 시각**. 검증 범위를 이번에 새로 들어온 구간으로
+ * 좁히는 데 쓴다 — 파일에 남아 있는 야후 시절 누적분(매일 14:55에 끝나는 절단 구간)이
+ * 매일의 수집을 무기한 막지 않게 하기 위함이다(2026-08-03 실측: 96.7%가 절단).
+ * 그 구간의 결함은 주간 전수 검증이 계속 FAIL로 들고 있다 — 숨기는 것이 아니라 분리한다.
+ */
+let updatedFromTs = Infinity
 
 for (const sym of targets) {
   const code = sym.slice(0, 6)
@@ -296,6 +304,7 @@ for (const sym of targets) {
   const { offset, basis } = detectOffset(collected, existing)
   const cmp = compareOverlap(collected, existing, offset)
   const incoming = collected.map((b) => ({ ts: b.t + offset, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v }))
+  for (const b of incoming) if (b.ts < updatedFromTs) updatedFromTs = b.ts
   const merged = mergeBars(existing, incoming) // 키움(신규) 우선
   const added = merged.length - existing.length
   addedTotal += added
@@ -440,6 +449,8 @@ if (!DRY_RUN) writeIndex()
 // 크론이 검증 범위를 이번에 건드린 종목으로 좁히는 데 쓴다 — 관련 없는 종목 파일 하나가
 // FAIL이라고 80종목 전체의 커밋·푸시가 무기한 막히는 것을 방지한다(파싱용 고정 형식).
 console.log(`UPDATED_SYMBOLS=${collectedSyms.join(',')}`)
+// 이번에 새로 들어온 구간의 첫 날짜 — 크론이 `verify-intraday --since=` 로 넘긴다.
+if (Number.isFinite(updatedFromTs)) console.log(`UPDATED_FROM=${kstDate(updatedFromTs)}`)
 
 // ---- 최종 보고 ---------------------------------------------------------------
 console.log('')

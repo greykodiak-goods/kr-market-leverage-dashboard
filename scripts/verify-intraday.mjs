@@ -21,7 +21,7 @@ import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { loadSecret } from './lib/loadSecret.mjs'
 import { createKiwoomClient, parseDailyChart } from './lib/kiwoom.mjs'
-import { toDailyBars, unpackBars } from './lib/intraday.mjs'
+import { kstDate, toDailyBars, unpackBars } from './lib/intraday.mjs'
 import {
   checkStructure,
   compareDailySeries,
@@ -41,6 +41,22 @@ const ONLY = args.get('symbols')?.split(',').map((s) => s.trim()).filter(Boolean
 const SKIP_KIWOOM = args.get('skip-kiwoom') === 'true'
 const SKIP_YAHOO = args.get('skip-yahoo') === 'true'
 const JSON_OUT = args.get('json') ?? null
+/**
+ * `--since=YYYY-MM-DD` — 이 날짜 이후 봉만 검증한다. **매일 수집 전용 옵션**이다.
+ *
+ * 왜 필요한가: 파일에는 야후 시절 누적분이 남아 있고, 그 구간은 매일 14:55에 끊겨 있다
+ * (2026-08-03 실측 80종목 4,800일 중 96.7%). 그 결함은 증분 수집으로 고쳐지지 않으므로,
+ * 범위를 안 좁히면 **오늘 새로 받은 정상 데이터도 어제의 결함 때문에 영원히 커밋되지 않는다.**
+ * 매일 수집이 얼어붙는 동안 키움 소급 한도를 넘어간 날은 영구히 못 받는다 — 그게 더 큰 손실이다.
+ *
+ * ⚠️ **결함을 숨기는 옵션이 아니다.** 주간 전수 검증(`weekly-backfill`)은 `--since` 없이 돌아
+ * 절단 구간을 계속 FAIL로 들고 있다. 이 옵션은 "덮기"가 아니라 "분리"다.
+ */
+const SINCE = args.get('since') ?? null
+if (SINCE && !/^\d{4}-\d{2}-\d{2}$/.test(SINCE)) {
+  console.error(`⛔ --since 형식이 YYYY-MM-DD가 아니다: ${SINCE}`)
+  process.exit(2)
+}
 const KIWOOM_REQ_CAP = Number(args.get('max-kiwoom-req') ?? 10)
 
 const DATA_DIR = join(process.cwd(), 'public', 'data', 'intraday')
@@ -123,7 +139,12 @@ const all = readdirSync(DATA_DIR)
   .filter((f) => f.endsWith('.json') && f !== 'index.json')
   .map((f) => f.replace(/\.json$/, ''))
 const targets = (ONLY ?? all).filter((s) => /^\d{6}\.(KS|KQ)$/.test(s))
-console.log(`대상 ${targets.length}종목\n`)
+console.log(
+  `대상 ${targets.length}종목` +
+    (SINCE
+      ? ` · 검증 범위 ${SINCE} 이후만 (매일 수집 모드 — 그 이전 구간의 결함은 주간 전수 검증이 계속 들고 있다)\n`
+      : ' · 검증 범위 전 구간\n'),
+)
 
 const results = []
 for (const sym of targets) {
@@ -134,7 +155,14 @@ for (const sym of targets) {
     results.push({ sym, verdict: { level: 'FAIL', fails: ['파일 읽기/파싱 실패'], warns: [] } })
     continue
   }
-  const bars = unpackBars(store.bars)
+  const all = unpackBars(store.bars)
+  const bars = SINCE ? all.filter((b) => kstDate(b.ts) >= SINCE) : all
+  if (SINCE && !bars.length) {
+    // 범위 안에 봉이 하나도 없으면 "검증할 게 없다"이지 "통과"가 아니다 — 구분해서 말한다.
+    results.push({ sym, verdict: { level: 'WARN', fails: [], warns: [`--since=${SINCE} 이후 봉 0개 — 검증 대상 없음`] } })
+    console.log(`⚠️  ${sym} · --since=${SINCE} 이후 봉 0개 (전체 ${all.length}봉) — 검증 대상 없음`)
+    continue
+  }
   const structure = checkStructure(bars)
   const aggDaily = toDailyBars(bars.map((b) => ({ ts: b.ts, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v })))
   const splices = dayGapSuspects(aggDaily)
