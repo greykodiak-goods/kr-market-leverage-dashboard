@@ -23,7 +23,14 @@
 //   드러내게 한다. 요약 수치(mddPct 등)는 **다운샘플 전 원곡선**에서 계산한다 —
 //   주 1점으로 줄인 곡선에서 MDD를 재면 장중·주중 최저점이 빠져 낙폭이 얕아 보인다.
 //
+// ── 시세 소스 (2026-08-03 · 야후 배제 2단계) ────────────────────────────────
+//   국내 유니버스 시세는 `PRICE_SOURCE=krx|yahoo`로 고른다(**기본 yahoo** — KRX 정본 파일이
+//   아직 리포에 없다). 화면과 **같은 어댑터**(src/features/backtest/priceSource.ts)를 쓰므로
+//   두 쪽이 다른 소스로 갈릴 수 없다. `krx`인데 데이터가 없으면 **굽기를 중단한다**(폴백 없음).
+//   ⚠️ 벤치(KODEX 200)·참고선(QQQ·QLD·금·환율)은 소스와 무관하게 **항상 야후**다.
+//
 // 실행: node scripts/preset-precompute.mjs   (GHA backtest.yml MODE=presets)
+//       PRICE_SOURCE=krx node scripts/preset-precompute.mjs
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -59,7 +66,17 @@ import {
 } from '../src/features/backtest/presets'
 import type { StrategySpec } from '../src/features/backtest/strategySpec'
 import type { DailyBar } from '../src/features/backtest/types'
-import { KR_LOAD_NOTE, KR_MIN_BARS, loadKrDual } from '../src/lib/history'
+import { KR_LOAD_NOTE, KR_MIN_BARS } from '../src/lib/history'
+// 시세 소스는 **어댑터 하나**로 고른다 — 화면(SpecSimulator)과 같은 함수라 두 쪽이 갈릴 수 없다.
+import {
+  MIXED_SOURCE_NOTE,
+  loadKrPrices,
+  normalizePriceSource,
+  type KrxPriceDeps,
+  type PriceSource,
+  type PriceSourceMeta,
+} from '../src/features/backtest/priceSource'
+import { KRX_DAILY_DIR } from '../src/features/backtest/krxDailyPrices'
 
 // CJS 번들에서 import.meta.url이 없으므로 런처가 REPO_ROOT를 넘긴다.
 const root = process.env.REPO_ROOT ?? process.cwd()
@@ -69,9 +86,22 @@ const OUT_PATH = join(root, 'public', 'data', 'presets-precomputed.json')
  * 산출물 스키마 버전 — 화면이 모르는 버전이면 무시하고 우아하게 강등한다.
  * 2 (2026-08-02): 표준 성과 지표 세트(변동성·샤프·소르티노·최장 낙폭 기간·손익비·PF) **추가**.
  * 3 (2026-08-03): 참고 벽(walls — 같은 구간 QQQ 원화·KODEX 200 단순보유) **추가**.
- * 전부 필드 추가만이라 화면(precomputed.ts)은 schema 1·2 산출물도 계속 읽는다(없는 값은 '—'·상수 강등).
+ * 4 (2026-08-03): **시세 소스**(priceSource·priceSourceNote·priceSourceLimits) **추가** — 야후 배제 2단계.
+ *   어느 시세로 구운 수치인지 산출물이 스스로 말하게 한다. 야후(총수익)와 KRX 정본(가격수익)은
+ *   같은 표에서 비교하면 안 되는 값이라, 소스 표기가 없으면 그 표가 곧 거짓이 된다(규칙 3).
+ * 전부 필드 추가만이라 화면(precomputed.ts)은 schema 1·2·3 산출물도 계속 읽는다(없는 값은 '—'·상수 강등).
  */
-export const PRECOMPUTE_SCHEMA = 3
+export const PRECOMPUTE_SCHEMA = 4
+
+/**
+ * 시세 소스 선택 — `PRICE_SOURCE=krx|yahoo`(기본 yahoo).
+ * **기본이 야후인 이유**: KRX 일별 정본 파일이 아직 리포에 없다(EC2 수집 진행 중).
+ * 전환은 데이터가 도착한 뒤 총괄이 한다 — 크론이 조용히 소스를 바꿔 수치가 갈리지 않게
+ * 명시적 환경변수로만 넘어간다. 모르는 값이 들어오면 야후로 좁힌다(조용한 오작동 방지).
+ */
+export function priceSourceFromEnv(env: Record<string, string | undefined>): PriceSource {
+  return normalizePriceSource((env.PRICE_SOURCE ?? '').trim().toLowerCase())
+}
 
 /**
  * 화면의 `getDailyHistory(sym, BACKTEST_HISTORY_RANGE)`와 **같은 구간**을 받는다.
@@ -191,6 +221,15 @@ export interface PrecomputedFile {
   presets: PrecomputedPreset[]
   /** 참고 벽(schema 3~) — 같은 구간 단순보유를 다시 잰 값. 판정 벤치가 아니다. */
   walls: WallStats[]
+  /**
+   * 국내 유니버스 시세를 어디서 받았는지(schema 4~). 옛 산출물에는 없다 → 화면은 'yahoo'로 읽는다.
+   * ⚠️ 벤치·참고선은 소스와 무관하게 **항상 야후**다(KRX Open API가 주지 않는 종목·해외 자산).
+   */
+  priceSource: PriceSource
+  /** 그 소스의 출처 한 줄(수집일·종목수 등) */
+  priceSourceNote: string
+  /** 그 소스의 한계 목록 — 화면이 그대로 나열한다(규칙 3) */
+  priceSourceLimits: string[]
 }
 
 /** `YYYY-MM-DD`에서 n년 뺀 문자열. 문자열 비교로만 쓰므로 2/29 같은 날도 사전순으로 안전하다. */
@@ -360,13 +399,19 @@ export function buildPayload(
   computedAt: string,
   cost: CostSettings,
   walls: WallStats[] = [],
+  /** 국내 시세 소스 메타(schema 4~). 안 넘기면 야후 전제 — 옛 호출부와 수치가 갈리지 않는다. */
+  priceMeta?: Pick<PriceSourceMeta, 'source' | 'note' | 'limits'>,
 ): PrecomputedFile {
+  const source: PriceSource = priceMeta?.source ?? 'yahoo'
   return {
     schema: PRECOMPUTE_SCHEMA,
     asOf,
     computedAt,
     curveInterval: 'weekly',
     cost,
+    priceSource: source,
+    priceSourceNote: priceMeta?.note ?? `시세: Yahoo Finance chart v8 · ${KR_LOAD_NOTE}`,
+    priceSourceLimits: priceMeta?.limits ? [...priceMeta.limits] : [],
     note:
       '시뮬레이터 프리셋을 화면과 같은 엔진·같은 비용으로 미리 돌린 산출물이다. ' +
       '곡선은 주 1점으로 줄였고(최저점·최종일 보존), 요약 수치는 줄이기 전 원곡선에서 쟀다. ' +
@@ -378,7 +423,13 @@ export function buildPayload(
       '⚠️ walls는 **같은 구간으로 다시 잰** 단순보유 참고선이며 알파 판정 벤치가 아니다(판정 벤치는 KODEX 200). ' +
       '34차 실측에서 35변형 중 QQQ 원화 보유의 칼마를 넘은 조합은 하나도 없었다. ' +
       '샤프·소르티노는 무위험수익률 0% 가정이라 실제 국고채 수익률만큼 낮아진다. ' +
-      `${KR_LOAD_NOTE} ` +
+      // 시세 소스는 **수치의 의미 자체**를 바꾼다(총수익 vs 가격수익) — 산출물이 스스로 밝힌다.
+      `시세 소스: ${
+        source === 'krx'
+          ? 'KRX 일별 정본(원주가·분할보정 · **배당 미반영 = 가격수익**)'
+          : 'Yahoo 일봉(**총수익 = 배당 재투자** · 상폐 종목 부재)'
+      }. ${MIXED_SOURCE_NOTE} ` +
+      `${source === 'yahoo' ? `${KR_LOAD_NOTE} ` : ''}` +
       '매수 권유가 아니다.',
     presets,
     walls,
@@ -480,6 +531,28 @@ export function loadKrxUniverseFile(rootDir: string): DerivedKrxUniverse {
   return deriveKrxUniverse(parseKrxPitUniverse(raw), DEFAULT_KRX_TOP_N)
 }
 
+/**
+ * 노드용 KRX 정본 의존성 — 리포에 커밋된 `public/data/krx-daily/*`를 직접 읽는다.
+ * 파일이 없으면 **null**을 돌려주고(어댑터가 "EC2 수집이 아직 안 끝났습니다"로 번역),
+ * 그 외 읽기 오류는 그대로 던진다. 야후로 조용히 내려가지 않는다.
+ */
+export function nodeKrxDeps(rootDir: string): KrxPriceDeps {
+  const read = (rel: string): unknown | null => {
+    const path = join(rootDir, KRX_DAILY_DIR, rel)
+    try {
+      return JSON.parse(readFileSync(path, 'utf8'))
+    } catch (e) {
+      // 파일 없음(ENOENT)만 "아직 없다"로 본다 — JSON 깨짐은 진짜 오류다.
+      if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return null
+      throw new Error(`${path} 읽기 실패: ${String(e)}`)
+    }
+  }
+  return {
+    readIndex: async () => read('index.json'),
+    readStock: async (_code, file) => read(file),
+  }
+}
+
 async function main(): Promise<void> {
   log('# 프리셋 사전계산 — 화면과 같은 엔진으로 전 프리셋 실행')
 
@@ -492,27 +565,35 @@ async function main(): Promise<void> {
   )
   log(`프리셋 ${PRESETS.length}종 — ${PRESETS.map((p) => p.id).join(', ')}`)
 
-  // ---- 시세 로딩 — 화면·연구 러너와 **같은 듀얼 소스 규약**(.KQ/.KS 둘 다 · 긴 이력 채택 · 200봉 게이트) ----
-  const histories: Record<string, DailyBar[]> = {}
-  const symOf: Record<string, string> = {}
-  const failed: string[] = []
-  for (const code of universe.union) {
-    const picked = await loadKrDual(code, (sym) => fetchDaily(sym), (bars) => bars.length, {
-      betweenAttempts: () => sleep(120),
-    })
-    if (picked) {
-      histories[picked.symbol] = picked.value
-      symOf[code] = picked.symbol
-    } else failed.push(code)
-  }
-  const okCount = Object.keys(symOf).length
+  // ---- 시세 로딩 — **어댑터 하나**로 소스를 고른다(화면과 같은 함수) ----
+  //
+  // 야후: 화면·연구 러너와 같은 듀얼 소스 규약(.KQ/.KS 둘 다 · 긴 이력 채택 · 200봉 게이트).
+  // KRX : 리포에 커밋된 일별 정본(원주가 → 수정주가 보정). **데이터가 없으면 던진다** —
+  //        야후로 조용히 내려가면 총수익/가격수익이 섞인 표가 나온다.
+  const priceSource = priceSourceFromEnv(process.env)
+  log(`시세 소스: ${priceSource}${priceSource === 'yahoo' ? ' (기본 · PRICE_SOURCE=krx로 전환)' : ' (PRICE_SOURCE=krx)'}`)
+  const load = await loadKrPrices(universe.union, priceSource, {
+    // 동시성 1 = 기존 순차 로딩 그대로(유량 제한 안쪽). 수치는 한 자리도 바뀌지 않는다.
+    yahoo: { fetchDaily: (sym) => fetchDaily(sym), betweenAttempts: () => sleep(120), concurrency: 1 },
+    krx: nodeKrxDeps(root),
+  })
+  const histories: Record<string, DailyBar[]> = load.histories
+  const symOf: Record<string, string> = load.symOf
+  const failed = load.failed
+  const okCount = load.meta.loaded
   log(
-    `시세 로드 ${okCount}/${universe.union.length} · .KQ/.KS 긴 이력 채택 · ${KR_MIN_BARS}봉 미만 제외` +
-      `${failed.length ? ` · 가격 없음(상장폐지·짧은 응답): ${failed.join(', ')}` : ''}`,
+    priceSource === 'yahoo'
+      ? `시세 로드 ${okCount}/${universe.union.length} · .KQ/.KS 긴 이력 채택 · ${KR_MIN_BARS}봉 미만 제외` +
+          `${failed.length ? ` · 가격 없음(상장폐지·짧은 응답): ${failed.join(', ')}` : ''}`
+      : `시세 로드 ${okCount}/${universe.union.length} · KRX 일별 정본(수정주가 적용)` +
+          `${failed.length ? ` · 수집 범위 밖: ${failed.join(', ')}` : ''}`,
   )
+  log(`  ${load.meta.note}`)
+  for (const l of load.meta.limits) log(`  ⚠️ ${l}`)
+  log(`  ⚠️ ${MIXED_SOURCE_NOTE}`)
   if (failed.length)
-    log('  ↑ 랭킹은 실측이라 선택편향이 없지만, 상폐 종목의 **가격**이 없어 빠진다 — 잔존 가격 생존편향이다.')
-  if (okCount === 0) throw new Error('시세를 하나도 받지 못했습니다 — Yahoo 응답을 확인하세요')
+    log('  ↑ 랭킹은 실측이라 선택편향이 없지만, 빠진 종목만큼 표본이 줄어든다 — 그 방향은 성적을 후하게 만든다.')
+  if (okCount === 0) throw new Error(`시세를 하나도 받지 못했습니다 — ${priceSource} 응답을 확인하세요`)
 
   // ---- 벤치마크(KODEX 200) — 알파 판정 기준(규칙 5) ----
   let bench: DailyBar[] | undefined
@@ -646,10 +727,12 @@ async function main(): Promise<void> {
     }
   }
 
-  const payload = buildPayload(out, asOf, new Date().toISOString(), cost, walls)
+  const payload = buildPayload(out, asOf, new Date().toISOString(), cost, walls, load.meta)
   mkdirSync(dirname(OUT_PATH), { recursive: true })
   writeFileSync(OUT_PATH, `${JSON.stringify(payload)}\n`, 'utf8')
-  log(`\n✅ ${OUT_PATH} · 프리셋 ${out.length}개 · 참고 벽 ${walls.length}개 · asOf ${asOf}`)
+  log(
+    `\n✅ ${OUT_PATH} · 프리셋 ${out.length}개 · 참고 벽 ${walls.length}개 · asOf ${asOf} · 시세 소스 ${payload.priceSource}`,
+  )
   log(
     '⚠️ 랭킹은 KRX 실측이라 목록 선택편향이 없지만 **가격 생존편향(상폐 종목 시세 부재)은 남아 있고**, ' +
       '2010년 이전은 수집 자체가 불가능하다(2008 위기 전반부 부재). 매수 권유가 아니다.',

@@ -28,7 +28,21 @@
 //   (연쇄 실행 pitChain.ts·xsmomChain.ts는 그대로 — 헤드리스 러너와 같은 코드.)
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { BACKTEST_HISTORY_RANGE, KR_LOAD_NOTE, getDailyHistory, loadKrDual } from '../../lib/history'
+import { BACKTEST_HISTORY_RANGE, KR_LOAD_NOTE, getDailyHistory } from '../../lib/history'
+// 시세 소스는 **어댑터 하나**를 통해 고른다(야후 ↔ KRX 일별 정본).
+// 사전계산 스크립트도 같은 함수를 쓰므로 화면과 산출물이 다른 소스로 갈릴 수 없다.
+import {
+  DEFAULT_PRICE_SOURCE,
+  MIXED_SOURCE_NOTE,
+  PRICE_SOURCES,
+  PRICE_SOURCE_LABEL,
+  krxFetchDeps,
+  loadKrPrices,
+  normalizePriceSource,
+  probeKrxDaily,
+  type PriceSource,
+  type PriceSourceMeta,
+} from './priceSource'
 import type { DailyBar } from './types'
 import { EXIT_LABELS, type CostSettings } from './conditionScreen'
 import { annualize, runPitChained, yearsBetween, type PitChainResult } from './pitChain'
@@ -131,6 +145,8 @@ interface Saved {
   goldW?: number
   /** 실측 유니버스 폭(각 시장 상위 N) — 없으면 기본 10(=10+10 · 34차 판정이 나온 폭) */
   topN?: number
+  /** 국내 종목 시세 소스 — 없으면 기본 야후(KRX 정본 파일이 아직 없다) */
+  priceSource?: PriceSource
   spec: StrategySpec
   startDate: string
   /** 종료일 — 이 날짜 이후 봉을 잘라내고 실행한다. 없거나 빈 문자열이면 데이터 끝까지.
@@ -187,6 +203,48 @@ function useKrxUniverseFile(): UniverseState {
   return state
 }
 
+// ---- 시세 소스 준비 상태 (KRX 일별 정본) ------------------------------------
+//
+// KRX 정본은 EC2가 수집해 리포에 커밋하는 정적 파일이라 **아직 없을 수 있다.**
+// 그래서 화면은 먼저 "쓸 수 있는지"만 확인하고, 못 쓰면 그 사유를 그대로 보여주며
+// 실행 버튼을 막는다 — 야후로 조용히 대신 돌리지 않는다(소스가 바뀌면 총수익/가격수익이
+// 섞여 표가 거짓이 된다). 유니버스와 **같은 철학**이다.
+
+type KrxDailyState =
+  | { status: 'loading' }
+  | { status: 'ready'; note: string; from: string; to: string; stocks: number }
+  /** 파일이 아직 없다(수집 전) — 안내 문구가 "무엇을 하면 되는지"를 말한다 */
+  | { status: 'missing'; reason: string }
+  /** 파일이 깨졌다(스키마 위반·HTTP 오류) — 수집 전과 다음 행동이 다르다 */
+  | { status: 'error'; reason: string }
+
+function useKrxDailyStatus(): KrxDailyState {
+  const [state, setState] = useState<KrxDailyState>({ status: 'loading' })
+  useEffect(() => {
+    let alive = true
+    probeKrxDaily(krxFetchDeps(import.meta.env.BASE_URL, (url) => fetch(url)))
+      .then((s) => {
+        if (!alive) return
+        if (s.ready)
+          setState({
+            status: 'ready',
+            note: s.note,
+            from: s.index.from,
+            to: s.index.to,
+            stocks: s.index.stocks.length,
+          })
+        else setState({ status: s.missing ? 'missing' : 'error', reason: s.reason })
+      })
+      .catch((e: unknown) => {
+        if (alive) setState({ status: 'error', reason: e instanceof Error ? e.message : String(e) })
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+  return state
+}
+
 // ---- 프리셋 ----------------------------------------------------------------
 //
 // 프리셋 정의(조건식·모멘텀·결합)와 유형 타입은 **presets.ts가 정본**이다.
@@ -225,6 +283,7 @@ function loadSaved(): Saved {
           marketGate: s.marketGate === true,
           goldW: normalizeGoldW(s.goldW),
           topN: normalizeTopN(s.topN),
+          priceSource: normalizePriceSource(s.priceSource),
         }
     }
   } catch {
@@ -240,6 +299,9 @@ function loadSaved(): Saved {
     marketGate: false,
     goldW: DEFAULT_GOLD_W,
     topN: DEFAULT_KRX_TOP_N,
+    // 기본은 **야후**다 — KRX 일별 정본 파일이 아직 리포에 없다(EC2 수집 중).
+    // 데이터가 도착하면 기본값 전환은 총괄이 판단한다(화면이 먼저 넘어가면 실행 불가가 된다).
+    priceSource: DEFAULT_PRICE_SOURCE,
     // 조건식 편집기의 시작 스펙일 뿐, 화면 프리셋 목록에는 없다(34차에서 조건식 계열은 전멸).
     spec: PRESET_PIT_BASE,
     // 실측 유니버스가 덮는 첫 해와 맞춘다(2010~). 옛 기본값은 ''(데이터 전 구간)이었다.
@@ -922,6 +984,23 @@ export function SpecSimulator() {
   const uni = universe && 'ok' in universe ? universe.ok : null
   const uniError = universe && 'err' in universe ? universe.err : null
 
+  // ---- 시세 소스 (야후 ↔ KRX 일별 정본) -------------------------------------
+  const [priceSource, setPriceSource] = useState<PriceSource>(normalizePriceSource(saved.priceSource))
+  const krxDaily = useKrxDailyStatus()
+  /**
+   * 지금 고른 소스를 **실행할 수 없는 사유**. null이면 실행 가능.
+   * 야후는 언제나 가능하고, KRX는 파일이 있어야 가능하다 — 없으면 **막고 사유를 보여준다**
+   * (야후로 조용히 대신 돌리지 않는다).
+   */
+  const priceSourceBlock = useMemo<string | null>(() => {
+    if (priceSource !== 'krx') return null
+    if (krxDaily.status === 'ready') return null
+    if (krxDaily.status === 'loading') return 'KRX 일별 정본을 확인하는 중입니다…'
+    return krxDaily.reason
+  }, [priceSource, krxDaily])
+  /** 실행 결과가 **실제로 어느 소스로** 나왔는지 — 설정값이 아니라 실행 결과다(규칙 3) */
+  const [priceMeta, setPriceMeta] = useState<PriceSourceMeta | null>(null)
+
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -983,12 +1062,24 @@ export function SpecSimulator() {
     try {
       localStorage.setItem(
         STORE_KEY,
-        JSON.stringify({ kind, mom, comboWA, marketGate, goldW, topN, spec, startDate, endDate, cost } satisfies Saved),
+        JSON.stringify({
+          kind,
+          mom,
+          comboWA,
+          marketGate,
+          goldW,
+          topN,
+          priceSource,
+          spec,
+          startDate,
+          endDate,
+          cost,
+        } satisfies Saved),
       )
     } catch {
       /* 저장 실패는 치명적이지 않다 */
     }
-  }, [kind, mom, comboWA, marketGate, goldW, topN, spec, startDate, endDate, cost])
+  }, [kind, mom, comboWA, marketGate, goldW, topN, priceSource, spec, startDate, endDate, cost])
 
   const flat = useMemo(() => asFlatAnd(spec.entry), [spec.entry])
   // 종목 목록은 실행 시 그 해 유니버스로 주입되므로, 검증에는 대표로 첫 해 목록을 쓴다.
@@ -1013,6 +1104,9 @@ export function SpecSimulator() {
     const diffs: string[] = []
     if (startDate) diffs.push(`시작일 ${startDate}`)
     if (endDate) diffs.push(`종료일 ${endDate}`)
+    // 시세 소스가 다르면 **수치의 의미 자체**가 다르다(총수익 vs 가격수익) — 가장 먼저 알린다.
+    if (precomputed.priceSource !== priceSource)
+      diffs.push(`시세 소스(사전계산 ${precomputed.priceSource} ↔ 지금 ${priceSource})`)
     const c = precomputed.cost
     if (
       c &&
@@ -1023,7 +1117,7 @@ export function SpecSimulator() {
     )
       diffs.push('비용 설정')
     return diffs.length ? diffs.join(' · ') : null
-  }, [showPre, precomputed, startDate, endDate, cost])
+  }, [showPre, precomputed, startDate, endDate, cost, priceSource])
 
   /** 기간 입력 검증 — 실행 전에 막는다 */
   const dateError = useMemo(
@@ -1057,13 +1151,17 @@ export function SpecSimulator() {
   /**
    * 실행 — 전 연도 합집합(KRX 실측) 시세를 한 번만 받아 연도별 유니버스 연쇄 백테스트를 돌린다.
    *
-   * 심볼 매핑: 유니버스 목록은 6자리 코드다. Yahoo는 시장 접미사를 요구하므로 `.KQ`/`.KS`
-   * **양쪽을 조회해 긴 이력을 채택**한다(`loadKrDual` — 연구 러너 `fetchKrDual`과 같은 규약).
-   * 예전에는 `.KS` 첫 성공에서 중단했는데, Yahoo가 다수 코스닥 종목의 `.KS` 쿼리에 11봉짜리
-   * 가짜 시계열을 돌려주는 탓에 시작일이 밀려 그 종목이 유니버스에서 통째로 빠졌다
-   * (2026-08-02 실측 — 평균 매핑률 98%→71%). 200봉 미만은 채택하지 않는다.
-   * 두 쪽 다 실패하면 상장폐지 등으로 가격이 없는 종목이며, 그 해 매핑률에 그대로
-   * 드러난다(생존편향을 숨기지 않는다).
+   * 시세는 **어댑터 하나**(`loadKrPrices`)를 통해 받는다. 사전계산 스크립트도 같은 함수를 쓰므로
+   * 화면과 산출물이 다른 소스로 갈릴 수 없다.
+   *   · `yahoo` — 6자리 코드에 `.KQ`/`.KS` **양쪽을 조회해 긴 이력을 채택**한다(연구 러너와 같은 규약).
+   *     예전에는 `.KS` 첫 성공에서 중단했는데, Yahoo가 다수 코스닥 종목의 `.KS` 쿼리에 11봉짜리
+   *     가짜 시계열을 돌려주는 탓에 시작일이 밀려 그 종목이 유니버스에서 통째로 빠졌다
+   *     (2026-08-02 실측 — 평균 매핑률 98%→71%). 200봉 미만은 채택하지 않는다.
+   *   · `krx`   — 리포에 커밋된 KRX 일별 정본(원주가 → 수정주가 보정). 상폐 종목도 들어 있어
+   *     가격 생존편향이 크게 줄지만 **배당은 반영되지 않는다**(가격수익). 파일이 없으면 **던진다**.
+   *
+   * ⚠️ 어느 소스든 **국내 유니버스 종목만** 해당한다. 벤치(KODEX 200)·참고선(QQQ·QLD·금·환율)은
+   *    아래에서 계속 Yahoo로 받는다 — 화면 안내(MIXED_SOURCE_NOTE)에 그 사실을 남긴다.
    */
   async function run() {
     if (busy) return // 중복 클릭 방어 (버튼 disabled와 이중 잠금)
@@ -1075,45 +1173,38 @@ export function SpecSimulator() {
       // 유니버스가 없으면 **여기서 멈춘다** — [추정] 목록으로 대신 돌리지 않는다(33차 재발 방지).
       if (uniError) throw new Error(uniError)
       if (!uni) throw new Error('KRX 실측 유니버스를 아직 읽는 중입니다 — 잠시 후 다시 실행하세요.')
+      // 고른 소스를 쓸 수 없으면 **여기서 멈춘다** — 야후로 조용히 대신 돌리지 않는다.
+      if (priceSourceBlock) throw new Error(priceSourceBlock)
       const codes = uni.union
-      const histories: Record<string, DailyBar[]> = {}
-      /** 유니버스 코드 → 실제로 시세를 받은 심볼 */
-      const symOf: Record<string, string> = {}
-      const failed: string[] = []
-      // 병렬 로딩 — 순차(67회 왕복 직렬)가 시뮬 체감 지연의 주범이었다. 동시 6개:
+      setProgress(`시세 로딩 0/${codes.length}…`)
+      // 병렬 로딩(야후) — 순차(67회 왕복 직렬)가 시뮬 체감 지연의 주범이었다. 동시 6개:
       // 공용 CORS 프록시의 유량 제한을 넘지 않는 선에서 벽시계 시간을 ~1/6로 줄인다.
       // 범위는 BACKTEST_HISTORY_RANGE(1999~) 고정 — 유니버스가 2000년부터라 5y·10y로는 앞
       // 구간이 통째로 비고, 1999년 봉은 첫 해 지표 워밍업에 쓰인다(백테스트 시작은 2000년).
-      {
-        let done = 0
-        setProgress(`시세 로딩 0/${codes.length}…`)
-        const queue = [...codes]
-        const CONCURRENCY = 6
-        const worker = async () => {
-          for (;;) {
-            const code = queue.shift()
-            if (!code) return
-            const picked = await loadKrDual(
-              code,
-              (sym) => getDailyHistory(sym, BACKTEST_HISTORY_RANGE),
-              (h) => h.bars.length,
-            )
-            if (picked) {
-              histories[picked.symbol] = picked.value.bars
-              symOf[code] = picked.symbol
-            } else failed.push(code)
-            done++
-            setProgress(`시세 로딩 ${done}/${codes.length}…`)
-          }
-        }
-        await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker))
-      }
-      const okCount = Object.keys(symOf).length
+      const load = await loadKrPrices(codes, priceSource, {
+        yahoo: {
+          fetchDaily: (sym) => getDailyHistory(sym, BACKTEST_HISTORY_RANGE).then((h) => h.bars),
+          concurrency: 6,
+        },
+        krx: krxFetchDeps(import.meta.env.BASE_URL, (url) => fetch(url)),
+        onProgress: (done, total) => setProgress(`시세 로딩 ${done}/${total}…`),
+      })
+      // 아래에서 레짐·벤치 심볼을 더 담기 때문에 어댑터가 준 객체를 그대로 이어 쓴다.
+      const histories: Record<string, DailyBar[]> = load.histories
+      /** 유니버스 코드 → 실제로 시세를 받은 심볼(야후는 '005930.KS', KRX는 '005930') */
+      const symOf: Record<string, string> = load.symOf
+      const failed = load.failed
+      const okCount = load.meta.loaded
+      setPriceMeta(load.meta)
       if (okCount === 0) throw new Error('시세를 하나도 받지 못했습니다 — 네트워크/프록시 상태를 확인하세요')
       if (failed.length)
         addNote(
-          `⚠️ 가격 없음(상장폐지 등)으로 제외: ${failed.join(', ')} — ${okCount}/${codes.length}종목으로 실행합니다. 빠진 종목은 대부분 그 시절 상위였다가 사라진 회사라, 성적이 실제보다 후하게 나옵니다(생존편향 잔존).`,
+          `⚠️ 가격 없음(${priceSource === 'krx' ? '수집 범위 밖' : '상장폐지 등'})으로 제외: ${failed.join(', ')} — ` +
+            `${okCount}/${codes.length}종목으로 실행합니다. 빠진 종목은 대부분 그 시절 상위였다가 사라진 회사라, ` +
+            '성적이 실제보다 후하게 나옵니다(생존편향 잔존).',
         )
+      // 소스가 섞이는 구간(벤치·참고선은 계속 야후)을 실행할 때마다 남긴다.
+      addNote(`ℹ️ 시세 소스: ${load.meta.badge} · ${MIXED_SOURCE_NOTE}`)
 
       // 레짐 게이트가 있으면 지수 시세도 필요하다 (매매 대상 아님 — 판정 전용)
       const extraSymbols: string[] = []
@@ -1889,6 +1980,52 @@ export function SpecSimulator() {
             ))}
           </select>
         </label>
+        <label>
+          시세 소스
+          <select
+            value={priceSource}
+            disabled={busy}
+            onChange={(e) => setPriceSource(normalizePriceSource(e.target.value))}
+            title="국내 유니버스 종목의 시세를 어디서 받을지 — 벤치·참고선은 어느 쪽을 골라도 Yahoo입니다"
+          >
+            {PRICE_SOURCES.map((s) => (
+              <option key={s} value={s}>
+                {PRICE_SOURCE_LABEL[s]}
+              </option>
+            ))}
+          </select>
+          <InfoTip text="Yahoo는 배당까지 반영된 총수익 시계열이지만 상장폐지 종목이 통째로 빠져 생존편향이 남습니다(6자리 코드에 엉뚱한 티커의 짧은 응답이 온 사고도 있었습니다). KRX 일별 정본은 그날 상장돼 있던 전 종목의 실측 단면이라 상폐 종목도 들어 있지만, 원주가(수정 전)라 분할 보정을 우리가 산출하며 배당은 반영되지 않습니다(가격수익). 두 소스의 성적은 같은 표에서 직접 비교하면 안 됩니다. 데이터가 없으면 Yahoo로 조용히 대신 돌리지 않고 실행을 막습니다." />
+        </label>
+        <div className="bt-note" style={{ width: '100%' }}>
+          {priceSource === 'krx' && krxDaily.status === 'loading' && <strong>KRX 일별 정본 확인 중…</strong>}
+          {priceSource === 'krx' && (krxDaily.status === 'missing' || krxDaily.status === 'error') && (
+            <div className="bt-warn" role="alert">
+              ⛔ {krxDaily.reason}
+              <div style={{ marginTop: 4 }}>
+                {krxDaily.status === 'missing'
+                  ? '수집이 끝나 public/data/krx-daily/ 파일이 리포에 커밋되면 이 선택지가 열립니다. 그때까지는 Yahoo로 돌리세요 — 다만 Yahoo 성적에는 생존편향이 남아 있습니다.'
+                  : '파일은 있는데 형식이 맞지 않습니다 — 수집을 다시 돌려야 합니다(Yahoo로 대신 돌리는 것은 소스가 섞이므로 자동으로 하지 않습니다).'}
+              </div>
+            </div>
+          )}
+          {priceSource === 'krx' && krxDaily.status === 'ready' && (
+            <>
+              <span className="badge">KRX 실측 일별</span>{' '}
+              <strong>
+                {krxDaily.from}~{krxDaily.to} · {krxDaily.stocks}종목
+              </strong>
+              <div style={{ marginTop: 4, fontSize: 12 }}>{krxDaily.note}</div>
+            </>
+          )}
+          {priceSource === 'yahoo' && krxDaily.status === 'ready' && (
+            <div style={{ fontSize: 12 }}>
+              KRX 일별 정본({krxDaily.from}~{krxDaily.to} · {krxDaily.stocks}종목)이 준비돼 있습니다 — 소스를 바꾸면
+              상폐 종목이 포함된 시계열로 다시 돌릴 수 있습니다(대신 <strong>배당 미반영</strong>이라 수치를 Yahoo
+              결과와 직접 비교하면 안 됩니다).
+            </div>
+          )}
+          <div style={{ marginTop: 4, fontSize: 12 }}>{MIXED_SOURCE_NOTE}</div>
+        </div>
         <div className="bt-note" style={{ width: '100%' }}>
           {uniError ? (
             <div className="bt-warn" role="alert">
@@ -1963,7 +2100,11 @@ export function SpecSimulator() {
           type="button"
           className="bt-btn-run"
           disabled={
-            busy || dateError != null || uni == null || (kind !== 'momentum' && issues.some((i) => i.level === 'error'))
+            busy ||
+            dateError != null ||
+            uni == null ||
+            priceSourceBlock != null ||
+            (kind !== 'momentum' && issues.some((i) => i.level === 'error'))
           }
           onClick={run}
         >
@@ -1973,7 +2114,11 @@ export function SpecSimulator() {
               ? '유니버스 로드 실패 — 실행 불가'
               : uni == null
                 ? '유니버스 읽는 중…'
-                : '▶ 백테스트 실행 (2차 검증)'}
+                : priceSourceBlock
+                  ? krxDaily.status === 'loading'
+                    ? 'KRX 정본 확인 중…'
+                    : 'KRX 정본 없음 — 실행 불가'
+                  : '▶ 백테스트 실행 (2차 검증)'}
         </button>
         {kind !== 'momentum' && (
           <button type="button" className="bt-btn-mini" onClick={exportJson}>
@@ -2181,6 +2326,28 @@ export function SpecSimulator() {
               <PerfStatCards stats={perf.stats} detail={perf.detail} ledgerAttributed={perf.attributed} />
             )}
           </div>
+
+          {/* 시세 소스 — **설정값이 아니라 실행 결과**다(규칙 3). 어느 시세로 나온 수치인지
+              표 옆에 붙여 두지 않으면 총수익(야후)과 가격수익(KRX)이 같은 축에서 읽힌다. */}
+          {priceMeta && (
+            <>
+              <div className="badges">
+                <span className="badge">{priceMeta.badge}</span>
+                <span className="badge">
+                  {priceMeta.loaded}/{priceMeta.requested}종목 · 데이터 끝 {priceMeta.asOf || '—'}
+                </span>
+              </div>
+              <div className="bt-note" style={{ fontSize: 12 }}>
+                <div>{priceMeta.note}</div>
+                <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+                  {priceMeta.limits.map((l, i) => (
+                    <li key={i}>{l}</li>
+                  ))}
+                </ul>
+                <div style={{ marginTop: 4 }}>{MIXED_SOURCE_NOTE}</div>
+              </div>
+            </>
+          )}
 
           {/* 슬리브 단독 성적 — 결합 곡선에 없는 매매 원장이 여기 있다 */}
           {kind === 'combo' && comboOpts && (comboOpts.gatedMonths > 0 || comboOpts.goldW > 0) && (
@@ -2557,8 +2724,21 @@ export function SpecSimulator() {
         (Open API 키 등록 시 실측으로 대체 예정) 목록 자체가 틀렸을 수 있습니다. 상장폐지 종목은 가격 데이터가
         없어 빠지므로 <strong>일부 생존편향이 잔존</strong>하고(연도별 매핑률 참조), 매년 말 평가액을 다음 해로
         이월하는 <strong>연말 청산 근사</strong>가 들어갑니다. 시뮬레이션 전용 — 주문·실계좌·브로커 API와 연결되어
-        있지 않습니다. 전 종목이 아니라 연 20종목 표본이므로 실제 조건검색과 결과가 다릅니다. 데이터: Yahoo Finance
-        일봉(비공식 엔드포인트 · 정확성 미보증 · 환율 미반영) — <strong>{KR_LOAD_NOTE}</strong>{' '}
+        있지 않습니다. 전 종목이 아니라 연 20종목 표본이므로 실제 조건검색과 결과가 다릅니다. 국내 종목 시세:{' '}
+        <strong>{PRICE_SOURCE_LABEL[priceSource]}</strong>
+        {priceSource === 'yahoo' ? (
+          <>
+            {' '}
+            — 비공식 엔드포인트 · 정확성 미보증 · 환율 미반영. <strong>{KR_LOAD_NOTE}</strong>
+          </>
+        ) : (
+          <>
+            {' '}
+            — KRX Open API 일별 단면의 원주가에 <strong>분할 보정을 자체 산출</strong>해 쓰며{' '}
+            <strong>배당은 반영되지 않습니다(가격수익)</strong>. 2010년 이전 구간은 수집 자체가 불가능합니다.
+          </>
+        )}{' '}
+        <strong>{MIXED_SOURCE_NOTE}</strong>{' '}
         모멘텀 모드는 연구 러너와 같게 <strong>구간끝 청산비용 근사(haircut)</strong>를 물립니다. 장중 조건(분봉)은
         일봉 백테스트로 검증되지 않습니다.
         <strong>QQQ 비교는 KRW=X 종가 환산 기준 — 환헤지·거래비용 미반영</strong>이며 참고 표시일 뿐 알파 판정에

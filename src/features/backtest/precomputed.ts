@@ -19,19 +19,21 @@ import { useEffect, useState } from 'react'
 import type { CostSettings } from './conditionScreen'
 import type { StrategyKind } from './presets'
 import type { EquityRow } from './EquityChart'
+import { normalizePriceSource, type PriceSource } from './priceSource'
 
-/** 굽는 쪽이 지금 쓰는 산출물 스키마 버전(3 = 참고 벽(walls) 추가 · KRX 실측 유니버스). */
-export const PRECOMPUTE_SCHEMA = 3
+/** 굽는 쪽이 지금 쓰는 산출물 스키마 버전(4 = 시세 소스 표기 추가 · 야후 배제 2단계). */
+export const PRECOMPUTE_SCHEMA = 4
 
 /**
  * 화면이 **읽을 수 있는** 스키마 버전들. 모르는 버전이면 없는 셈 친다(우아한 강등).
  *
- * 1 → 2 → 3은 전부 **필드 추가만** 했으므로 옛 산출물도 그대로 읽는다. 다만 schema 1 파일에는
- * 신규 지표(변동성·샤프·소르티노·최장 낙폭 기간·손익비·PF)가, schema 1·2 파일에는 참고 벽(walls)이
- * 없으므로 그 자리는 `undefined`로 남아 화면에서 '—'이거나 상수로 강등된다 —
- * 없는 값을 0으로 채우지 않는다(규칙 3).
+ * 1 → 2 → 3 → 4는 전부 **필드 추가만** 했으므로 옛 산출물도 그대로 읽는다. 다만 schema 1 파일에는
+ * 신규 지표(변동성·샤프·소르티노·최장 낙폭 기간·손익비·PF)가, schema 1·2 파일에는 참고 벽(walls)이,
+ * schema 1~3 파일에는 시세 소스 표기가 없으므로 그 자리는 `undefined`로 남아 화면에서 '—'이거나
+ * 상수로 강등된다 — 없는 값을 0으로 채우지 않는다(규칙 3).
+ * (시세 소스가 없는 옛 산출물은 **야후로 구운 것**이다 — 그때는 야후밖에 없었다.)
  */
-export const SUPPORTED_PRECOMPUTE_SCHEMAS: readonly number[] = [1, 2, 3]
+export const SUPPORTED_PRECOMPUTE_SCHEMAS: readonly number[] = [1, 2, 3, 4]
 
 /**
  * 참고 벽 — 같은 구간 단순보유를 **다시 재서** 나란히 놓는 값(34차 규약).
@@ -103,6 +105,10 @@ export interface PrecomputedFile {
   presets: PrecomputedPreset[]
   /** 참고 벽(schema 3~). 옛 산출물에는 없다 → undefined */
   walls?: PrecomputedWall[]
+  /** 국내 유니버스 시세 소스(schema 4~). 없으면 야후로 구운 옛 산출물이다. */
+  priceSource?: PriceSource
+  priceSourceNote?: string
+  priceSourceLimits?: string[]
 }
 
 export interface PrecomputedIndex {
@@ -116,6 +122,14 @@ export interface PrecomputedIndex {
   byId: Record<string, PrecomputedPreset>
   /** 참고 벽(schema 3~) — 없으면 undefined이고 화면은 34차 상수로 강등한다 */
   walls?: PrecomputedWall[]
+  /**
+   * 이 산출물을 구울 때 쓴 국내 시세 소스. **옛 산출물(schema 1~3)에는 없으므로 'yahoo'로 읽는다** —
+   * 그때는 야후밖에 없었기 때문이며, 추측이 아니라 사실이다.
+   * 화면은 지금 고른 소스와 이 값이 다르면 "다른 소스로 구운 수치"라고 알린다(규칙 3).
+   */
+  priceSource: PriceSource
+  priceSourceNote: string
+  priceSourceLimits: string[]
 }
 
 /**
@@ -141,6 +155,12 @@ export function toPrecomputedIndex(raw: unknown): PrecomputedIndex | null {
     note: typeof f.note === 'string' ? f.note : '',
     schema: f.schema,
     byId,
+    // 없으면 'yahoo' — 시세 소스 표기가 없던 시절(schema 1~3)의 산출물은 전부 야후로 구웠다.
+    priceSource: normalizePriceSource(f.priceSource),
+    priceSourceNote: typeof f.priceSourceNote === 'string' ? f.priceSourceNote : '',
+    priceSourceLimits: Array.isArray(f.priceSourceLimits)
+      ? f.priceSourceLimits.filter((l): l is string => typeof l === 'string')
+      : [],
     // 모르는 모양의 벽은 통째로 버린다 — 반쪽짜리 수치를 화면에 올리느니 상수로 강등하는 편이 낫다.
     walls: Array.isArray(f.walls)
       ? f.walls.filter(
