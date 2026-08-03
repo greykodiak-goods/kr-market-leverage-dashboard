@@ -38,6 +38,12 @@
 //                 비교 B = 실측 40+40(유니버스 확대 효과 · 상위16 = 10% 분위 행 추가).
 //                 랭킹은 `public/data/krx-pit/universe.json`(EC2 MODE=pityear가 수집·커밋)에서
 //                 읽고 시세는 야후만 쓰므로 GHA에서 돈다. 파일이 없으면 명확히 실패한다.
+// MODE=krxcal   — 34차. 33차에서 [추정] 목록발 알파가 무너진 뒤, **실측 유니버스 위에서**
+//                 칼마(CAGR÷|MDD|) 우수 전략을 처음부터 다시 찾는다(대표 지시 "실제 유니버스
+//                 기반으로 칼마 우수한 프리셋 다시 찾아서 세팅하자"의 **1단계 = 탐색·판정**).
+//                 조건식 격자 12 × 2유니버스 + xsmom 분위 정합 5 + 구조 오버레이 6 = 35변형.
+//                 판정은 칼마 순위 + 전·후반 알파 양수 + 매매수. **참고 벽 = QQQ 원화 보유**이며
+//                 그 벽을 넘는 변형이 있는지가 헤드라인이다(없으면 없다고 크게 쓴다).
 //
 // ── 발굴 깔때기 1~2관문 — 미검증 랭킹 4계열 일괄 스크리너 ────────────────────
 // MODE=screen   — lowvol · hi52 · strev · volrank 네 계열을 **한 번에** 1~2관문에 태운다.
@@ -5436,6 +5442,583 @@ async function krxpit() {
 }
 
 // ============================================================================
+// MODE=krxcal — KRX 실측 유니버스에서 칼마 우수 전략 재탐색 (2026-08-03 대표 지시)
+// ============================================================================
+//
+// ── 왜 다시 찾는가 ─────────────────────────────────────────────────────────
+//   33차(MODE=krxpit)가 드러낸 것은 이 리포가 쌓아 온 알파의 **대부분이 목록 사후선택
+//   편향**이었다는 사실이다([추정] xsmom 알파 +21.9%p → 실측 +2.6%p, 실측 40+40에서는
+//   승자 3종이 전멸). 그렇다면 그 목록 위에서 고른 파라미터도 같이 무효다 — 승자를
+//   "이식"할 게 아니라 **실측 유니버스 위에서 처음부터 다시 골라야** 한다.
+//   대표 지시: "실제 유니버스 기반으로 칼마 우수한 프리셋 다시 찾아서 세팅하자."
+//   이 모드는 그 **1단계(탐색·판정)**이며, 프리셋 세팅은 결과 확정 후 별도 작업이다.
+//
+// ── 탐색 설계 (거칠게 · 총 35변형) ─────────────────────────────────────────
+//   ① 조건식 격자 — MA∈{10,20,25} × 신고∈{10,20} × 청산선∈{60,80}, 버퍼 0 고정.
+//      12조합 × 2유니버스 = 24. (25×10→80은 곧 23차 기준선이라 격자 안에 들어 있다.)
+//   ② xsmom 분위 정합 — 실측 10+10에서 N∈{3,5,7}+게이트(3) · 실측 40+40에서
+//      N∈{8,16}+게이트(2) = 5. 유니버스 폭이 다르면 같은 N도 다른 분위다(27차 교훈).
+//   ③ 구조 오버레이 — 각 유니버스에서 ①·②의 **칼마 1위끼리** 결합 50:50 /
+//      +시장게이트(12-1) / +금 20%(32차 구조 · GLD 원화 · 2단 blend) = 3 × 2 = 6.
+//   격자를 일부러 **거칠게** 잡았다. 촘촘히 썰수록 이 17년 표본에서 우연히 좋은 칸이
+//   나오고, 그 칸을 고르는 순간 33차와 같은 종류의 편향을 다시 만드는 것이다.
+//
+// ── 엔진은 손대지 않았다 ──────────────────────────────────────────────────
+//   새 시뮬레이터가 없다. 격자는 `runSpecChain`(정본 `runStrategySpec`)에 파라미터만
+//   갈아끼운 스펙을 넣고, xsmom은 `simulateXsMomYear`, 오버레이는 32차와 **같은 두 줄**
+//   (`makeRegimeExposure` 노출 훅 → `blendCurves` 2단)이다. 유니버스 주입은 33차와
+//   같은 `buildYearly(histories, years, codesFor)` 한 자리뿐이다.
+//   → 그래서 이 표는 33차 표와 나란히 읽히고, 미래참조 집행자(`tests/idealab.test.ts`·
+//     `tests/pitchain.test.ts`·`tests/krxpit.test.ts`)의 사정거리 안에 그대로 남는다.
+//
+// ── 판정 ──────────────────────────────────────────────────────────────────
+//   ① **칼마(CAGR÷|MDD|) 내림차순**으로 줄 세운다. 구간이 통일돼 있으므로(모든 변형이
+//      같은 연쇄·같은 해) 총수익÷MDD가 아니라 칼마를 쓴다 — 총수익 기반 비율은 구간
+//      길이에 끌려간다(32차와 같은 이유).
+//   ② 전·후반(2018 분할) **둘 다** KODEX 200 대비 알파 양수(규칙 5).
+//   ③ 매매수가 표본 소실 수준이 아닐 것(≥ `KRXCAL_MIN_TRADES`).
+//   그리고 **참고 벽**을 같은 구간에서 다시 재서 병기한다 — QQQ 원화 보유와 KODEX 보유다.
+//   **QQQ 벽을 넘는 변형이 있는가**가 이 실험의 헤드라인이다. 없으면 "없다"가 답이며,
+//   그 경우 결론은 "이 탐색 공간에서는 원화로 나스닥100을 들고 있는 것을 못 이겼다"이다.
+//   ⚠️ 알파 판정 벤치는 규칙 5대로 KODEX 200 그대로다 — QQQ는 벽(참고)이지 벤치가 아니다.
+
+/** 조건식 격자 축 — 거칠게. 버퍼는 0 고정(23차 격자 1위가 버퍼 0이었다). */
+export const KRXCAL_MA = [10, 20, 25] as const
+export const KRXCAL_HB = [10, 20] as const
+export const KRXCAL_XM = [60, 80] as const
+export const KRXCAL_BUF = 0
+
+/** 실측 10+10(=20종목)의 xsmom 후보 — 상위 3·5·7 ≈ 상위 15·25·35% 분위. */
+export const KRXCAL_XSMOM_NARROW: WfCand[] = [
+  { slots: 3, gate: true },
+  { slots: 5, gate: true },
+  { slots: 7, gate: true },
+]
+/** 실측 40+40(=80종목)의 xsmom 후보 — 상위 8·16 = 상위 10·20% 분위(27차 정합). */
+export const KRXCAL_XSMOM_WIDE: WfCand[] = [
+  { slots: 8, gate: true },
+  { slots: 16, gate: true },
+]
+
+/** 표본 소실 판정선 — MODE=screen과 **같은 값**을 쓴다(계열마다 기준이 다르면 비교가 깨진다). */
+export const KRXCAL_MIN_TRADES = SCREEN_MIN_TRADES
+/** 금 슬리브를 얹을 때의 주식 비중(= 금 20%). 32차 1위 행과 같은 배합이다. */
+export const KRXCAL_GOLD_EQUITY_W = 0.8
+
+export interface GridCand {
+  ma: number
+  hb: number
+  xm: number
+}
+
+/** MA × 신고 × 청산선 전개. 순서를 고정해 출력이 실행마다 흔들리지 않게 한다. */
+export function krxcalGrid(): GridCand[] {
+  const out: GridCand[] = []
+  for (const ma of KRXCAL_MA) for (const hb of KRXCAL_HB) for (const xm of KRXCAL_XM) out.push({ ma, hb, xm })
+  return out
+}
+
+export const gridLabel = (g: GridCand) => `MA${g.ma}×신고${g.hb}→${g.xm}선`
+
+/**
+ * 격자 한 칸의 스펙. `baselineSpec`과 **같은 형태**이며 세 파라미터만 열려 있다 —
+ * (25,10,80)을 넣으면 `baselineSpec`과 entry·exits·sizing·execution이 동일하다
+ * (`tests/krxcal.test.ts`가 그 동일성을 집행한다). 그래서 격자 안에 23차 기준선이
+ * 대조군으로 자동 포함되고, 기준선 수치를 다른 표에서 옮겨 적을 필요가 없다.
+ */
+export function krxcalGridSpec(g: GridCand): (symbols: string[]) => StrategySpec {
+  return (symbols: string[]) => ({
+    version: SPEC_VERSION,
+    id: `idea-lab-krxcal-ma${g.ma}-hb${g.hb}-xm${g.xm}`,
+    name: gridLabel(g),
+    source: '34차 krxcal 조건식 격자 (KRX 실측 유니버스)',
+    universe: {
+      markets: ['KOSPI', 'KOSDAQ'],
+      excludeAdministrative: true,
+      excludeSuspended: true,
+      excludeLiquidation: true,
+      excludePreferred: true,
+      excludeEtf: true,
+      symbols,
+    },
+    entry: {
+      op: 'and',
+      nodes: [
+        c(`${g.ma}일선돌파`, { kind: 'maCross', period: g.ma, dir: 'above' }),
+        c(`${g.hb}일신고가`, { kind: 'highBreak', days: g.hb }),
+      ],
+    },
+    ranking: { by: 'tradingValue', dir: 'desc' },
+    exits: [{ kind: 'maBreak', maPeriod: g.xm, pct: KRXCAL_BUF }],
+    sizing: { maxPositions: MAX_POSITIONS, mode: 'equalSlot' },
+    execution: { timing: 'sameClose', orderType: 'market' },
+    regime: null,
+  })
+}
+
+/** 한 변형의 요약 — 곡선은 이미 버렸고 스칼라만 남는다(OOM 교훈). */
+export interface CalVariant {
+  label: string
+  /** 계열 — 표에서 어느 축의 탐색인지 드러낸다 */
+  group: '조건식' | 'xsmom' | '오버레이'
+  row: StratRow
+  /**
+   * 판정에 쓰는 청산완료 매매 수. 합성 행(결합·오버레이)은 매매 원장이 한쪽 슬리브에
+   * 귀속되지 않으므로 **구성요소의 합**을 물려받는다(0으로 두면 표본 소실로 오판한다).
+   */
+  trades: number
+  /** 곡선 합성 행인가 — 매매수의 출처가 다르다는 것을 표에 밝힌다 */
+  synth: boolean
+  grid?: GridCand
+  cand?: WfCand
+}
+
+/** 칼마 내림차순. 산출 불가(null)는 뒤로, 동점은 라벨 오름차순 — 결정적 정렬. */
+export function calmarSort(vs: CalVariant[]): CalVariant[] {
+  return [...vs].sort((a, b) => {
+    const ca = calmarOf(a.row.full)
+    const cb = calmarOf(b.row.full)
+    if (ca == null && cb != null) return 1
+    if (cb == null && ca != null) return -1
+    if (ca != null && cb != null && ca !== cb) return cb - ca
+    return a.label < b.label ? -1 : a.label > b.label ? 1 : 0
+  })
+}
+
+/** 판정 탈락 사유 목록(빈 배열 = 통과). 사유를 남겨야 "왜 떨어졌나"가 표에서 읽힌다. */
+export function calFailReasons(v: CalVariant, minTrades = KRXCAL_MIN_TRADES): string[] {
+  const bad: string[] = []
+  if (!((v.row.alphaA ?? -1) > 0 && (v.row.alphaB ?? -1) > 0)) bad.push('알파')
+  if (!(v.trades >= minTrades)) bad.push('매매')
+  return bad
+}
+export const calPass = (v: CalVariant, minTrades = KRXCAL_MIN_TRADES) => calFailReasons(v, minTrades).length === 0
+
+/** 참고 벽 — 같은 구간에서 **다시 잰** 단순보유 성적. 옮겨 적은 값이 아니다. */
+export interface CalWall {
+  label: string
+  perf: Perf
+  calmar: number | null
+  span: string
+}
+
+export function wallOf(label: string, curve: { date: string; equity: number }[], from: string, to: string): CalWall | null {
+  const w = clipCurve(curve, from, to)
+  if (w.length < 2) return null
+  const perf = perfOf(w)
+  return { label, perf, calmar: calmarOf(perf), span: `${w[0].date}~${w[w.length - 1].date}` }
+}
+
+export function wallTable(walls: CalWall[]) {
+  log('')
+  log('### 참고 벽 — 같은 구간 단순보유 (전략과 **같은 구간으로 다시 잰** 값)')
+  log('| 보유 대상 | 칼마 | CAGR | MDD | 실제 구간 |')
+  log('|---|---|---|---|---|')
+  for (const w of walls)
+    log(`| ${w.label} | ${w.calmar?.toFixed(3) ?? '—'} | ${f1(w.perf.cagr)}% | ${f1(w.perf.mdd)}% | ${w.span} |`)
+}
+
+/**
+ * 칼마 순위표. `wall`이 주어지면 "그 벽을 넘었나" 열이 붙는다.
+ * 정렬된 목록을 돌려주므로 호출부가 상위 N을 그대로 이어 쓸 수 있다.
+ */
+export function calRankTable(title: string, vs: CalVariant[], wall: CalWall | null, minTrades = KRXCAL_MIN_TRADES): CalVariant[] {
+  const sorted = calmarSort(vs)
+  log('')
+  log(`### ${title}`)
+  log(
+    `| 순위 | 전략 | 계열 | **칼마** | CAGR | MDD | 알파(전 구간) | 전반(~${KRXPIT_HALF - 1}) 알파 | 후반(${KRXPIT_HALF}~) 알파 | 매매 | 판정 |` +
+      (wall ? ` ${wall.label} 벽 |` : ''),
+  )
+  log(`|---|---|---|---|---|---|---|---|---|---|---|${wall ? '---|' : ''}`)
+  for (const [i, v] of sorted.entries()) {
+    const cal = calmarOf(v.row.full)
+    const bad = calFailReasons(v, minTrades)
+    const over = wall?.calmar != null && cal != null && cal > wall.calmar
+    log(
+      `| ${i + 1} | ${v.label} | ${v.group} | ${cal?.toFixed(3) ?? '—'} | ${f1(v.row.full.cagr)}% | ${f1(v.row.full.mdd)}% | ` +
+        `${pctOrDash(v.row.alphaFull)} | ${pctOrDash(v.row.alphaA)} | ${pctOrDash(v.row.alphaB)} | ` +
+        `${v.trades}${v.synth ? ' (합성)' : ''} | ${bad.length === 0 ? '✅' : `❌(${bad.join('·')})`} |` +
+        (wall ? ` ${over ? '✅ 넘음' : '❌'} |` : ''),
+    )
+  }
+  log('※ "매매 (합성)"은 곡선 합성 행이라 매매 원장이 한쪽 슬리브에 귀속되지 않는다는 뜻이다 —')
+  log('  매매가 없다는 뜻이 아니라 **구성요소의 청산완료 합**을 물려받은 값이다(26·30·33차와 같은 규약).')
+  return sorted
+}
+
+/**
+ * 헤드라인 — QQQ 벽을 넘은 변형이 있는가. **없으면 없다고 크게 쓴다**(그것도 답이다).
+ * 넘은 변형 수를 돌려준다.
+ */
+export function calHeadline(uniKey: string, sorted: CalVariant[], wall: CalWall | null, minTrades = KRXCAL_MIN_TRADES): number {
+  log('')
+  log(`### 헤드라인 — ${uniKey}: ${wall ? `${wall.label} 벽(칼마 ${wall.calmar?.toFixed(3) ?? '—'})` : '참고 벽'}을 넘은 변형`)
+  if (!wall || wall.calmar == null) {
+    log('⚠️ 벽 곡선을 못 만들어(데이터 결측) 이 판정은 **성립하지 않는다.** 없다고 읽지 마라.')
+    return 0
+  }
+  const over = sorted.filter((v) => {
+    const cal = calmarOf(v.row.full)
+    return cal != null && cal > wall.calmar! && calPass(v, minTrades)
+  })
+  if (over.length === 0) {
+    log('')
+    log(`## ❌ **없다.** ${uniKey} 유니버스의 전 변형 중 ${wall.label} 보유의 칼마를 넘으면서`)
+    log('## 판정(전·후반 알파 양수 + 매매수)까지 통과한 것은 **하나도 없다.**')
+    log('')
+    log('이것은 실패한 실험이 아니라 **결과**다. 이 탐색 공간(조건식 격자·xsmom 분위·구조')
+    log('오버레이)에서는, KRX 실측 유니버스 위에서 원화로 나스닥100을 그냥 들고 있는 것보다')
+    log('나은 조합을 찾지 못했다는 뜻이다. 프리셋을 "가장 덜 나쁜 칸"으로 채우는 것은')
+    log('33차가 무너진 것과 **같은 종류의 사후선택**이다 — 벽을 못 넘었으면 못 넘은 것이다.')
+    return 0
+  }
+  log('')
+  log(`벽을 넘으면서 판정도 통과한 변형 **${over.length}개**:`)
+  for (const v of over) log(`· ${v.label} (${v.group}) — 칼마 ${calmarOf(v.row.full)?.toFixed(3) ?? '—'}`)
+  log('')
+  log('⚠️ 넘었다고 채택이 아니다. 이 변형들은 **같은 데이터에서 35개를 돌려 고른 것**이며,')
+  log('   아래 다중검정 경고와 오버레이 사후선택 경고를 같이 읽어야 한다. 채택 판단은')
+  log('   프리셋 세팅(2단계)에서 별도 근거로 한다.')
+  return over.length
+}
+
+/** 판정 통과 변형 요약 — 통과가 없으면 없다고 적는다. */
+export function calPassSummary(uniKey: string, sorted: CalVariant[], minTrades = KRXCAL_MIN_TRADES): CalVariant[] {
+  const pass = sorted.filter((v) => calPass(v, minTrades))
+  log('')
+  log(`### 판정 통과 변형 — ${uniKey} (전·후반 알파 양수 + 매매수 ≥ ${minTrades})`)
+  if (pass.length === 0) {
+    log(`**없음.** ${uniKey}에서는 어떤 변형도 전·후반 알파를 모두 양수로 만들지 못했거나 표본이 소실됐다.`)
+    return pass
+  }
+  log('| 전략 | 계열 | 칼마 | CAGR | MDD | 전반 알파 | 후반 알파 |')
+  log('|---|---|---|---|---|---|---|')
+  for (const v of pass)
+    log(
+      `| ${v.label} | ${v.group} | ${calmarOf(v.row.full)?.toFixed(3) ?? '—'} | ${f1(v.row.full.cagr)}% | ` +
+        `${f1(v.row.full.mdd)}% | ${pctOrDash(v.row.alphaA)} | ${pctOrDash(v.row.alphaB)} |`,
+    )
+  return pass
+}
+
+/** 34차 전용 다중검정 경고 — 33차에 **이어지는** 누적 탐색임을 못 박는다. */
+function krxcalMultipleTestingNote(n: number, passed: number, overWall: number) {
+  log('')
+  log('## 다중검정 경고 (이 표를 유의성 근거로 쓰지 마라)')
+  log(`같은 17년 데이터에 변형 ${n}개를 돌렸고, 그중 ${passed}개가 판정(전·후반 알파 양수 + 매매수)을,`)
+  log(`${overWall}개가 QQQ 벽까지 넘었다.`)
+  log(
+    `순수 우연이라도 한 변형이 두 구간 모두 알파 양수일 확률을 ≈25%로 보면, ${n}개 중 ${passed}개 이상이 ` +
+      `그럴 확률은 약 ${(binomTail(n, passed, 0.25) * 100).toFixed(0)}%다.`,
+  )
+  log('⚠️ **이 값조차 낙관적이다.** 세 가지 이유가 겹친다.')
+  log(`   ① 표본이 ${KRXPIT_TO - KRXPIT_FROM + 1}년(전·후반 각 8~9년)뿐이라 한 해의 큰 수익이 두 구간 판정을 다 흔든다.`)
+  log('   ② **독립 실험이 아니다.** 23차(격자) → 25·26차(xsmom·결합) → 30~32차(오버레이·자산분산)')
+  log('      → 33차(실측 재검증)에 **이어지는** 탐색이다. 이 데이터에서 이미 여러 번 이긴 형태를')
+  log('      다시 후보로 올리고 있으므로 누적 탐색 횟수 기준의 p값은 위 숫자보다 훨씬 크다.')
+  log('   ③ 오버레이 6변형은 **같은 표에서 1위로 뽑힌 구성요소** 위에 얹혀 있다(아래 사후선택 경고).')
+  log('채택 기준은 여전히 ① 칼마 상위 ② 전·후반 알파 양수 ③ 매매수 정상 **셋 다**이며,')
+  log('하나만 만족하는 칸을 골라 읽는 순간 33차에서 무너진 것과 같은 곡선맞춤이다.')
+}
+
+/**
+ * 한 유니버스의 전체 탐색·판정. 곡선은 전부 이 함수 안에서만 살아 있다 —
+ * 밖으로 나가는 것은 `CalVariant`의 스칼라뿐이다(2026-08-02 OOM 교훈).
+ */
+export function krxcalUniverse(cfg: {
+  key: string
+  yearly: YearSlice[]
+  years: number[]
+  benchEq: { date: string; equity: number }[]
+  regime: { date: string; equity: number }[]
+  gold: { date: string; equity: number }[] | null
+  xsCands: WfCand[]
+}): { variants: CalVariant[]; span: [string, string] | null } {
+  const { key, yearly, years, benchEq, regime, gold, xsCands } = cfg
+  const variants: CalVariant[] = []
+  let span: [string, string] | null = null
+
+  // ---- ① 조건식 격자 12 --------------------------------------------------------
+  for (const g of krxcalGrid()) {
+    const chain = runSpecChain(yearly, krxcalGridSpec(g), COST)
+    if (!span && chain.equity.length >= 2) span = spanOf(chain.equity)
+    const label = gridLabel(g)
+    variants.push({
+      label,
+      group: '조건식',
+      row: summarizeStrat(label, chain, benchEq, KRXPIT_HALF),
+      trades: chain.closed,
+      synth: false,
+      grid: g,
+    })
+    // chain은 여기서 수명이 끝난다 — 다음 반복 전에 회수된다.
+  }
+
+  // ---- ② xsmom 분위 정합 -------------------------------------------------------
+  for (const cand of xsCands) {
+    const chain = runCustomChain(
+      yearly,
+      (v) => simulateXsMomYear(v.hist, `${v.y}-01-01`, v.syms, COST, cand),
+      COST,
+      cand.slots,
+    )
+    const label = `XSM ${wfLabel(cand)}`
+    variants.push({
+      label,
+      group: 'xsmom',
+      row: summarizeStrat(label, chain, benchEq, KRXPIT_HALF),
+      trades: chain.closed,
+      synth: false,
+      cand,
+    })
+  }
+
+  // ---- ③ 구조 오버레이 — ①·②의 칼마 1위끼리 (사후선택) -------------------------
+  const bestGrid = calmarSort(variants.filter((v) => v.group === '조건식'))[0]
+  const bestXs = calmarSort(variants.filter((v) => v.group === 'xsmom'))[0]
+  log('')
+  log(`#### ${key} 오버레이 구성요소 (①·② 각 계열의 칼마 1위)`)
+  log(`· ① 조건식 1위: **${bestGrid?.label ?? '—'}** (칼마 ${bestGrid ? calmarOf(bestGrid.row.full)?.toFixed(3) ?? '—' : '—'})`)
+  log(`· ② xsmom 1위: **${bestXs?.label ?? '—'}** (칼마 ${bestXs ? calmarOf(bestXs.row.full)?.toFixed(3) ?? '—' : '—'})`)
+  log('')
+  log('⚠️ **이 두 개를 고른 것 자체가 사후선택이다.** 결과를 다 보고 1위를 뽑아 결합했으므로,')
+  log('   아래 오버레이 3행의 성적에는 "구성요소를 고른 탐색"까지 포함된 누적 다중검정이')
+  log('   얹혀 있다. 실전에서는 2010년 초에 이 두 개를 알 수 없었다 — 오버레이 행의 칼마는')
+  log('   **상한선**으로 읽어라. (구성요소 선택을 시점 고정으로 하려면 워크포워드가 필요하고,')
+  log('   그것은 이 모드의 범위가 아니다 — 25차 MODE=xswf가 그 자리다.)')
+
+  if (bestGrid?.grid && bestXs?.cand) {
+    const cand = bestXs.cand
+    const chainA = runSpecChain(yearly, krxcalGridSpec(bestGrid.grid), COST)
+    const chainB = runCustomChain(
+      yearly,
+      (v) => simulateXsMomYear(v.hist, `${v.y}-01-01`, v.syms, COST, cand),
+      COST,
+      cand.slots,
+    )
+    // 시장게이트는 32차와 **같은 자리**다 — 노출 훅으로만 들어간다(곡선 마스킹 아님).
+    const gateChain = runCustomChain(
+      yearly,
+      (v) =>
+        simulateRankYear(v.hist, `${v.y}-01-01`, v.syms, COST, {
+          slots: cand.slots,
+          rank: xsmomRank,
+          keep: cand.gate ? (r) => r.aux >= 0 : undefined,
+          exposure: makeRegimeExposure(regime, 'mom12_1'),
+        }),
+      COST,
+      cand.slots,
+    )
+
+    const push = (
+      label: string,
+      curve: { date: string; equity: number }[],
+      trades: number,
+    ) => {
+      if (curve.length < 2) {
+        log(`⚠️ "${label}" — 합성 곡선이 비었다(구간 불일치). 이 행은 생략.`)
+        return
+      }
+      variants.push({
+        label,
+        group: '오버레이',
+        row: curveStrat(label, curve, benchEq, years, KRXPIT_HALF),
+        trades,
+        synth: true,
+      })
+    }
+
+    const combo = blendCurves(chainA.equity, chainB.equity, 0.5)
+    const gated = blendCurves(chainA.equity, gateChain.equity, 0.5)
+    push('결합 50:50 (①1위 + ②1위)', combo, chainA.closed + chainB.closed)
+    push('결합 50:50 + 시장게이트(12-1)', gated, chainA.closed + gateChain.closed)
+    if (gold) push('결합 + 게이트 + 금 20% (32차 구조)', blendCurves(gated, gold, KRXCAL_GOLD_EQUITY_W), chainA.closed + gateChain.closed)
+    else log('⚠️ 금(GLD 원화) 곡선이 없어 "결합+게이트+금 20%" 행을 생략했다 — 변형 수가 그만큼 줄었다.')
+  } else {
+    log('⚠️ 계열 1위를 못 정해(변형 부족) 오버레이 3행을 생략했다.')
+  }
+
+  return { variants, span }
+}
+
+async function krxcal() {
+  log('# MODE=krxcal — KRX 실측 유니버스에서 칼마 우수 전략 재탐색')
+  log('')
+  log('대표 지시(2026-08-03): "실제 유니버스 기반으로 칼마 우수한 프리셋 다시 찾아서 세팅하자."')
+  log('이 모드는 그 **1단계(탐색·판정)**다 — 프리셋 세팅은 결과 확정 후 별도 작업이다.')
+  log('')
+  log('33차(krxpit)에서 [추정] 목록발 알파가 무너졌다(xsmom 알파 +21.9%p → 실측 +2.6%p ·')
+  log('실측 40+40에서 승자 3종 전멸). 그 목록 위에서 고른 파라미터도 같이 무효이므로,')
+  log('**실측 유니버스 위에서 처음부터 다시 고른다.** 승자를 이식하지 않는다.')
+  log('')
+
+  const uni = loadKrxPitFile()
+  log(`⚠️ ${krxPitSourceNote(uni)}`)
+  const covered = krxPitYears(uni).filter((y) => y >= KRXPIT_FROM && y <= KRXPIT_TO)
+  if (covered.length < 5) {
+    throw new Error(
+      `실측 랭킹이 ${KRXPIT_FROM}~${KRXPIT_TO} 중 ${covered.length}년뿐이다 — EC2 MODE=pityear를 다시 실행하라.`,
+    )
+  }
+  const years = krxPitSpan(uni, covered[0], covered[covered.length - 1])
+  log(
+    `구간 ${years[0]}~${years[years.length - 1]} (${years.length}년) · 전·후반 분할 ${KRXPIT_HALF} · ` +
+      `벤치 ${BENCH}(KODEX 200) · 비용 수수료 ${COST.feePct}% · 거래세 ${COST.taxPct}% · 슬리피지 ${COST.slippagePct}%`,
+  )
+  log('**[추정] 목록(PIT1010)은 이 모드에 등장하지 않는다** — 33차가 그 비교를 이미 끝냈다.')
+
+  // ---- 시세 (실측 40+40 합집합만) ---------------------------------------------
+  const codes = [...new Set<string>(krxPitUnion(uni, 40, years))].sort()
+  log('')
+  log(`시세 로드 대상 ${codes.length}종목 (실측 40+40 합집합) — 한 번만 받아 두 유니버스가 나눠 쓴다.`)
+  const { histories, failed, bench } = await loadCodeHistories(codes)
+  const names = krxPitNames(uni)
+  log(`시세 로드 ${Object.keys(histories).length}/${codes.length} · 실패(상폐·데이터 부족) ${failed.length}`)
+  if (failed.length) {
+    const shown = failed.slice(0, 30).map((cd) => `${cd}(${names[cd] ?? '?'})`)
+    log(`매핑 실패: ${shown.join(', ')}${failed.length > 30 ? ` … 외 ${failed.length - 30}개` : ''}`)
+    log('  ↑ 랭킹은 실측이라 선택편향이 없지만, 상폐 종목의 **가격**이 없어 유니버스에서 빠진다.')
+    log('    이것이 잔존 **가격 생존편향**이며 아래 성적을 그만큼 후하게 만든다.')
+  }
+  const benchEq = benchCurve(bench)
+  log(`벤치 ${BENCH} 데이터 시작 ${bench[0]?.date ?? '—'} — 알파는 이 날짜 이후 겹치는 구간에서만 계산한다.`)
+
+  // ---- 레짐 시계열 (오버레이 시장게이트용 — 30·32차와 동일 규약) ---------------
+  let regime = benchEq
+  let regimeNote = `${BENCH} 단독 (${bench[0]?.date ?? '—'} 시작)`
+  try {
+    const ks = await fetchDaily(REGIME_FALLBACK, KRXPIT_RANGE)
+    const spliced = spliceRegimeCurve(bench, ks)
+    if (spliced.length > benchEq.length) {
+      regime = spliced
+      regimeNote = `${BENCH} + ${REGIME_FALLBACK}(코스피 종합) 폴백 — 앞 구간은 ${REGIME_FALLBACK}의 **수익률만** 이어 붙였다`
+    }
+  } catch (e) {
+    log(`⚠️ ${REGIME_FALLBACK} 로드 실패 — 레짐은 벤치 구간만으로 판정한다 (${String(e)})`)
+  }
+  log(`레짐 판정 시계열: ${regimeNote}`)
+
+  // ---- 금(GLD) 원화 곡선 · QQQ 원화 벽 -----------------------------------------
+  let gold: { date: string; equity: number }[] | null = null
+  try {
+    const fx = await fetchDaily(FX_KRW, KRXPIT_RANGE)
+    await sleep(120)
+    const g = await loadKrwAsset(ASSET_GLD, fx)
+    if (g) {
+      gold = g.curve
+      log(`금 슬리브: ${ASSET_GLD} ${g.bars}봉 (${spanOf(g.curve).join(' ~ ')}) · ${FX_NOTE}`)
+    }
+  } catch (e) {
+    log(`⚠️ 환율(${FX_KRW}) 로드 실패 — 금 오버레이 행을 생략한다 (${String(e)})`)
+  }
+  const qqq = await loadQqqKrwCurve(KRXPIT_RANGE)
+
+  // ---- 두 유니버스 실행 --------------------------------------------------------
+  const UNIS = [
+    { key: '실측 10+10', top: 10, xs: KRXCAL_XSMOM_NARROW },
+    { key: '실측 40+40', top: 40, xs: KRXCAL_XSMOM_WIDE },
+  ] as const
+
+  let total = 0
+  let totalPass = 0
+  let totalOver = 0
+  const perUniPass: { key: string; pass: CalVariant[] }[] = []
+
+  for (const U of UNIS) {
+    const yearly = buildYearly(histories, years, (y) => krxPitCodes(uni, y, U.top))
+    log('')
+    log(`# ${U.key} — 조건식 격자 12 + xsmom ${U.xs.length} + 오버레이 3`)
+    log(`연도별 매핑률: ${yearly.map((v) => `${v.y} ${v.mapped}`).join(' · ')}`)
+    if (yearly.every((v) => v.syms.length < 5)) {
+      log(`❌ ${U.key}: 시세 로드 실패로 실행할 해가 없다 — 이 유니버스는 건너뛴다`)
+      continue
+    }
+
+    const { variants, span } = krxcalUniverse({
+      key: U.key,
+      yearly,
+      years,
+      benchEq,
+      regime,
+      gold,
+      xsCands: [...U.xs],
+    })
+    total += variants.length
+
+    // 벽은 **이 유니버스의 실행 구간으로 다시 잰다** — 구간이 다른 칼마를 나란히 놓지 않는다.
+    const [FROM, TO] = span ?? [`${years[0]}-01-01`, `${years[years.length - 1]}-12-31`]
+    const walls: CalWall[] = []
+    const qw = qqq ? wallOf('QQQ 원화 보유', qqq.curve, FROM, TO) : null
+    if (qw) walls.push(qw)
+    const kw = wallOf(`${BENCH} KODEX 200 보유`, benchEq, FROM, TO)
+    if (kw) walls.push(kw)
+    log('')
+    log(`전략 실행 구간 **${FROM} ~ ${TO}** — 벽도 이 구간으로 잘라 다시 쟀다(옮겨 적은 값이 아니다).`)
+    if (qqq) log(`QQQ 환산 규약: ${qqq.note ?? '—'}`)
+    wallTable(walls)
+
+    const sorted = calRankTable(`${U.key} 전체 순위 (칼마 내림차순 · ${variants.length}변형)`, variants, qw)
+    const over = calHeadline(U.key, sorted, qw)
+    const pass = calPassSummary(U.key, sorted)
+    totalPass += pass.length
+    totalOver += over
+    perUniPass.push({ key: U.key, pass })
+
+    const top3 = sorted.slice(0, 3)
+    if (top3.length) perYearTable(top3.map((v) => v.row), `연도별 수익 분해 — ${U.key} 칼마 상위 ${top3.length} (거짓 매끈함 방지)`)
+    log('※ 연도별 표는 "칼마가 특정 해 하나로 만들어진 것인지"를 보는 자리다. 한 해가 나머지를')
+    log('  전부 만들었다면 그 칼마는 구조가 아니라 그 해의 사건이다.')
+  }
+
+  // ---- 종합 -------------------------------------------------------------------
+  log('')
+  log('# 종합')
+  log('')
+  log('| 유니버스 | 판정 통과 변형 |')
+  log('|---|---|')
+  for (const p of perUniPass) log(`| ${p.key} | ${p.pass.map((v) => v.label).join(', ') || '**없음**'} |`)
+  log('')
+  if (totalOver === 0) {
+    log('## ❌ 결론 — QQQ 원화 보유의 칼마를 넘은 변형이 **두 유니버스 통틀어 하나도 없다.**')
+    log('')
+    log('프리셋 재구축(2단계)의 근거로 쓸 수 있는 것은 "이 탐색 공간에서는 못 찾았다"는 사실이다.')
+    log('가장 덜 나쁜 칸을 프리셋으로 승격시키는 것은 33차가 무너진 것과 같은 사후선택이므로,')
+    log('다음 단계는 **후보 승격이 아니라 탐색 공간을 바꾸는 것**(다른 계열·다른 리밸런스 주기·')
+    log('워크포워드 구성요소 선택)이거나, "실측 유니버스에서는 단순보유가 낫다"를 결과로 받는 것이다.')
+  } else {
+    log(`## QQQ 벽을 넘으면서 판정도 통과한 변형: 총 **${totalOver}개**`)
+    log('')
+    log('다만 이 숫자는 **채택 목록이 아니다.** 아래 다중검정·사후선택 경고를 통과한 뒤에야')
+    log('프리셋 후보가 된다 — 2단계에서 별도 근거(구간 분할 일관성·이웃 파라미터 방향)를 요구한다.')
+  }
+  krxcalMultipleTestingNote(total, totalPass, totalOver)
+
+  // ---- 한계 -------------------------------------------------------------------
+  log('')
+  log('## 이 실험의 구조적 한계')
+  log(`· **랭킹은 실측이지만 가격은 생존 종목만이다.** 이번 실행 매핑 실패 ${failed.length}종목 —`)
+  log('  그 시절 상위였다가 상장폐지된 종목은 Yahoo에 시세가 없어 유니버스에서 빠진다. 33차에서')
+  log('  같은 방식으로 23종목이 빠졌고, 그만큼 **성적이 실제보다 후하다.** 랭킹 편향은 제거됐지만')
+  log('  **가격 생존편향은 남아 있다** — 특히 코스닥 쪽이 크다.')
+  log(`· **${KRXPIT_FROM}년 이전이 없다.** KRX Open API 데이터가 2010년부터라 2006~2009는 수집 자체가`)
+  log('  불가능하다. 2008 금융위기 전반부가 이 표에 없다는 뜻이며, 그래서 여기 MDD는 "겪지 않은')
+  log('  위기"만큼 작다. 지난 회차의 2000~ 구간 수치와 직접 비교할 수 없다.')
+  log(`· **구간이 ${KRXPIT_TO - KRXPIT_FROM + 1}년으로 짧다.** 전·후반 각 8~9년이라 한 해의 큰 수익·손실이 판정을 뒤집는다.`)
+  log('· 연 단위 유니버스 교체라 매년 1월 초 전량 재편입 + 12월 말 정산 근사가 들어간다.')
+  log('· **오버레이 행은 슬리브 간 이체 비용이 0인 낙관적 상한이다**(슬리브 **내부** 매매비용은 반영).')
+  log('  금 20% 행은 여기에 더해 환전 스프레드·해외 ETF 세제가 빠져 있고, 원화 곡선에는 금 가격과')
+  log('  원/달러 변동이 **섞여 있다** — 낙폭 완화의 상당 부분이 금이 아니라 달러 노출일 수 있다.')
+  log('· **QQQ 벽은 참고이지 벤치가 아니다.** 알파 판정 벤치는 규칙 5대로 KODEX 200 그대로이며,')
+  log('  QQQ 원화 곡선에도 환헤지 없음·해외 세제 미반영 가정이 들어 있다(같은 조건의 비교가 아니다).')
+  log('· 스팩·우선주 제외는 **수집 시점**(pityear)에서 이미 적용된 규칙이다 — 여기서 다시 거르지 않는다.')
+  unverifiedNote()
+  disclaimer({ universe: false })
+  log('⚠️ 유니버스 랭킹은 KRX 실측이라 **선택편향이 없다.** 대신 위에 적은 가격 생존편향·구간 단축·')
+  log('   누적 다중검정 한계를 전부 달고 읽는다.')
+}
+
+// ============================================================================
 
 const MODES: Record<string, () => Promise<void>> = {
   seasonal,
@@ -5453,6 +6036,7 @@ const MODES: Record<string, () => Promise<void>> = {
   overlay,
   asset,
   krxpit,
+  krxcal,
 }
 
 // 런처(scripts/idea-lab.mjs)만 IDEA_LAB_RUN=1을 넘긴다. 테스트가 이 모듈을
