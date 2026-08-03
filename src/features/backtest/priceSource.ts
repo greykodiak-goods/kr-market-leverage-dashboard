@@ -43,11 +43,19 @@ export type PriceSource = 'yahoo' | 'krx'
 export const PRICE_SOURCES = ['yahoo', 'krx'] as const
 
 /**
- * **기본값은 야후다.** KRX 일별 정본 파일이 아직 리포에 없기 때문이다(EC2 수집 진행 중).
- * 데이터가 도착하면 이 상수 하나만 `'krx'`로 바꾸면 화면·사전계산이 함께 넘어간다 —
- * 전환은 데이터 도착 후 총괄이 판단한다(워커가 미리 넘기지 않는다).
+ * **기본값은 KRX 정본이다** (2026-08-03 전환 — 대표 지시 "야후 아예 보지 말고 시세 편향 없애줘").
+ *
+ * 전환 근거(직접 확인):
+ *   · 상폐 포함 375종목 · 4,081 거래일(2010-01-04~2026-07-31) · 거래량 포함 · 실패 0콜
+ *   · 40+40 유니버스 275종목 중 시세 보유가 야후 252 → **KRX 274** (가격 생존편향 사실상 해소)
+ *   · 분할 자기검증 통과: 삼성전자 50:1 · 네이버 5:1 · 카카오 5:1
+ *   · 야후는 5분봉 4,800일 전수 조사에서 **단 하루도 78봉이 온전하지 않았다**(평균 71.6봉)
+ *
+ * ⚠️ 대신 **배당이 빠진다**(KRX 원주가 기반 = 가격수익). 전략·국장 벤치가 똑같이 빠져
+ * 알파 비교는 공정하지만 절대 CAGR은 야후 총수익 기준보다 낮게 나온다 — 옛 회차 수치와
+ * 직접 비교하면 안 된다. 벤치·참고선(QQQ·QLD·금·환율)은 KRX에 없어 야후를 계속 쓴다.
  */
-export const DEFAULT_PRICE_SOURCE: PriceSource = 'yahoo'
+export const DEFAULT_PRICE_SOURCE: PriceSource = 'krx'
 
 export const PRICE_SOURCE_LABEL: Record<PriceSource, string> = {
   yahoo: 'Yahoo 일봉 (총수익 · 생존편향 있음)',

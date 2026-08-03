@@ -220,10 +220,10 @@ function testKinds(): void {
 
   eq('소스는 두 가지뿐', PRICE_SOURCES.join(','), 'yahoo,krx')
   // ⚠️ 기본값은 **야후**다. 데이터 도착 전에 기본을 바꾸면 화면이 통째로 실행 불가가 된다.
-  eq('기본값은 야후(전환은 데이터 도착 후 총괄이)', DEFAULT_PRICE_SOURCE, 'yahoo')
+  eq('기본값은 KRX 정본(2026-08-03 전환 — 생존편향 제거)', DEFAULT_PRICE_SOURCE, 'krx')
   eq('krx는 그대로', normalizePriceSource('krx'), 'krx')
-  eq('모르는 값은 기본값으로', normalizePriceSource('naver'), 'yahoo')
-  eq('undefined도 기본값으로', normalizePriceSource(undefined), 'yahoo')
+  eq('모르는 값은 기본값으로', normalizePriceSource('naver'), 'krx')
+  eq('undefined도 기본값으로', normalizePriceSource(undefined), 'krx')
   check(
     '라벨이 총수익/가격수익을 구분한다',
     PRICE_SOURCE_LABEL.yahoo.includes('총수익') && PRICE_SOURCE_LABEL.krx.includes('가격수익'),
@@ -499,12 +499,12 @@ async function testProbe(): Promise<void> {
 
 // ============================================================================
 function testEnv(): void {
-  section('⑧ 사전계산 스크립트의 소스 선택 — 환경변수 기본은 야후')
+  section('⑧ 사전계산 스크립트의 소스 선택 — 환경변수 기본은 KRX 정본')
 
-  eq('미지정이면 야후', priceSourceFromEnv({}), 'yahoo')
+  eq('미지정이면 기본값(krx)', priceSourceFromEnv({}), 'krx')
   eq('PRICE_SOURCE=krx', priceSourceFromEnv({ PRICE_SOURCE: 'krx' }), 'krx')
   eq('대소문자·공백 허용', priceSourceFromEnv({ PRICE_SOURCE: ' KRX ' }), 'krx')
-  eq('모르는 값은 야후로 좁힌다', priceSourceFromEnv({ PRICE_SOURCE: 'naver' }), 'yahoo')
+  eq('모르는 값은 기본값(krx)으로 좁힌다', priceSourceFromEnv({ PRICE_SOURCE: 'naver' }), 'krx')
 }
 
 // ============================================================================

@@ -155,8 +155,10 @@ export function toPrecomputedIndex(raw: unknown): PrecomputedIndex | null {
     note: typeof f.note === 'string' ? f.note : '',
     schema: f.schema,
     byId,
-    // 없으면 'yahoo' — 시세 소스 표기가 없던 시절(schema 1~3)의 산출물은 전부 야후로 구웠다.
-    priceSource: normalizePriceSource(f.priceSource),
+    // 없으면 **'yahoo' 고정** — 시세 소스 표기가 없던 시절(schema 1~3)의 산출물은 전부 야후로
+    // 구운 것이 **사실**이다. 현재 기본값(2026-08-03부터 'krx')을 따라가면 옛 수치에 새 소스
+    // 라벨이 붙어 거짓이 된다. 그래서 normalizePriceSource(=현재 기본값)를 쓰지 않는다.
+    priceSource: f.priceSource == null ? 'yahoo' : normalizePriceSource(f.priceSource),
     priceSourceNote: typeof f.priceSourceNote === 'string' ? f.priceSourceNote : '',
     priceSourceLimits: Array.isArray(f.priceSourceLimits)
       ? f.priceSourceLimits.filter((l): l is string => typeof l === 'string')
