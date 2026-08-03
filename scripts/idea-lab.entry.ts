@@ -82,8 +82,24 @@
 //   복사해 왔다 — 정본은 추후 `src/features/backtest/pitUniverse.ts`로 합류 예정
 //   (지금 그 파일을 만들면 다른 워커의 작업 파일과 충돌한다).
 //
-// ⚠️ 컨테이너에서 Yahoo는 403이라 실데이터 실행은 여기서 하지 않았다.
-//    로직은 합성 데이터 테스트로만 검증된 상태다 — 수치 산출은 [미검증-실데이터].
+// ── 시세 소스 (2026-08-03 대표 지시 "야후 아예 보지 말고 시세 편향 없애줘") ──────
+//   국내 유니버스 시세는 `PRICE_SOURCE` 하나로 고른다. **기본값은 `krx`**(리포에 커밋된
+//   KRX 일별 정본 — 가격수익·상폐 포함·2010-01-04~). 옛 회차(34·35·36차) 수치를 재현하려면
+//   `PRICE_SOURCE=yahoo`로 돌린다 — 그 경로는 지우지 않았다.
+//     PRICE_SOURCE=krx   MODE=krxcal node scripts/idea-lab.mjs   (기본)
+//     PRICE_SOURCE=yahoo MODE=krxcal node scripts/idea-lab.mjs   (옛 회차 재현)
+//   ⚠️ 벤치(KODEX 200)·참고선(QQQ·QLD·금·환율)·미장 유니버스는 KRX Open API 밖이라 **계속 야후**다.
+//      야후=총수익(배당 재투자) / KRX=가격수익(배당 미반영)이라 **알파는 전략에 불리한 쪽으로**
+//      편향된다 — 매 실행 머리말의 `MIXED_SOURCE_NOTE`가 그 사실을 찍는다.
+//
+// ── 변형별 일간 수익률 산출물 ────────────────────────────────────────────────
+//   실행하면 변형마다 일간 수익률 계열을 모아 `artifacts/returns/idea-<mode>.json`에 남긴다.
+//   `scripts/overfit-lab.mjs`(computePbo · walkForwardScore · deflatedSharpeFromReturns)에
+//   그대로 먹여 79변형을 소급 채점하기 위한 것이다. 수집은 `summarizeStrat` 한 곳에 걸려 있어
+//   새 변형을 추가해도 빠지지 않는다.
+//
+// ⚠️ 컨테이너에서 Yahoo는 403이라 **야후 경로**의 실데이터 실행은 여기서 하지 않았다.
+//    KRX 경로는 정본이 리포에 있어 컨테이너에서도 그대로 돈다(실행 로그가 PR에 있다).
 
 import {
   runStrategySpec,
@@ -121,7 +137,20 @@ import {
   parseKrxPitUniverse,
   type KrxPitUniverse,
 } from '../src/features/backtest/krxPitUniverse'
-import { readFileSync, readdirSync } from 'node:fs'
+import {
+  MIXED_SOURCE_NOTE,
+  PRICE_SOURCE_LABEL,
+  loadKrPrices,
+  loadKrxDailyIndex,
+  normalizePriceSource,
+  type KrxPriceDeps,
+  type PriceSource,
+  type PriceSourceMeta,
+} from '../src/features/backtest/priceSource'
+// nodeKrxDeps만 가져온다. 그 모듈의 main()은 PRESET_PRECOMPUTE_RUN=1일 때만 돌므로
+// import해도 사전계산이 실행되지 않는다(이 파일의 IDEA_LAB_RUN 게이트와 같은 규약).
+import { nodeKrxDeps } from './preset-precompute.entry'
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const COST: CostSettings = { initialCapital: 10_000_000, feePct: 0.015, taxPct: 0.15, slippagePct: 0.1 }
@@ -172,21 +201,388 @@ async function fetchDaily(symbol: string, range = '10y'): Promise<DailyBar[]> {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-/** 코스닥 출신 종목 폴백 로드 — .KQ 우선, 실패/짧으면 .KS */
-async function fetchKrDual(code: string, range: string): Promise<DailyBar[] | null> {
-  let best: DailyBar[] | null = null
-  for (const suffix of ['.KQ', '.KS']) {
-    try {
-      const bars = await fetchDaily(`${code}${suffix}`, range)
-      if (!best || bars.length > best.length) best = bars
-      if (bars.length >= 200) break
-    } catch {
-      /* 다음 접미사 시도 */
-    }
-    await sleep(120)
-  }
-  return best && best.length >= 200 ? best : null
+// ============================================================================
+// 시세 소스 — 야후 ↔ KRX 일별 정본 (2026-08-03 대표 지시 "야후 아예 보지 말고 시세 편향 없애줘")
+// ============================================================================
+//
+// 예전에는 이 파일이 야후를 직접 불렀다(`fetchKrDual` 루프). 그래서 화면·사전계산이
+// KRX 정본으로 넘어간 뒤에도 **연구 러너만 야후에 남아** 34·35·36차의 79변형 수치가
+// 전부 총수익(배당 재투자) 기준으로 굳었다. 37차에서 프리셋 2종을 KRX로 다시 재니
+// 알파가 절반 이하로 줄었다 — 같은 표에 두 소스를 섞으면 그 차이가 보이지 않는다.
+//
+// 그래서 소비 쪽을 **어댑터 하나**(`loadKrPrices`)로 모은다. 화면·사전계산·연구 러너가
+// 같은 함수를 쓰므로 세 수치가 조용히 갈라질 수 없다.
+//
+//   PRICE_SOURCE=krx   (기본값) KRX 일별 정본 · 가격수익(배당 미반영) · 상폐 종목 포함 · 2010~
+//   PRICE_SOURCE=yahoo         과거 회차(34·35·36차) **재현 전용**. 지우지 않는다.
+//
+// ⚠️ 조용한 폴백은 없다. krx를 골랐는데 정본이 없으면 어댑터가 **던진다**(못 돌리는 것이
+//    틀리게 도는 것보다 낫다). 벤치(KODEX 200)·참고선(QQQ·금·환율)은 KRX Open API가 주지
+//    않아 **계속 야후**이며, 그 혼합 사실은 `MIXED_SOURCE_NOTE`로 매 실행 머리말에 찍는다.
+
+/** 이 러너의 시세 소스. 알 수 없는 값은 기본값(`DEFAULT_PRICE_SOURCE` = krx)으로 좁힌다. */
+export function ideaPriceSource(env: Record<string, string | undefined> = process.env): PriceSource {
+  return normalizePriceSource((env.PRICE_SOURCE ?? '').trim().toLowerCase())
 }
+
+/** 런처(idea-lab.mjs)가 넘기는 리포 루트. 테스트 번들은 REPO_ROOT로 받는다. */
+export const repoRoot = (): string => process.env.REPO_ROOT ?? process.cwd()
+
+/** `'since:YYYY-MM-DD'` → `'YYYY-MM-DD'`. 그 외 형태(`'10y'`)는 null. */
+export function rangeStart(range: string): string | null {
+  return range.startsWith('since:') ? range.slice(6) : null
+}
+
+export interface KrHistoryLoad {
+  /** **6자리 코드** 키(야후 심볼 키가 아니다) — 이 러너의 모든 하위 로직이 코드로 돈다. */
+  histories: Record<string, DailyBar[]>
+  /** 시세를 못 얻은 코드. 요청 순서를 유지한다(로그가 매 실행 같아야 대조가 된다). */
+  failed: string[]
+  meta: PriceSourceMeta
+  source: PriceSource
+  /** KRX 정본의 수집 시작일(krx 경로에서만 채워진다). */
+  krxFrom: string | null
+}
+
+/** 테스트가 가짜 fetch·가짜 파일을 끼울 수 있게 열어 둔 주입 지점. 실행 경로는 기본값을 쓴다. */
+export interface KrLoadDeps {
+  source?: PriceSource
+  /** 야후 경로의 심볼 단건 조회 */
+  fetchOne?: (symbol: string) => Promise<DailyBar[]>
+  krx?: KrxPriceDeps
+  betweenAttempts?: () => Promise<void>
+}
+
+/**
+ * 국내 유니버스 시세를 소스에 상관없이 **같은 모양**으로 받는다.
+ *
+ * 야후 경로의 규약은 예전 `fetchKrDual`과 **한 자리도 다르지 않다** — `loadKrDual`이
+ * 같은 규칙(.KQ/.KS 둘 다 조회 · 긴 이력 채택 · 200봉 미만 제외)을 구현하고 있고,
+ * `tests/idealab-price.test.ts`가 가짜 fetch로 그 동치를 집행한다.
+ *
+ * 규칙 4(전량 실패는 비정상 종료): 한 종목도 못 받으면 **던진다.** 예전에는 모드가
+ * "실행할 해가 없다"를 찍고 `return`해 **종료코드 0**으로 끝났다 — 크론이 성공으로 읽는다.
+ */
+export async function loadKrHistories(
+  codes: readonly string[],
+  range: string,
+  deps: KrLoadDeps = {},
+): Promise<KrHistoryLoad> {
+  const source = deps.source ?? ideaPriceSource()
+  const load = await loadKrPrices(codes, source, {
+    // 동시성 1 = 기존 순차 로딩 그대로(유량 제한 안쪽).
+    yahoo: {
+      fetchDaily: deps.fetchOne ?? ((sym) => fetchDaily(sym, range)),
+      betweenAttempts:
+        deps.betweenAttempts ??
+        (async () => {
+          await sleep(120)
+        }),
+      concurrency: 1,
+    },
+    krx: deps.krx ?? nodeKrxDeps(repoRoot()),
+  })
+
+  const from = rangeStart(range)
+  const histories: Record<string, DailyBar[]> = {}
+  for (const [code, sym] of Object.entries(load.symOf)) {
+    const bars = load.histories[sym] ?? []
+    // KRX 정본 파일은 구간 인자를 모른다(전 구간을 담고 있다) — 야후와 같은 창이 되게 여기서 자른다.
+    // 야후 쪽은 이미 그 구간만 받아 왔으므로 **손대지 않는다**(회귀 방지).
+    const cut = source === 'krx' && from ? bars.filter((b) => b.date >= from) : bars
+    if (cut.length > 0) histories[code] = cut
+  }
+  const failed = [...new Set(codes)].filter((cd) => !histories[cd])
+
+  if (Object.keys(histories).length === 0) {
+    throw new Error(
+      `시세를 한 종목도 받지 못했다 (소스 ${source} · 요청 ${codes.length}종목) — ` +
+        (source === 'krx'
+          ? 'KRX 일별 정본(public/data/krx-daily) 수집 상태를 확인하라.'
+          : '야후 응답(컨테이너에서는 403)을 확인하라.') +
+        ' 빈 유니버스로 계속 돌면 "다 실패했는데 종료코드 0"이 된다.',
+    )
+  }
+  return { histories, failed, meta: load.meta, source, krxFrom: load.krxIndex?.from ?? null }
+}
+
+/**
+ * 벤치(KODEX 200)는 **KRX Open API 밖**이라 소스와 무관하게 항상 야후다.
+ * 실패해도 굽기를 막지 않되 **알파 열을 비워** 크게 알린다 — 0으로 채우면 규칙 3 위반이고,
+ * 실행 자체를 죽이면 KRX 정본만으로 돌릴 수 있는 환경(컨테이너·국내 IP 없는 러너)에서
+ * 아무것도 못 굽는다. 판정(규칙 5)은 알파가 채워진 실행에서만 한다.
+ */
+async function fetchBenchOrEmpty(range: string): Promise<DailyBar[]> {
+  try {
+    const b = await fetchDaily(BENCH, range)
+    if (b.length >= 2) return b
+    log(`⚠️ 벤치(${BENCH}) 응답이 ${b.length}봉뿐이다 — **알파 열을 비운다**(없는 값을 0으로 채우지 않는다).`)
+    return []
+  } catch (e) {
+    log(`⚠️ **벤치(${BENCH}) 로드 실패 — 알파(규칙 5) 열이 전부 "—"로 나온다.** (${String(e)})`)
+    log('   이 표로는 **판정할 수 없다**(성적의 크기만 읽을 수 있다). 벤치·참고선은 KRX Open API가')
+    log('   주지 않아 야후 전용이고, 컨테이너에서는 야후가 403이다 — 판정은 GHA/EC2 실행으로 채워라.')
+    return []
+  }
+}
+
+/** 출처·한계 한 줄씩(규칙 3). 한 실행에 한 번만 찍는다 — 로드 함수가 부른다. */
+function logLoadMeta(load: KrHistoryLoad): void {
+  log(`  ${load.meta.note}`)
+  for (const l of load.meta.limits) log(`  ⚠️ ${l}`)
+}
+
+/**
+ * 워밍업 구간이 소스에 없으면 그 사실을 찍는다.
+ * (KRX 정본은 2010-01-04부터라 `since:2008-01-01` 같은 워밍업 요청이 통째로 비어 있다 —
+ *  12-1 모멘텀·MA80은 첫 해에 창을 못 채운 채 돈다. 조용히 넘어가면 첫 해 수치를 오독한다.)
+ */
+function warnKrxWarmup(load: KrHistoryLoad, range: string): void {
+  const from = rangeStart(range)
+  if (load.source !== 'krx' || !load.krxFrom || !from || from >= load.krxFrom) return
+  log(
+    `  ⚠️ 워밍업 요청 구간 ${from}~ 중 **${from} ~ ${load.krxFrom} 이 비어 있다**(KRX 정본 시작일). ` +
+      '첫 해의 12개월 모멘텀·장기 이평은 창을 못 채운 채 돈다 — 첫 해 수치를 따로 읽어라.',
+  )
+}
+
+/**
+ * KRX 정본은 2010년부터다. 그 이전 해가 유니버스 연쇄에 들어 있으면 **빈 해로 조용히 도는 대신**
+ * 경고를 찍고 실제 실행 구간으로 좁힌다(빈 해를 넣고 돌리면 현금 구간이 CAGR·MDD에 섞인다).
+ * 야후 경로에서는 아무것도 하지 않는다 — 옛 회차 재현이 목적이라 구간이 바뀌면 안 된다.
+ */
+export function krxYearGuard(years: number[], load: Pick<KrHistoryLoad, 'source' | 'krxFrom'>): number[] {
+  if (load.source !== 'krx' || !load.krxFrom) return years
+  const first = Number(load.krxFrom.slice(0, 4))
+  const dropped = years.filter((y) => y < first)
+  if (dropped.length === 0) return years
+  const kept = years.filter((y) => y >= first)
+  log('')
+  log(
+    `⚠️ **구간 경고 — KRX 정본은 ${load.krxFrom}부터다.** 유니버스 연쇄에 있던 ` +
+      `${dropped[0]}~${dropped[dropped.length - 1]} ${dropped.length}개 해는 시세가 통째로 없다.`,
+  )
+  if (kept.length === 0)
+    throw new Error(
+      `KRX 정본 시작(${load.krxFrom}) 이후로 실행할 해가 하나도 없다 — 구간 설정 또는 수집 상태를 확인하라.`,
+    )
+  log(
+    `   → **실제 실행 구간은 ${kept[0]}~${kept[kept.length - 1]} (${kept.length}년)이다.** ` +
+      '빈 해를 그대로 돌리면 현금 구간이 CAGR·MDD에 섞여 표가 거짓이 된다.',
+  )
+  log(
+    '   → 이 표는 2000년대를 포함한 옛 회차(야후) 표와 **직접 비교할 수 없다.** ' +
+      '그 비교가 필요하면 PRICE_SOURCE=yahoo로 다시 돌려라.',
+  )
+  log('')
+  return kept
+}
+
+/** KRX 정본의 수집 구간 한 줄(`2010-01-04~2026-07-31`). 못 읽으면 null — 머리말에서만 쓴다. */
+export async function krxSpanLabel(deps?: KrxPriceDeps): Promise<string | null> {
+  try {
+    const index = await loadKrxDailyIndex(deps ?? nodeKrxDeps(repoRoot()))
+    return `${index.from}~${index.to}`
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 모든 MODE 출력의 **머리말 한 줄** — 어떤 소스로 구운 숫자인지 표에서 즉시 보여야 한다.
+ * (34차에 화면과 러너의 수치가 조용히 갈라진 사고가 있었다.)
+ */
+export function priceSourceHeadline(source: PriceSource, krxSpan: string | null = null): string {
+  return source === 'krx'
+    ? `시세 소스: krx (${PRICE_SOURCE_LABEL.krx} · 가격수익(배당 미반영)${krxSpan ? ` · ${krxSpan}` : ''})`
+    : `시세 소스: yahoo (${PRICE_SOURCE_LABEL.yahoo} · 총수익(배당 재투자) · **옛 회차 재현용** · 기본값은 krx)`
+}
+
+// ============================================================================
+// 변형별 일간 수익률 계열 — 과최적화 소급 채점용 산출물
+// ============================================================================
+//
+// 표에 남는 것은 스칼라(CAGR·MDD·알파)뿐이라, 79변형을 PBO·DSR·워크포워드로 **다시 채점**
+// 하려면 러너를 처음부터 다시 돌려야 했다. 그래서 실행하면서 변형별 일간 수익률을 모아
+// `artifacts/returns/idea-<mode>.json`으로 남긴다 — `scripts/overfit-lab.mjs`(= overfit.ts의
+// computePbo · walkForwardScore · deflatedSharpeFromReturns)가 그대로 먹는 모양이다.
+//
+// 규약(overfit-lab.entry.ts와 같은 것을 쓴다 — 두 형식이 갈라지면 아무도 안 쓴다):
+//   · **수익률**이지 자산곡선 레벨이 아니다(레벨을 잘라 붙이면 블록 경계에서 거짓 수익이 난다).
+//   · 모든 변형이 **같은 달력** 위에 정렬된다. 곡선이 없는 날은 0(미보유)으로 채운다.
+//   · `dates`와 각 `returns`의 길이가 같아야 한다 — 다르면 **던진다**(밀린 계열은 채점을 거짓말시킨다).
+//
+// 규칙 1(미래참조): 여기서 하는 일은 **이미 확정된 곡선의 기록**이다. 산출물이 신호로
+// 되먹임되지 않으므로 인과성에 영향을 주지 않는다.
+
+export const RETURNS_SCHEMA = 1
+export const RETURNS_DIR = join('artifacts', 'returns')
+
+export interface ReturnsVariantOut {
+  id: string
+  label: string
+  /** overfit-lab.entry.ts가 읽는 필드명 — 같은 값을 라벨과 함께 둔다(그 러너에 바로 먹인다). */
+  name: string
+  returns: number[]
+}
+
+export interface ReturnsPayload {
+  schema: number
+  mode: string
+  priceSource: PriceSource
+  /** 실제로 관측된 마지막 거래일 */
+  asOf: string
+  dates: string[]
+  variants: ReturnsVariantOut[]
+  /** 규칙 3 — 이 파일이 무엇으로 구워졌는지 파일 안에서도 확인 가능하게 */
+  note: string
+}
+
+interface RecordedVariant {
+  id: string
+  label: string
+  /** 전역 달력 슬롯 인덱스(문자열 날짜를 변형마다 복사하지 않는다 — 2026-08-02 OOM 교훈) */
+  slots: number[]
+  rets: number[]
+}
+
+/**
+ * 변형 수집기. `summarizeStrat`이 자동으로 밀어 넣으므로 **모드가 따로 등록할 필요가 없다** —
+ * 새 변형을 추가한 사람이 기록을 빠뜨릴 수 없는 구조로 둔 것이다(빠뜨리면 채점에서 조용히 사라진다).
+ */
+class ReturnsRecorder {
+  private active = false
+  private mode = ''
+  private source: PriceSource = 'krx'
+  private groupName = ''
+  private readonly calSlot = new Map<string, number>()
+  private readonly calDates: string[] = []
+  private readonly items: RecordedVariant[] = []
+  private skipped = 0
+  private duplicates = 0
+
+  begin(mode: string, source: PriceSource): void {
+    this.active = true
+    this.mode = mode
+    this.source = source
+  }
+
+  /** 같은 라벨이 여러 유니버스에서 반복되는 모드(krxpit·krxcal·krxscreen)가 붙이는 꼬리표. */
+  group(name: string): void {
+    this.groupName = name
+  }
+
+  get count(): number {
+    return this.items.length
+  }
+
+  private slotOf(date: string): number {
+    let s = this.calSlot.get(date)
+    if (s === undefined) {
+      s = this.calDates.length
+      this.calDates.push(date)
+      this.calSlot.set(date, s)
+    }
+    return s
+  }
+
+  add(label: string, equity: readonly { date: string; equity: number }[]): void {
+    if (!this.active) return
+    // 참고선(벤치·단순보유)은 변형이 아니다 — 채점 분모에 섞으면 다중검정 계산이 틀어진다.
+    if (label.startsWith('[참고]')) return
+    if (equity.length < 2) {
+      this.skipped++
+      return
+    }
+    const slots: number[] = []
+    const rets: number[] = []
+    let prev: number | null = null
+    for (const p of equity) {
+      if (!Number.isFinite(p.equity)) {
+        this.skipped++
+        return
+      }
+      slots.push(this.slotOf(p.date))
+      rets.push(prev != null && prev > 0 ? p.equity / prev - 1 : 0)
+      prev = p.equity
+    }
+    const full = this.groupName ? `${this.groupName} · ${label}` : label
+    // 같은 라벨·같은 계열이 두 번 들어오면(기준선 재실행 등) 채점 분모만 부풀린다 — 접는다.
+    if (this.items.some((v) => v.label === full && sameSeries(v.rets, rets))) {
+      this.duplicates++
+      return
+    }
+    this.items.push({ id: `v${String(this.items.length + 1).padStart(2, '0')}`, label: full, slots, rets })
+  }
+
+  /** 수집한 변형을 공통 달력에 정렬해 payload로 만든다. 길이가 어긋나면 **던진다.** */
+  build(): ReturnsPayload | null {
+    if (this.items.length === 0) return null
+    const dates = [...this.calDates].sort()
+    const pos = new Map(dates.map((d, i) => [d, i]))
+    const variants: ReturnsVariantOut[] = this.items.map((v) => {
+      const returns = new Array<number>(dates.length).fill(0)
+      for (let i = 0; i < v.slots.length; i++) {
+        const p = pos.get(this.calDates[v.slots[i]])
+        if (p === undefined) throw new Error(`${v.label}: 달력에 없는 날짜가 들어 있다 — 수집기가 깨졌다`)
+        returns[p] = v.rets[i]
+      }
+      if (returns.length !== dates.length)
+        throw new Error(`${v.label}: 수익률 ${returns.length}개 · 날짜 ${dates.length}개 — 길이가 다르다`)
+      for (const r of returns)
+        if (!Number.isFinite(r)) throw new Error(`${v.label}: 유한하지 않은 수익률이 들어 있다`)
+      return { id: v.id, label: v.label, name: v.label, returns }
+    })
+    return {
+      schema: RETURNS_SCHEMA,
+      mode: this.mode,
+      priceSource: this.source,
+      asOf: dates[dates.length - 1] ?? '',
+      dates,
+      variants,
+      note:
+        `MODE=${this.mode} · 시세 소스 ${this.source} · 변형 ${variants.length}개 · 시점 ${dates.length}개. ` +
+        '수익률(기간수익)이며 자산곡선 레벨이 아니다. 미보유·미실행 구간은 0. ' +
+        '벤치·참고선은 담지 않는다(scripts/overfit-lab.mjs 입력 규약과 같다).',
+    }
+  }
+
+  /** 파일로 남긴다. 수집된 변형이 없으면 아무것도 쓰지 않고 그 사실을 찍는다. */
+  write(rootDir: string): string | null {
+    if (!this.active) return null
+    const payload = this.build()
+    if (!payload) {
+      log('')
+      log(`ℹ️ 변형별 수익률 계열: 수집된 변형이 없어 ${RETURNS_DIR}/idea-${this.mode}.json 을 쓰지 않았다.`)
+      return null
+    }
+    const dir = join(rootDir, RETURNS_DIR)
+    mkdirSync(dir, { recursive: true })
+    const path = join(dir, `idea-${payload.mode}.json`)
+    writeFileSync(path, `${JSON.stringify(payload)}\n`, 'utf8')
+    log('')
+    log(
+      `✅ 변형별 일간 수익률: ${RETURNS_DIR}/idea-${payload.mode}.json · 변형 ${payload.variants.length}개 · ` +
+        `시점 ${payload.dates.length}개 (~${payload.asOf}) · 소스 ${payload.priceSource}` +
+        `${this.skipped ? ` · 곡선이 비어 제외 ${this.skipped}개` : ''}` +
+        `${this.duplicates ? ` · 같은 라벨·같은 계열 중복 제외 ${this.duplicates}개` : ''}`,
+    )
+    log(
+      '   → 과최적화 소급 채점: ' +
+        `OVERFIT_INPUT=${RETURNS_DIR}/idea-${payload.mode}.json MODE=overfit node scripts/overfit-lab.mjs`,
+    )
+    return path
+  }
+}
+
+function sameSeries(a: readonly number[], b: readonly number[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
+  return true
+}
+
+/** 모듈 단일 수집기 — `summarizeStrat`이 여기에 밀어 넣는다. */
+export const RETURNS = new ReturnsRecorder()
 
 // ============================================================================
 // 연도별 [추정] 상위 10+10 유니버스 — spec-backtest.entry.ts PIT1010 사본
@@ -610,20 +1006,19 @@ export function makeOvS3(benchMonthly: Map<string, number>, minYears = 8): Overl
 // ============================================================================
 
 async function loadPitHistories(range = 'since:1999-01-01') {
-  const years = Object.keys(PIT1010).map(Number).sort((a, b) => a - b)
+  const allYears = Object.keys(PIT1010).map(Number).sort((a, b) => a - b)
   const union = new Set<string>()
-  for (const y of years) for (const cd of [...PIT1010[y].ks, ...PIT1010[y].kq]) union.add(cd)
-  const histories: Record<string, DailyBar[]> = {}
-  let loadFail = 0
-  for (const code of union) {
-    const bars = await fetchKrDual(code, range)
-    if (bars) histories[code] = bars
-    else loadFail++
-    await sleep(100)
-  }
-  const bench = await fetchDaily(BENCH, range)
-  log(`시세 로드 ${Object.keys(histories).length}/${union.size} · 실패(상폐 등) ${loadFail}`)
-  return { years, histories, bench }
+  for (const y of allYears) for (const cd of [...PIT1010[y].ks, ...PIT1010[y].kq]) union.add(cd)
+  const codes = [...union]
+  const load = await loadKrHistories(codes, range)
+  // 벤치(KODEX 200)는 KRX Open API가 주지 않는 종목이라 **소스와 무관하게 야후**다.
+  const bench = await fetchBenchOrEmpty(range)
+  log(`시세 로드 ${Object.keys(load.histories).length}/${union.size} · 실패(상폐 등) ${load.failed.length}`)
+  logLoadMeta(load)
+  warnKrxWarmup(load, range)
+  // PIT1010은 2000년부터다 — KRX 정본(2010~)으로 돌면 앞 10년이 통째로 빈다.
+  const years = krxYearGuard(allYears, load)
+  return { years, histories: load.histories, bench }
 }
 
 function disclaimer(opts: { universe?: boolean; segmentExit?: boolean } = {}) {
@@ -631,8 +1026,11 @@ function disclaimer(opts: { universe?: boolean; segmentExit?: boolean } = {}) {
   log('')
   log('---')
   if (universe) {
-    log('⚠️ 유니버스 목록은 연초 시총 **[추정]**(KRX 실측 아님). 상폐·합병 종목은 가격 부재로 빠져')
-    log('   특히 2000년대 초 구간이 실제보다 후하게 나온다(생존편향 · 상폐 가격편향).')
+    log('⚠️ 유니버스 목록은 연초 시총 **[추정]**(KRX 실측 아님).')
+    if (ideaPriceSource() === 'krx')
+      log('   시세는 KRX 정본이라 상폐 종목 **가격**은 들어 있다 — 남는 편향은 목록 쪽(추정)이다.')
+    else
+      log('   상폐·합병 종목은 가격 부재로 빠져 특히 2000년대 초 구간이 실제보다 후하게 나온다(생존편향 · 상폐 가격편향).')
   }
   if (segmentExit) log('   구간 끝 청산은 시가평가 근사 + 매도비용 [추정] 차감이며 실제 청산가가 아니다.')
   log('⚠️ 이 수치는 시뮬레이션이며 **투자자문이 아니다.** 손실 경로는 MDD 열이 그 전략이 견뎌야 했던')
@@ -1140,13 +1538,20 @@ export const PAIR_WARMUP = 480
 async function pairprem() {
   log('# MODE=pairprem — 삼성전자 / 삼성전자우 괴리 스위칭 (롱온리 · 공매도 없음)')
   log('')
+  // 이 모드만 **우선주**가 필요한데 KRX 일별 정본에는 우선주가 없다(수집 시점에서 제외된다).
+  // 그래서 PRICE_SOURCE와 무관하게 두 계열 모두 야후(총수익)다 — KRX 표와 절대 수익을
+  // 나란히 놓으면 안 된다(규칙 3).
+  log(
+    `⚠️ 이 MODE는 **PRICE_SOURCE(${ideaPriceSource()})와 무관하게 두 종목 모두 Yahoo**로 받는다 — ` +
+      'KRX 일별 정본에 우선주(005935)가 없기 때문이다(총수익 기준 · KRX 표와 직접 비교 금지).',
+  )
   const common = await fetchDaily(SEC_COMMON, 'since:1999-01-01')
   await sleep(150)
   const pref = await fetchDaily(SEC_PREF, 'since:1999-01-01')
   const bars = alignPair(common, pref).filter((b) => b.date >= '2000-01-01')
   if (bars.length < PAIR_WARMUP + 50) {
-    log(`❌ 정렬 봉 ${bars.length}개 — 워밍업(${PAIR_WARMUP})에 못 미쳐 중단`)
-    return
+    // 규칙 4 — 못 돌린 것을 종료코드 0으로 끝내지 않는다.
+    throw new Error(`정렬 봉 ${bars.length}개 — 워밍업(${PAIR_WARMUP})에 못 미쳐 실행할 수 없다`)
   }
   log(`정렬 봉 ${bars.length}개 · ${bars[0].date} ~ ${bars[bars.length - 1].date}`)
   const d = bars.map(discountOf)
@@ -1612,8 +2017,12 @@ async function flow() {
   const flowYears = years.filter((y) => y >= FLOW_START_YEAR)
   const yearly = buildYearly(histories, flowYears).filter((v) => v.syms.length > 0)
   if (yearly.length === 0) {
-    log('❌ 시세 로드 실패로 실행할 해가 없다 — 중단')
-    return
+    // 규칙 4 — 전량 실패는 **비정상 종료**다. 예전에는 여기서 `return`해 종료코드 0으로
+    // 끝났고, 크론·GHA가 그것을 성공으로 읽었다(다 실패했는데 초록불).
+    throw new Error(
+      '시세 로드 실패로 실행할 해가 없다 — 유니버스에 매핑된 종목이 부족하다(연도별 시세 매핑 확인). ' +
+        '소스(PRICE_SOURCE)와 시세 응답을 확인하라.',
+    )
   }
   log(`실행 구간: ${flowYears[0]}~${flowYears[flowYears.length - 1]} · 전·후반 경계 ${FLOW_HALF_YEAR}`)
   const covered = yearly.reduce((n, v) => n + v.syms.filter((s) => lens.has(s)).length, 0)
@@ -2023,6 +2432,10 @@ export function summarizeStrat(
   benchEq: { date: string; equity: number }[],
   halfYear = HALF_YEAR,
 ): StratRow {
+  // 변형별 일간 수익률 수집(과최적화 소급 채점용). 곡선이 스칼라로 접히기 **직전**의
+  // 유일한 지점이라 여기에 건다 — 모드가 등록을 빠뜨릴 수 없다. 수집기가 꺼져 있으면
+  // (테스트·import) 아무 일도 하지 않는다.
+  RETURNS.add(label, chain.equity)
   return {
     label,
     full: perfOf(chain.equity),
@@ -2129,6 +2542,12 @@ export const benchCurve = (bench: DailyBar[]) => bench.map((b) => ({ date: b.dat
 
 function unverifiedNote() {
   log('')
+  if (ideaPriceSource() === 'krx') {
+    log('ℹ️ 국내 시세는 리포에 커밋된 **KRX 일별 정본**이라 컨테이너에서도 실데이터로 돈다.')
+    log('   다만 벤치(KODEX 200)·참고선(QQQ·금·환율)은 야후라, 그 줄이 "—"면 야후가 막힌 환경에서')
+    log('   돈 것이며 알파 열은 그만큼 비어 있다(규칙 3 — 없는 값을 0으로 채우지 않는다).')
+    return
+  }
   log('⚠️ [미검증-실데이터] 이 러너는 컨테이너에서 Yahoo가 403이라 합성 데이터 테스트로만 검증됐다.')
   log('   위 수치는 GitHub Actions(backtest.yml)·EC2 실행 결과로 채워야 한다.')
 }
@@ -2438,8 +2857,12 @@ async function xsmom() {
   const { years, histories, bench } = await loadPitHistories()
   const yearly = buildYearly(histories, years)
   if (yearly.every((v) => v.syms.length < 5)) {
-    log('❌ 시세 로드 실패로 실행할 해가 없다 — 중단')
-    return
+    // 규칙 4 — 전량 실패는 **비정상 종료**다. 예전에는 여기서 `return`해 종료코드 0으로
+    // 끝났고, 크론·GHA가 그것을 성공으로 읽었다(다 실패했는데 초록불).
+    throw new Error(
+      '시세 로드 실패로 실행할 해가 없다 — 유니버스에 매핑된 종목이 부족하다(연도별 시세 매핑 확인). ' +
+        '소스(PRICE_SOURCE)와 시세 응답을 확인하라.',
+    )
   }
   const benchEq = benchCurve(bench)
   log(`연도별 매핑률: ${yearly.map((v) => `${v.y} ${v.mapped}`).join(' · ')}`)
@@ -2812,8 +3235,12 @@ async function screen() {
   const { years, histories, bench } = await loadPitHistories()
   const yearly = buildYearly(histories, years)
   if (yearly.every((v) => v.syms.length < 5)) {
-    log('❌ 시세 로드 실패로 실행할 해가 없다 — 중단')
-    return
+    // 규칙 4 — 전량 실패는 **비정상 종료**다. 예전에는 여기서 `return`해 종료코드 0으로
+    // 끝났고, 크론·GHA가 그것을 성공으로 읽었다(다 실패했는데 초록불).
+    throw new Error(
+      '시세 로드 실패로 실행할 해가 없다 — 유니버스에 매핑된 종목이 부족하다(연도별 시세 매핑 확인). ' +
+        '소스(PRICE_SOURCE)와 시세 응답을 확인하라.',
+    )
   }
   const benchEq = benchCurve(bench)
   log(`연도별 매핑률: ${yearly.map((v) => `${v.y} ${v.mapped}`).join(' · ')}`)
@@ -2992,8 +3419,12 @@ async function volbrk() {
   const { years, histories, bench } = await loadPitHistories()
   const yearly = buildYearly(histories, years)
   if (yearly.every((v) => v.syms.length < 5)) {
-    log('❌ 시세 로드 실패로 실행할 해가 없다 — 중단')
-    return
+    // 규칙 4 — 전량 실패는 **비정상 종료**다. 예전에는 여기서 `return`해 종료코드 0으로
+    // 끝났고, 크론·GHA가 그것을 성공으로 읽었다(다 실패했는데 초록불).
+    throw new Error(
+      '시세 로드 실패로 실행할 해가 없다 — 유니버스에 매핑된 종목이 부족하다(연도별 시세 매핑 확인). ' +
+        '소스(PRICE_SOURCE)와 시세 응답을 확인하라.',
+    )
   }
   const benchEq = benchCurve(bench)
   log(`연도별 매핑률: ${yearly.map((v) => `${v.y} ${v.mapped}`).join(' · ')}`)
@@ -3197,8 +3628,12 @@ async function rsirev() {
   const { years, histories, bench } = await loadPitHistories()
   const yearly = buildYearly(histories, years)
   if (yearly.every((v) => v.syms.length < 5)) {
-    log('❌ 시세 로드 실패로 실행할 해가 없다 — 중단')
-    return
+    // 규칙 4 — 전량 실패는 **비정상 종료**다. 예전에는 여기서 `return`해 종료코드 0으로
+    // 끝났고, 크론·GHA가 그것을 성공으로 읽었다(다 실패했는데 초록불).
+    throw new Error(
+      '시세 로드 실패로 실행할 해가 없다 — 유니버스에 매핑된 종목이 부족하다(연도별 시세 매핑 확인). ' +
+        '소스(PRICE_SOURCE)와 시세 응답을 확인하라.',
+    )
   }
   const benchEq = benchCurve(bench)
   log(`연도별 매핑률: ${yearly.map((v) => `${v.y} ${v.mapped}`).join(' · ')}`)
@@ -3726,8 +4161,12 @@ async function xswf() {
   const { years, histories, bench } = await loadPitHistories()
   const yearly = buildYearly(histories, years)
   if (yearly.every((v) => v.syms.length < 5)) {
-    log('❌ 시세 로드 실패로 실행할 해가 없다 — 중단')
-    return
+    // 규칙 4 — 전량 실패는 **비정상 종료**다. 예전에는 여기서 `return`해 종료코드 0으로
+    // 끝났고, 크론·GHA가 그것을 성공으로 읽었다(다 실패했는데 초록불).
+    throw new Error(
+      '시세 로드 실패로 실행할 해가 없다 — 유니버스에 매핑된 종목이 부족하다(연도별 시세 매핑 확인). ' +
+        '소스(PRICE_SOURCE)와 시세 응답을 확인하라.',
+    )
   }
   const benchEq = benchCurve(bench)
   const qqqKrw = await loadQqqKrwCurve()
@@ -3932,6 +4371,12 @@ export function buildYearlyUs(
 
 async function loadUsPitHistories(range = 'since:1999-01-01', union: string[] = US_PIT_UNION) {
   const years = US_PIT_YEARS
+  // 미장 유니버스는 KRX Open API 밖이라 **PRICE_SOURCE와 무관하게 전량 야후(총수익)**다.
+  // 머리말의 "시세 소스"는 국내 유니버스에만 적용된다 — 그 사실을 여기서 못 박는다(규칙 3).
+  log(
+    `⚠️ 이 MODE의 시세는 미국 종목이라 **PRICE_SOURCE(${ideaPriceSource()})와 무관하게 전량 Yahoo**다` +
+      '(총수익·배당 재투자 기준). 국내 KRX 정본 표와 절대 수익률을 나란히 놓지 마라.',
+  )
   const histories: Record<string, DailyBar[]> = {}
   const failed: string[] = []
   for (const ticker of union) {
@@ -4020,8 +4465,12 @@ async function runUsXsMom(cfg: UsXsMomCfg) {
   const { years, histories, bench } = await loadUsPitHistories('since:1999-01-01', cfg.uni.union)
   const yearly = buildYearlyUs(histories, years, cfg.uni.codesFor)
   if (yearly.every((v) => v.syms.length < 5)) {
-    log('❌ 시세 로드 실패로 실행할 해가 없다 — 중단')
-    return
+    // 규칙 4 — 전량 실패는 **비정상 종료**다. 예전에는 여기서 `return`해 종료코드 0으로
+    // 끝났고, 크론·GHA가 그것을 성공으로 읽었다(다 실패했는데 초록불).
+    throw new Error(
+      '시세 로드 실패로 실행할 해가 없다 — 유니버스에 매핑된 종목이 부족하다(연도별 시세 매핑 확인). ' +
+        '소스(PRICE_SOURCE)와 시세 응답을 확인하라.',
+    )
   }
   const benchEq = benchCurve(bench)
   const qqqUsd = await loadQqqUsdCurve()
@@ -4218,8 +4667,12 @@ async function combo() {
   const { years, histories, bench } = await loadPitHistories()
   const yearly = buildYearly(histories, years)
   if (yearly.every((v) => v.syms.length < 5)) {
-    log('❌ 시세 로드 실패로 실행할 해가 없다 — 중단')
-    return
+    // 규칙 4 — 전량 실패는 **비정상 종료**다. 예전에는 여기서 `return`해 종료코드 0으로
+    // 끝났고, 크론·GHA가 그것을 성공으로 읽었다(다 실패했는데 초록불).
+    throw new Error(
+      '시세 로드 실패로 실행할 해가 없다 — 유니버스에 매핑된 종목이 부족하다(연도별 시세 매핑 확인). ' +
+        '소스(PRICE_SOURCE)와 시세 응답을 확인하라.',
+    )
   }
   const benchEq = benchCurve(bench)
   const qqqKrw = await loadQqqKrwCurve()
@@ -4720,8 +5173,12 @@ async function overlay() {
   const { years, histories, bench } = await loadPitHistories()
   const yearly = buildYearly(histories, years)
   if (yearly.every((v) => v.syms.length < 5)) {
-    log('❌ 시세 로드 실패로 실행할 해가 없다 — 중단')
-    return
+    // 규칙 4 — 전량 실패는 **비정상 종료**다. 예전에는 여기서 `return`해 종료코드 0으로
+    // 끝났고, 크론·GHA가 그것을 성공으로 읽었다(다 실패했는데 초록불).
+    throw new Error(
+      '시세 로드 실패로 실행할 해가 없다 — 유니버스에 매핑된 종목이 부족하다(연도별 시세 매핑 확인). ' +
+        '소스(PRICE_SOURCE)와 시세 응답을 확인하라.',
+    )
   }
   const benchEq = benchCurve(bench)
   log(`연도별 매핑률: ${yearly.map((v) => `${v.y} ${v.mapped}`).join(' · ')}`)
@@ -4971,8 +5428,12 @@ async function asset() {
   const { years, histories, bench } = await loadPitHistories()
   const yearly = buildYearly(histories, years)
   if (yearly.every((v) => v.syms.length < 5)) {
-    log('❌ 시세 로드 실패로 실행할 해가 없다 — 중단')
-    return
+    // 규칙 4 — 전량 실패는 **비정상 종료**다. 예전에는 여기서 `return`해 종료코드 0으로
+    // 끝났고, 크론·GHA가 그것을 성공으로 읽었다(다 실패했는데 초록불).
+    throw new Error(
+      '시세 로드 실패로 실행할 해가 없다 — 유니버스에 매핑된 종목이 부족하다(연도별 시세 매핑 확인). ' +
+        '소스(PRICE_SOURCE)와 시세 응답을 확인하라.',
+    )
   }
   const benchEq = benchCurve(bench)
   log(`연도별 매핑률: ${yearly.map((v) => `${v.y} ${v.mapped}`).join(' · ')}`)
@@ -5026,14 +5487,16 @@ async function asset() {
     fx = await fetchDaily(FX_KRW, 'since:1999-01-01')
     await sleep(120)
   } catch (e) {
-    log(`❌ 환율(${FX_KRW}) 로드 실패 — 원화 환산이 불가능하므로 중단한다 (${String(e)})`)
-    return
+    // 규칙 4 — 못 돌린 것을 종료코드 0으로 끝내지 않는다(크론이 성공으로 읽는다).
+    throw new Error(
+      `환율(${FX_KRW}) 로드 실패 — 원화 환산이 불가능해 이 실험이 성립하지 않는다. ` +
+        `(${String(e)}) 이 모드는 야후 전용 자산(TLT·GLD·환율)이 필요하다 — GHA/EC2에서 돌려라.`,
+    )
   }
   const tlt = await loadKrwAsset(ASSET_TLT, fx)
   const gld = await loadKrwAsset(ASSET_GLD, fx)
   if (!tlt) {
-    log('❌ TLT 로드 실패 — 채권 슬리브 없이는 이 실험이 성립하지 않는다. 중단.')
-    return
+    throw new Error('TLT 로드 실패 — 채권 슬리브 없이는 이 실험이 성립하지 않는다(규칙 4: 조용히 성공으로 끝내지 않는다).')
   }
   log('')
   log(`분산 자산: ${ASSET_TLT} ${tlt.bars}봉 (${spanOf(tlt.curve).join(' ~ ')})` + (gld ? ` · ${ASSET_GLD} ${gld.bars}봉 (${spanOf(gld.curve).join(' ~ ')})` : ` · ${ASSET_GLD} **없음**`))
@@ -5216,18 +5679,17 @@ export function loadKrxPitFile(root = process.env.REPO_ROOT ?? process.cwd()): K
   return parseKrxPitUniverse(JSON.parse(text))
 }
 
-/** 코드 목록 시세를 한 번만 받는다(.KQ→.KS 폴백은 기존 `fetchKrDual` 규약 그대로). */
+/**
+ * 코드 목록 시세를 한 번만 받는다. 소스는 `PRICE_SOURCE`(기본 krx)가 고르고,
+ * 야후 경로의 .KQ→.KS 폴백 규약은 예전과 같다(`loadKrHistories` 주석 참조).
+ */
 async function loadCodeHistories(codes: string[], range = KRXPIT_RANGE) {
-  const histories: Record<string, DailyBar[]> = {}
-  const failed: string[] = []
-  for (const code of codes) {
-    const bars = await fetchKrDual(code, range)
-    if (bars) histories[code] = bars
-    else failed.push(code)
-    await sleep(100)
-  }
-  const bench = await fetchDaily(BENCH, range)
-  return { histories, failed, bench }
+  const load = await loadKrHistories(codes, range)
+  // 벤치(KODEX 200)는 KRX Open API 밖이라 **소스와 무관하게 야후**다.
+  const bench = await fetchBenchOrEmpty(range)
+  logLoadMeta(load)
+  warnKrxWarmup(load, range)
+  return { histories: load.histories, failed: load.failed, bench, load }
 }
 
 /**
@@ -5329,7 +5791,7 @@ async function krxpit() {
     )
   }
   // 구간 안에 구멍이 있으면 여기서 던진다(짧은 구간으로 조용히 돌지 않는다).
-  const years = krxPitSpan(uni, covered[0], covered[covered.length - 1])
+  let years = krxPitSpan(uni, covered[0], covered[covered.length - 1])
   log(
     `구간 ${years[0]}~${years[years.length - 1]} (${years.length}년) · 전·후반 분할 ${KRXPIT_HALF} · ` +
       `벤치 ${BENCH}(KODEX 200) · 비용 수수료 ${COST.feePct}% · 거래세 ${COST.taxPct}% · 슬리피지 ${COST.slippagePct}%`,
@@ -5342,7 +5804,8 @@ async function krxpit() {
   const codes = [...need].sort()
   log('')
   log(`시세 로드 대상 ${codes.length}종목 (실측 40+40 합집합 ∪ [추정] 10+10 합집합) — 한 번만 받아 모든 표가 나눠 쓴다.`)
-  const { histories, failed, bench } = await loadCodeHistories(codes)
+  const { histories, failed, bench, load } = await loadCodeHistories(codes)
+  years = krxYearGuard(years, load)
   const names = krxPitNames(uni)
   log(`시세 로드 ${Object.keys(histories).length}/${codes.length} · 실패(상폐·데이터 부족) ${failed.length}`)
   if (failed.length) {
@@ -5358,8 +5821,12 @@ async function krxpit() {
   const yearlyReal10 = buildYearly(histories, years, (y) => krxPitCodes(uni, y, 10))
   const yearlyEst10 = buildYearly(histories, years, pit1010Codes)
   if (yearlyReal10.every((v) => v.syms.length < 5)) {
-    log('❌ 시세 로드 실패로 실행할 해가 없다 — 중단')
-    return
+    // 규칙 4 — 전량 실패는 **비정상 종료**다. 예전에는 여기서 `return`해 종료코드 0으로
+    // 끝났고, 크론·GHA가 그것을 성공으로 읽었다(다 실패했는데 초록불).
+    throw new Error(
+      '시세 로드 실패로 실행할 해가 없다 — 유니버스에 매핑된 종목이 부족하다(연도별 시세 매핑 확인). ' +
+        '소스(PRICE_SOURCE)와 시세 응답을 확인하라.',
+    )
   }
   log('')
   log('# 비교 A — 추정 오류 분리 (실측 10+10 vs [추정] 10+10)')
@@ -5368,7 +5835,10 @@ async function krxpit() {
   log(`실측 연도별 매핑률: ${yearlyReal10.map((v) => `${v.y} ${v.mapped}`).join(' · ')}`)
   log(`[추정] 연도별 매핑률: ${yearlyEst10.map((v) => `${v.y} ${v.mapped}`).join(' · ')}`)
 
+  // 같은 라벨이 세 유니버스에서 반복되므로 수익률 산출물에 유니버스 꼬리표를 붙인다.
+  RETURNS.group('실측10+10')
   const rowsReal10 = runWinner3(yearlyReal10, benchEq, years)
+  RETURNS.group('[추정]10+10')
   const rowsEst10 = runWinner3(yearlyEst10, benchEq, years)
 
   log('')
@@ -5392,6 +5862,7 @@ async function krxpit() {
   log('유니버스가 넓어진 효과와 분위가 좁아진 효과가 한 칸에 섞인다.')
   log(`실측 40+40 연도별 매핑률: ${yearlyReal40.map((v) => `${v.y} ${v.mapped}`).join(' · ')}`)
 
+  RETURNS.group('실측40+40')
   const rowsReal40 = runWinner3(yearlyReal40, benchEq, years, [KRXPIT_DECILE_SLOTS])
   log('')
   log('## B-1) 실측 40+40')
@@ -5765,6 +6236,8 @@ export function krxcalUniverse(cfg: {
   const { key, yearly, years, benchEq, regime, gold, xsCands } = cfg
   const variants: CalVariant[] = []
   let span: [string, string] | null = null
+  // 두 유니버스가 같은 라벨을 쓰므로 수익률 산출물에 유니버스 꼬리표를 붙인다.
+  RETURNS.group(key)
 
   // ---- ① 조건식 격자 12 --------------------------------------------------------
   for (const g of krxcalGrid()) {
@@ -5888,7 +6361,7 @@ async function krxcal() {
       `실측 랭킹이 ${KRXPIT_FROM}~${KRXPIT_TO} 중 ${covered.length}년뿐이다 — EC2 MODE=pityear를 다시 실행하라.`,
     )
   }
-  const years = krxPitSpan(uni, covered[0], covered[covered.length - 1])
+  let years = krxPitSpan(uni, covered[0], covered[covered.length - 1])
   log(
     `구간 ${years[0]}~${years[years.length - 1]} (${years.length}년) · 전·후반 분할 ${KRXPIT_HALF} · ` +
       `벤치 ${BENCH}(KODEX 200) · 비용 수수료 ${COST.feePct}% · 거래세 ${COST.taxPct}% · 슬리피지 ${COST.slippagePct}%`,
@@ -5899,7 +6372,8 @@ async function krxcal() {
   const codes = [...new Set<string>(krxPitUnion(uni, 40, years))].sort()
   log('')
   log(`시세 로드 대상 ${codes.length}종목 (실측 40+40 합집합) — 한 번만 받아 두 유니버스가 나눠 쓴다.`)
-  const { histories, failed, bench } = await loadCodeHistories(codes)
+  const { histories, failed, bench, load } = await loadCodeHistories(codes)
+  years = krxYearGuard(years, load)
   const names = krxPitNames(uni)
   log(`시세 로드 ${Object.keys(histories).length}/${codes.length} · 실패(상폐·데이터 부족) ${failed.length}`)
   if (failed.length) {
@@ -6254,6 +6728,8 @@ export function krxscreenUniverse(cfg: {
 }): { variants: CalVariant[]; span: [string, string] | null } {
   const variants: CalVariant[] = []
   let span: [string, string] | null = null
+  // 두 폭이 같은 라벨을 쓰므로 수익률 산출물에 유니버스 꼬리표를 붙인다.
+  RETURNS.group(`실측 ${cfg.top}+${cfg.top}`)
   for (const def of krxscreenDefs(cfg.top)) {
     const r = runKrxScreenDef(def, cfg.yearly, cfg.benchEq, cfg.cost ?? COST)
     if (!span) span = r.span
@@ -6342,7 +6818,7 @@ async function krxscreen() {
       `실측 랭킹이 ${KRXPIT_FROM}~${KRXPIT_TO} 중 ${covered.length}년뿐이다 — EC2 MODE=pityear를 다시 실행하라.`,
     )
   }
-  const years = krxPitSpan(uni, covered[0], covered[covered.length - 1])
+  let years = krxPitSpan(uni, covered[0], covered[covered.length - 1])
   log(
     `구간 ${years[0]}~${years[years.length - 1]} (${years.length}년) · 전·후반 분할 ${KRXPIT_HALF} · ` +
       `벤치 ${BENCH}(KODEX 200) · 비용 수수료 ${COST.feePct}% · 거래세 ${COST.taxPct}% · 슬리피지 ${COST.slippagePct}%`,
@@ -6389,7 +6865,8 @@ async function krxscreen() {
   const codes = [...new Set<string>(krxPitUnion(uni, 40, years))].sort()
   log('')
   log(`시세 로드 대상 ${codes.length}종목 (실측 40+40 합집합) — 한 번만 받아 두 유니버스가 나눠 쓴다.`)
-  const { histories, failed, bench } = await loadCodeHistories(codes)
+  const { histories, failed, bench, load } = await loadCodeHistories(codes)
+  years = krxYearGuard(years, load)
   const names = krxPitNames(uni)
   log(`시세 로드 ${Object.keys(histories).length}/${codes.length} · 실패(상폐·데이터 부족) ${failed.length}`)
   if (failed.length) {
@@ -6554,6 +7031,22 @@ const MODES: Record<string, () => Promise<void>> = {
   krxscreen,
 }
 
+/**
+ * 모드 실행 껍데기 — **모든 MODE 출력의 머리말**에 시세 소스를 찍고(어떤 소스로 구운
+ * 숫자인지 표에서 즉시 보여야 한다), 끝나면 변형별 수익률 계열을 파일로 남긴다.
+ * 여기 한 곳에 두었으므로 새 MODE를 추가해도 머리말·산출물이 빠질 수 없다.
+ */
+export async function runMode(mode: string, entry: () => Promise<void>): Promise<void> {
+  const source = ideaPriceSource()
+  log(priceSourceHeadline(source, source === 'krx' ? await krxSpanLabel() : null))
+  log(`⚠️ ${MIXED_SOURCE_NOTE}`)
+  log('')
+  RETURNS.begin(mode, source)
+  await entry()
+  // 실패하면 여기까지 오지 않는다 — 반쪽 산출물을 남기지 않기 위해서다(예외는 그대로 위로).
+  RETURNS.write(repoRoot())
+}
+
 // 런처(scripts/idea-lab.mjs)만 IDEA_LAB_RUN=1을 넘긴다. 테스트가 이 모듈을
 // import할 때는 자동 실행되지 않는다.
 if (process.env.IDEA_LAB_RUN === '1') {
@@ -6563,7 +7056,7 @@ if (process.env.IDEA_LAB_RUN === '1') {
     console.error(`알 수 없는 MODE=${mode} — 가능: ${Object.keys(MODES).join(', ')}`)
     process.exit(1)
   }
-  entry().catch((e) => {
+  runMode(mode, entry).catch((e) => {
     console.error('실행 실패:', e)
     process.exit(1)
   })
