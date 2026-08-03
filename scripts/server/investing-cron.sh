@@ -47,11 +47,21 @@ case "${1:-}" in
     MSG="data: 모의운용 일일 갱신 (EC2 cron)"
     ;;
   daily-intraday)
-    nice -n 10 "${DOPPLER[@]}" node scripts/kiwoom-backfill.mjs --daily
-    # 검증 게이트 — FAIL이면 종료 코드 1 → set -e로 여기서 중단되어 오염 데이터가 커밋되지 않는다
-    nice -n 10 "${DOPPLER[@]}" node scripts/verify-intraday.mjs
+    # 수집기가 전량 실패(앱키·IP·서버 점검)하면 스스로 exit 1 한다 → pipefail+set -e로 여기서 멈춘다.
+    RUNLOG="$(mktemp)"
+    nice -n 10 "${DOPPLER[@]}" node scripts/kiwoom-backfill.mjs --daily | tee "$RUNLOG"
+    # 검증 범위를 **이번에 갱신된 종목**으로 좁힌다. 전체를 검증하면 관련 없는 종목 파일 하나가
+    # FAIL일 때 set -e가 커밋·푸시까지 막아, 매일 수집이 조용히 얼어붙는다(알림 경로가 없다).
+    SYMS="$(sed -n 's/^UPDATED_SYMBOLS=//p' "$RUNLOG" | tail -1)"
+    rm -f "$RUNLOG"
+    if [ -z "$SYMS" ]; then
+      echo "[daily-intraday] 갱신된 종목 없음(휴장일 등) — 검증·커밋 생략"
+      exit 0
+    fi
+    # 검증 게이트 — FAIL이면 종료 코드 1 → set -e로 중단되어 오염 데이터가 커밋되지 않는다
+    nice -n 10 "${DOPPLER[@]}" node scripts/verify-intraday.mjs --symbols="$SYMS"
     COMMIT_PATHS="public/data/intraday"
-    MSG="data: 키움 5분봉 일일 증분 (EC2 cron, 3층 검증 통과)"
+    MSG="data: 키움 5분봉 일일 증분 (EC2 cron, 갱신분 3층 검증 통과)"
     ;;
   weekly-backfill)
     nice -n 10 "${DOPPLER[@]}" node scripts/kiwoom-backfill.mjs

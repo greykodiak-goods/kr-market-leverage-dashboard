@@ -217,6 +217,10 @@ const covBySym = new Map() // 이번 회차에 갱신된 종목의 커버리지 
 const gapRisk = [] // 증분 소급 한도 밖으로 뒤처져 구멍이 남는 종목
 let requestsTotal = 0
 let addedTotal = 0
+/** 이번 회차에 봉을 실제로 받은 종목 — 검증 범위·"전량 실패" 판정의 근거다. */
+const collectedSyms = []
+/** 호출이 예외로 끝난 종목(토큰 만료·IP 미등록·서버 점검) — 휴장일의 "빈 응답"과 구분한다. */
+const erroredSyms = []
 
 for (const sym of targets) {
   const code = sym.slice(0, 6)
@@ -282,9 +286,11 @@ for (const sym of targets) {
 
   if (!collected.length) {
     report.push({ sym, skipped: stop || '수집 0봉', bars: existing.length })
+    if (String(stop).startsWith('오류:')) erroredSyms.push(sym)
     if (existing.length && store?.coverage) covBySym.set(sym, store.coverage)
     continue
   }
+  collectedSyms.push(sym)
 
   // 정렬·대조 (기존 저장분 기준 — 2026-08-03 이전 구간은 Yahoo로 받은 봉일 수 있다)
   const { offset, basis } = detectOffset(collected, existing)
@@ -412,7 +418,28 @@ function writeIndex() {
   console.log(`index.json 갱신: ${Object.keys(symbols).length}종목 (순서 = ${RANKING_RUN ? '오늘 랭킹' : '직전 인덱스 순서 보존'})`)
 }
 
+// ---- 전량 실패 게이트 (2026-08-03) -------------------------------------------
+//
+// 구 Yahoo 수집기(fetch-intraday.mjs)에는 `if (ok === 0) return 1` 가드가 있었는데 이관되지
+// 않았다. 그 상태로는 앱키 만료·IP 등록 해제·서버 점검으로 **전 종목이 실패해도** 종목별
+// catch가 오류를 삼키고, index.json만 오늘 날짜로 다시 쓰인 뒤 크론이 "3층 검증 통과"로
+// 커밋한다 — 초록 커밋이 매일 쌓이는데 실제 데이터는 사고 당일에 멈춰 있고 아무도 모른다.
+// 그래서 **하나도 못 받았고 오류가 하나라도 있으면** 인덱스를 건드리지 않고 실패로 끝낸다.
+// (전 종목이 '빈 응답'이면 휴장일이므로 정상 종료다 — 오류 유무로 구분한다.)
+if (!collectedSyms.length && erroredSyms.length) {
+  console.error('')
+  console.error(`⛔ 전량 실패 — ${erroredSyms.length}종목이 오류로 끝났고 받은 봉이 0개다.`)
+  console.error(`   예: ${erroredSyms.slice(0, 5).join(', ')}${erroredSyms.length > 5 ? ' …' : ''}`)
+  console.error('   원인 후보: 앱키 만료 · EC2 IP 등록 해제 · 키움 서버 점검 · Doppler 시크릿 변경.')
+  console.error('   index.json을 갱신하지 않고 종료한다(가짜 최신 표기 방지). 커밋도 일어나지 않는다.')
+  process.exit(1)
+}
+
 if (!DRY_RUN) writeIndex()
+
+// 크론이 검증 범위를 이번에 건드린 종목으로 좁히는 데 쓴다 — 관련 없는 종목 파일 하나가
+// FAIL이라고 80종목 전체의 커밋·푸시가 무기한 막히는 것을 방지한다(파싱용 고정 형식).
+console.log(`UPDATED_SYMBOLS=${collectedSyms.join(',')}`)
 
 // ---- 최종 보고 ---------------------------------------------------------------
 console.log('')
