@@ -122,7 +122,7 @@ export function buildSpec(modelId: string, cfg: ModelConfig): ModelSpec {
     engine,
     universe: [...cfg.symbols].sort(),
     dataRange: cfg.range,
-    simStartDate: cfg.startDate || '(데이터 중간지점 자동)',
+    simStartDate: cfg.startDate || '(워밍업 직후부터 전 구간 자동)',
     costs: {
       initialCapital: cfg.settings.initialCapital,
       positionPct: cfg.settings.positionPct,

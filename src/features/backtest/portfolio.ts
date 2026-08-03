@@ -20,8 +20,17 @@ import { modelMeta, type ModelConfig } from './models'
 
 export const MIN_WARMUP = 120 // 지표 warm-up용 최소 과거 봉 수
 
+/**
+ * 시뮬레이션 시작 봉 인덱스.
+ *
+ * 2026-08-03 변경 — 시작일을 비웠을 때 **데이터 중간 지점**부터 돌던 것을 **워밍업 직후**로 바꿨다.
+ * 중간 지점 기본값은 받아온 이력의 절반을 통째로 버려서, 10년을 불러도 5년만 시뮬레이션됐다
+ * (대표 관측: "무한매수법 시뮬레이션에서 5년밖에 데이터가 안 되네"). 워밍업(120봉)은 지표 창을
+ * 채우는 데만 쓰이므로, 그 뒤 전 구간을 도는 것이 데이터를 정직하게 다 쓰는 것이다.
+ * 특정 구간만 보고 싶으면 시작일을 명시하면 된다(그 경로는 그대로다).
+ */
 export function computeStartIdx(bars: { date: string }[], startDate: string): number {
-  if (!startDate) return Math.max(MIN_WARMUP, Math.floor(bars.length / 2))
+  if (!startDate) return MIN_WARMUP
   const i = bars.findIndex((b) => b.date >= startDate)
   if (i < 0) return Math.max(MIN_WARMUP, bars.length - 2)
   return Math.max(MIN_WARMUP, i)

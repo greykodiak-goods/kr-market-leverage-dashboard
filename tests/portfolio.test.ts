@@ -88,7 +88,10 @@ check('벤치 초과 1/3', advY.yearsBeatBench === '1/3', advY.yearsBeatBench)
 
 // 7) startIdx: 시작일 지정/미지정
 const bars = hists.A.bars
-check('startIdx 미지정 = 중간', computeStartIdx(bars, '') === Math.max(120, Math.floor(bars.length / 2)))
+// 2026-08-03: 미지정 기본값이 "데이터 중간 지점"에서 **워밍업 직후**로 바뀌었다.
+// 중간 기본값은 받아온 이력의 절반을 버려 10년을 불러도 5년만 돌게 만들었다.
+check('startIdx 미지정 = 워밍업 직후(전 구간 사용)', computeStartIdx(bars, '') === 120)
+check('startIdx 미지정은 데이터 절반을 버리지 않는다', computeStartIdx(bars, '') < Math.floor(bars.length / 2))
 const target = bars[500].date
 check('startIdx 날짜 지정', computeStartIdx(bars, target) === 500)
 check('startIdx 워밍업 하한 적용', computeStartIdx(bars, bars[10].date) === 120)

@@ -158,7 +158,7 @@ export function modelMeta(id: string): ModelMeta {
 export interface ModelConfig {
   symbols: string[] // 유니버스 — 자본을 종목 수만큼 균등 분할(슬리브)해 각 종목 독립 운용
   range: HistoryRange
-  startDate: string // '' = 데이터 중간 지점
+  startDate: string // '' = 워밍업(120봉) 직후부터 전 구간 (2026-08-03 이전엔 데이터 중간 지점이었다)
   settings: SimSettings
   strategy?: StrategyConfig // 규칙형만
   ib?: InfiniteBuyingParams
@@ -171,7 +171,9 @@ export interface ModelConfig {
 export function defaultConfig(modelId: string): ModelConfig {
   const meta = modelMeta(modelId)
   const settings: SimSettings = { ...DEFAULT_SETTINGS, ...(meta.defaultTaxZero ? { sellTaxPct: 0 } : {}) }
-  const base: ModelConfig = { symbols: [...meta.defaultSymbols], range: '10y', startDate: '', settings }
+  // 기본 범위는 **전체(2000~)** 다. 10년 기본은 시작일 미지정과 겹쳐 실제 시뮬 구간을 5년으로
+  // 줄였다(2026-08-03 대표 관측). 구간을 짧게 보고 싶으면 화면에서 5년/10년을 고르면 된다.
+  const base: ModelConfig = { symbols: [...meta.defaultSymbols], range: 'max', startDate: '', settings }
   if (modelId === 'infinite-buying') return { ...base, ib: { ...DEFAULT_IB_PARAMS } }
   if (modelId === 'value-rebalancing') return { ...base, vr: { ...DEFAULT_VR_PARAMS } }
   if (meta.type === 'rotation') return { ...base, rot: { ...(meta.rotation ?? DEFAULT_ROTATION) } }

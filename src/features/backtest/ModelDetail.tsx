@@ -196,12 +196,12 @@ export function ModelDetail({
           <select value={cfg.range} onChange={(e) => onPatch({ range: e.target.value as ModelConfig['range'] })}>
             <option value="5y">5년</option>
             <option value="10y">10년</option>
-            <option value="max">전체</option>
+            <option value="max">전체 (2000년~ · 종목 상장일이 늦으면 그 이후)</option>
           </select>
         </label>
         <label>
           시뮬레이션 시작일
-          <InfoTip text="이 날짜 이전 데이터는 지표 계산용 과거로만 쓰이고, 이후 구간을 하루씩 전진하며 그 시점까지의 정보만으로 판단합니다. 비우면 각 종목 데이터의 중간 지점부터 시작합니다." />
+          <InfoTip text="이 날짜 이전 데이터는 지표 계산용 과거로만 쓰이고, 이후 구간을 하루씩 전진하며 그 시점까지의 정보만으로 판단합니다. 비우면 워밍업(120봉) 직후부터 데이터 끝까지 전 구간을 돌립니다 — 2026-08-03 이전에는 '데이터 중간 지점'부터라 받아온 이력의 절반만 시뮬레이션됐습니다(10년을 불러도 5년만 실행)." />
           <input type="date" value={cfg.startDate} onChange={(e) => onPatch({ startDate: e.target.value })} />
         </label>
       </div>
