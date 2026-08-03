@@ -320,6 +320,11 @@ async function main() {
     const yh = priceSourceHeadline('yahoo')
     check('yahoo 머리말에 총수익 표기', yh.startsWith('시세 소스: yahoo') && yh.includes('총수익'), yh)
     check('혼합 소스 경고가 벤치·참고선을 지목한다', MIXED_SOURCE_NOTE.includes('Yahoo') && MIXED_SOURCE_NOTE.includes('KODEX 200'), MIXED_SOURCE_NOTE)
+    // 40차에서 배당 비대칭을 제거했다. 문구가 옛것으로 남으면 **없는 편향을 있다고** 말하게 되고
+    // 읽는 사람이 알파를 약 2%p 깎아서 읽는다 — 규칙 3은 없는 편향을 적으라는 것이 아니다.
+    check('편향이 제거됐음을 말한다', MIXED_SOURCE_NOTE.includes('편향은 없습니다'), MIXED_SOURCE_NOTE)
+    check('깎아 읽지 말라고 못 박는다', MIXED_SOURCE_NOTE.includes('깎아 읽지 마'), MIXED_SOURCE_NOTE)
+    check('남은 혼재(슬리브)를 지목한다', MIXED_SOURCE_NOTE.includes('슬리브'), MIXED_SOURCE_NOTE)
     eq('기본 소스는 krx', ideaPriceSource({}), 'krx')
     eq('PRICE_SOURCE=yahoo로 옛 회차 재현', ideaPriceSource({ PRICE_SOURCE: 'yahoo' }), 'yahoo')
     eq('모르는 값은 기본값으로 좁힌다', ideaPriceSource({ PRICE_SOURCE: 'naver' }), 'krx')

@@ -89,8 +89,9 @@
 //     PRICE_SOURCE=krx   MODE=krxcal node scripts/idea-lab.mjs   (기본)
 //     PRICE_SOURCE=yahoo MODE=krxcal node scripts/idea-lab.mjs   (옛 회차 재현)
 //   ⚠️ 벤치(KODEX 200)·참고선(QQQ·QLD·금·환율)·미장 유니버스는 KRX Open API 밖이라 **계속 야후**다.
-//      야후=총수익(배당 재투자) / KRX=가격수익(배당 미반영)이라 **알파는 전략에 불리한 쪽으로**
-//      편향된다 — 매 실행 머리말의 `MIXED_SOURCE_NOTE`가 그 사실을 찍는다.
+//      다만 **알파를 재는 벤치와 QQQ 벽은 전략과 같은 기준(가격수익)으로 받는다**(2026-08-03 40차,
+//      `COMPARE_BASIS`) — 예전에 있던 "알파가 배당만큼 전략에 불리하다"는 편향은 제거됐다.
+//      남은 혼재는 **자산 슬리브(TLT·금)가 여전히 총수익**이라는 점뿐이다(보유 자산이라 안 맞췄다).
 //
 // ── 변형별 일간 수익률 산출물 ────────────────────────────────────────────────
 //   실행하면 변형마다 일간 수익률 계열을 모아 `artifacts/returns/idea-<mode>.json`에 남긴다.
