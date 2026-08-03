@@ -17,7 +17,7 @@ import { timeAxisTicks, timeTickFormatter, toTs, tsLong } from '../../components
  * 두 번째(참고용) 벤치마크를 얹을 수 있는 자산곡선 행.
  * `benchmark2`가 하나라도 들어오면 구분되는 점선으로 함께 그린다 — 없으면 예전과 완전히 같다.
  */
-export type EquityRow = EquityPoint & { benchmark2?: number | null }
+export type EquityRow = EquityPoint & { benchmark2?: number | null; benchmark3?: number | null }
 
 function fmtMoney(v: number): string {
   if (Math.abs(v) >= 1e8) return `${(v / 1e8).toFixed(1)}억`
@@ -29,17 +29,21 @@ export function EquityChart({
   equity,
   benchmarkLabel = '벤치마크',
   benchmark2Label,
+  benchmark3Label,
 }: {
   equity: EquityRow[]
   benchmarkLabel?: string
   /** 참고용 2번째 벤치 이름. 값(benchmark2)이 하나도 없으면 그리지 않는다. */
   benchmark2Label?: string
+  /** 참고용 3번째 벤치 이름(예: QLD 2배 레버리지). 값(benchmark3)이 하나도 없으면 그리지 않는다. */
+  benchmark3Label?: string
 }) {
   const dates = equity.map((e) => e.date)
   const rows = equity.map((e) => ({ ...e, ts: toTs(e.date) }))
   const ticks = timeAxisTicks(dates)
   const fmt = timeTickFormatter(dates)
   const hasBench2 = benchmark2Label != null && equity.some((e) => e.benchmark2 != null)
+  const hasBench3 = benchmark3Label != null && equity.some((e) => e.benchmark3 != null)
 
   const EqTooltip = ({ active, payload, label }: any) => {
     if (!active || !payload?.length) return null
@@ -57,6 +61,11 @@ export function EquityChart({
           {hasBench2 && p.benchmark2 != null && (
             <div>
               {benchmark2Label}: <strong>{Math.round(p.benchmark2).toLocaleString()}</strong>
+            </div>
+          )}
+          {hasBench3 && p.benchmark3 != null && (
+            <div>
+              {benchmark3Label}: <strong>{Math.round(p.benchmark3).toLocaleString()}</strong>
             </div>
           )}
           <div>
@@ -89,6 +98,18 @@ export function EquityChart({
               connectNulls
             />
           )}
+          {hasBench3 && (
+            <Line
+              type="monotone"
+              dataKey="benchmark3"
+              name={benchmark3Label}
+              stroke="var(--danger)"
+              strokeWidth={1.1}
+              strokeDasharray="1 5"
+              dot={false}
+              connectNulls
+            />
+          )}
           <Line type="monotone" dataKey="equity" name="전략" stroke="var(--accent)" strokeWidth={1.8} dot={false} />
         </ComposedChart>
       </ResponsiveContainer>
@@ -98,6 +119,11 @@ export function EquityChart({
         {hasBench2 && (
           <span>
             <i className="bt-swatch dashed" style={{ borderColor: 'var(--kosdaq)' }} /> 참고 — {benchmark2Label}
+          </span>
+        )}
+        {hasBench3 && (
+          <span>
+            <i className="bt-swatch dashed" style={{ borderColor: 'var(--danger)' }} /> 참고 — {benchmark3Label}
           </span>
         )}
       </div>

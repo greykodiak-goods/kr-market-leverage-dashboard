@@ -19,7 +19,7 @@
 //   프리셋을 전부 제거**하고, 유니버스는 항상 "그 해 연초 상위 10+10 [추정]" 하나다
 //   (목록 pitUniverse.ts · 연쇄 실행 pitChain.ts — 헤드리스 러너와 같은 코드).
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { BACKTEST_HISTORY_RANGE, KR_LOAD_NOTE, getDailyHistory, loadKrDual } from '../../lib/history'
 import type { DailyBar } from './types'
 import { EXIT_LABELS, type CostSettings } from './conditionScreen'
@@ -121,6 +121,11 @@ const QQQ_SYMBOL = 'QQQ'
 // USD/KRW 일봉 종가(결측일은 직전값 이월)는 참고 벤치(QQQ)와 금 슬리브가 **같은 심볼**을 쓴다 —
 // presets.ts의 FX_SYMBOL 하나만 정본으로 두고 여기서 다시 정의하지 않는다.
 const QQQ_LABEL = 'QQQ(원화 환산)'
+// QLD(나스닥100 **일일 2배 레버리지**) 참고 벤치 — 2026-08-03 대표 지시. ⚠️ 규칙 4:
+// 레버리지 ETF는 변동성 잠식(횡보장에서 2배 일일 복리가 원금을 갉음)·극단 낙폭(2008 −8x%,
+// 2022 −6x%)이 구조적이며, 운용사 스스로 장기 보유 상품이 아니라고 고지한다. 판정 미반영.
+const QLD_SYMBOL = 'QLD'
+const QLD_LABEL = 'QLD(원화 환산 · 2배 레버리지)'
 
 /** 유니버스는 하나뿐이다 — 시세는 전 연도 합집합을 한 번만 받아 모든 해가 나눠 쓴다. */
 const UNIVERSE_LABEL = `연도별 그 해 시총 상위 10+10 [추정] · ${PIT_YEARS[0]}~${PIT_YEARS[PIT_YEARS.length - 1]} · 고유 ${PIT_UNION.length}종목`
@@ -846,6 +851,8 @@ export function SpecSimulator() {
   const [benchSpan, setBenchSpan] = useState<{ start: string; end: string } | null>(null)
   /** 참고 벤치 — QQQ 원화 환산 곡선. 로드 실패면 null이고 화면은 「—」로 둔다(실행은 계속). */
   const [qqqKrw, setQqqKrw] = useState<FxPoint[] | null>(null)
+  /** 참고 벤치 — QLD(2배 레버리지) 원화 환산 곡선. 규칙 4 경고와 함께 참고로만 그린다. */
+  const [qldKrw, setQldKrw] = useState<FxPoint[] | null>(null)
   /** 이 결과를 만들 때 쓴 초기자본 — 실행 후 입력을 바꿔도 참고곡선 정규화가 흔들리지 않게 붙잡아 둔다 */
   const [runCapital, setRunCapital] = useState<number | null>(null)
   /** 결합 모드에서 두 슬리브를 **단독으로** 돌린 성적 — 결합 곡선에 없는 매매수·승률이 여기 있다 */
@@ -1049,7 +1056,7 @@ export function SpecSimulator() {
 
       // 참고 벤치(QQQ 원화 환산) — **실패해도 백테스트를 막지 않는다**. 참고 표시일 뿐이라
       // 이것 때문에 실행이 중단되면 배보다 배꼽이 크다. 실패 시 QQQ 행만 「—」로 남는다.
-      setProgress('참고 벤치(QQQ·USD/KRW) 로딩…')
+      setProgress('참고 벤치(QQQ·QLD·USD/KRW) 로딩…')
       try {
         const [q, fx] = await Promise.all([getDailyHistory(QQQ_SYMBOL, 'max'), getDailyHistory(FX_SYMBOL, 'max')])
         const curve = toKrwCurve(q.bars, fx.bars)
@@ -1058,9 +1065,19 @@ export function SpecSimulator() {
           setQqqKrw(null)
           addNote('⚠️ 참고 벤치(QQQ 원화 환산) 데이터가 부족합니다 — QQQ 비교만 「—」로 두고 백테스트는 그대로 진행합니다.')
         }
+        // QLD(2배 레버리지)도 같은 환율 곡선으로 환산 — 실패해도 QLD 행만 「—」
+        try {
+          const ql = await getDailyHistory(QLD_SYMBOL, 'max')
+          const qlCurve = toKrwCurve(ql.bars, fx.bars)
+          setQldKrw(qlCurve.length >= 2 ? qlCurve : null)
+        } catch {
+          setQldKrw(null)
+          addNote('⚠️ 참고 벤치(QLD 원화 환산) 로드 실패 — QLD 비교만 「—」로 두고 백테스트는 그대로 진행합니다.')
+        }
       } catch {
         setQqqKrw(null)
-        addNote('⚠️ 참고 벤치(QQQ·USD/KRW) 로드 실패 — QQQ 비교만 「—」로 두고 백테스트는 그대로 진행합니다.')
+        setQldKrw(null)
+        addNote('⚠️ 참고 벤치(QQQ·USD/KRW) 로드 실패 — QQQ·QLD 비교만 「—」로 두고 백테스트는 그대로 진행합니다.')
       }
 
       setProgress('연도별 유니버스 연쇄 백테스트 실행…')
@@ -1237,40 +1254,54 @@ export function SpecSimulator() {
    * 환율(KRW=X)이 실행 구간보다 늦게 시작하면 그 이전은 비울 수밖에 없으므로,
    * 실제로 덮은 구간(from~to)을 그대로 표시해 비교 구간이 다르다는 사실을 숨기지 않는다.
    */
-  const qqqRef = useMemo(() => {
-    if (!result || !qqqKrw?.length || result.equity.length === 0) return null
-    const cap = runCapital ?? cost.initialCapital
-    let i = 0
-    let last: number | null = null
-    let base: number | null = null
-    let from = ''
-    let to = ''
-    const byDate = new Map<string, number>()
-    for (const p of result.equity) {
-      while (i < qqqKrw.length && qqqKrw[i].date <= p.date) {
-        last = qqqKrw[i].krw
-        i++
+  const refCurveOf = useCallback(
+    (krw: FxPoint[] | null) => {
+      if (!result || !krw?.length || result.equity.length === 0) return null
+      const cap = runCapital ?? cost.initialCapital
+      let i = 0
+      let last: number | null = null
+      let base: number | null = null
+      let from = ''
+      let to = ''
+      let peak = 0
+      let mdd = 0
+      const byDate = new Map<string, number>()
+      for (const p of result.equity) {
+        while (i < krw.length && krw[i].date <= p.date) {
+          last = krw[i].krw
+          i++
+        }
+        if (last == null) continue // 환율·기초자산이 아직 시작되지 않은 앞 구간 — 임의로 채우지 않는다
+        if (base == null) {
+          base = last
+          from = p.date
+        }
+        to = p.date
+        const v = (last / base) * cap
+        peak = Math.max(peak, v)
+        if (peak > 0) mdd = Math.min(mdd, (v / peak - 1) * 100)
+        byDate.set(p.date, v)
       }
-      if (last == null) continue // 환율·QQQ가 아직 시작되지 않은 앞 구간 — 임의로 채우지 않는다
-      if (base == null) {
-        base = last
-        from = p.date
-      }
-      to = p.date
-      byDate.set(p.date, (last / base) * cap)
-    }
-    if (base == null || byDate.size < 2) return null
-    const ratio = (byDate.get(to) as number) / cap
-    return { byDate, totalPct: (ratio - 1) * 100, cagrPct: annualize(ratio, yearsBetween(from, to)), from, to }
-  }, [result, qqqKrw, runCapital, cost.initialCapital])
+      if (base == null || byDate.size < 2) return null
+      const ratio = (byDate.get(to) as number) / cap
+      return { byDate, totalPct: (ratio - 1) * 100, cagrPct: annualize(ratio, yearsBetween(from, to)), mddPct: mdd, from, to }
+    },
+    [result, runCapital, cost.initialCapital],
+  )
+  const qqqRef = useMemo(() => refCurveOf(qqqKrw), [refCurveOf, qqqKrw])
+  const qldRef = useMemo(() => refCurveOf(qldKrw), [refCurveOf, qldKrw])
 
   // 벤치마크(KODEX 200)는 연쇄 실행기가 같은 연말 경계로 이어붙여 이미 넣어 준다 —
   // 여기서 다시 겹치지 않는다. QQQ만 참고 라인으로 얹는다.
   const chartEquity: EquityRow[] | null = useMemo(() => {
     if (!result || result.equity.length === 0) return null
-    if (!qqqRef) return result.equity
-    return result.equity.map((p) => ({ ...p, benchmark2: qqqRef.byDate.get(p.date) ?? null }))
-  }, [result, qqqRef])
+    if (!qqqRef && !qldRef) return result.equity
+    return result.equity.map((p) => ({
+      ...p,
+      benchmark2: qqqRef?.byDate.get(p.date) ?? null,
+      benchmark3: qldRef?.byDate.get(p.date) ?? null,
+    }))
+  }, [result, qqqRef, qldRef])
 
   const summary = useMemo(() => {
     if (!result || result.equity.length === 0) return null
@@ -2089,6 +2120,7 @@ export function SpecSimulator() {
                   <th>벤치마크</th>
                   <th>총 수익률</th>
                   <th>연환산</th>
+                  <th>MDD</th>
                   <th>비교 구간</th>
                   <th>역할</th>
                 </tr>
@@ -2098,6 +2130,7 @@ export function SpecSimulator() {
                   <td>KODEX 200</td>
                   <td>{summary.benchTotalPct != null ? fmtPctGrouped(summary.benchTotalPct) : '—'}</td>
                   <td>{summary.benchCagrPct != null ? fmtPct(summary.benchCagrPct) : '—'}</td>
+                  <td>—</td>
                   <td>
                     {result.startDate}~{result.endDate}
                   </td>
@@ -2107,8 +2140,17 @@ export function SpecSimulator() {
                   <td>{QQQ_LABEL}</td>
                   <td>{qqqRef ? fmtPctGrouped(qqqRef.totalPct) : '—'}</td>
                   <td>{qqqRef ? fmtPct(qqqRef.cagrPct) : '—'}</td>
+                  <td>{qqqRef ? fmtPct(qqqRef.mddPct) : '—'}</td>
                   <td>{qqqRef ? `${qqqRef.from}~${qqqRef.to}` : '—'}</td>
                   <td>참고 (알파 미반영)</td>
+                </tr>
+                <tr>
+                  <td>{QLD_LABEL}</td>
+                  <td>{qldRef ? fmtPctGrouped(qldRef.totalPct) : '—'}</td>
+                  <td>{qldRef ? fmtPct(qldRef.cagrPct) : '—'}</td>
+                  <td>{qldRef ? <strong>{fmtPct(qldRef.mddPct)}</strong> : '—'}</td>
+                  <td>{qldRef ? `${qldRef.from}~${qldRef.to}` : '—'}</td>
+                  <td>참고 (⚠️ 일일 2배 레버리지)</td>
                 </tr>
               </tbody>
             </table>
@@ -2131,6 +2173,16 @@ export function SpecSimulator() {
                 자체에는 영향이 없습니다.
               </div>
             )}
+            {qldRef && (
+              <div className="bt-warn">
+                ⚠️ <strong>QLD는 나스닥100의 일일 수익률을 2배로 추적하는 레버리지 ETF입니다(규칙 4 경고).</strong>{' '}
+                횡보장에서는 2배 일일 복리가 원금을 갉아먹고(변동성 잠식), 낙폭은 극단적입니다 — 위 MDD 열이 실제로
+                견뎌야 했던 하락이며, 2008년급 위기가 오면 −80% 이상도 가능합니다. QLD가 2000~2002년(닷컴 붕괴)에
+                존재했다면 −95% 이상을 겪었을 것으로 추정되나 상장(2006년) 전이라 이 비교 구간에는 그 시기가
+                없습니다 — 표의 수익률은 <strong>강세장 표본에서 살아남은 성적</strong>입니다. 운용사 스스로 장기 보유
+                상품이 아니라고 고지합니다. 환헤지·거래비용·배당세 미반영이며 매수 권유가 아닙니다.
+              </div>
+            )}
           </div>
 
           {benchGap && (
@@ -2146,6 +2198,7 @@ export function SpecSimulator() {
               equity={chartEquity}
               benchmarkLabel="KODEX 200 단순보유"
               benchmark2Label={qqqRef ? QQQ_LABEL : undefined}
+              benchmark3Label={qldRef ? QLD_LABEL : undefined}
             />
           )}
 
