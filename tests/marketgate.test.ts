@@ -10,26 +10,31 @@
 // 검증 항목
 //   1) 동형 — `spliceRegimeCurve` · `regimeMom12_1` · `makeMonthGateMask`(≡ idea-lab
 //      `makeRegimeExposure(_, 'mom12_1')`) · `toKrwCurve` · `blend3Curves`가 정본과 완전 일치
-//   2) 게이트 산술 — 닫힌 달의 수익률이 정확히 0이고(값 보존), 열린 달은 손도 대지 않는다
+//   2) 게이트 마스크 산술 — 닫는 달을 정확히 고르고, 판정 불가 구간은 **열어 둔다**
 //   3) 절단 불변성 — 레짐·슬리브·금 곡선 뒷부분을 잘라내도 잘린 시점 이전이 **완전히 동일**
 //      (게이트 판정 창이 미래를 안 본다는 뜻. 한 점이라도 달라지면 어딘가에서 뒤를 봤다)
 //   4) 환율 이월 — 결측일은 **직전** 환율이며, 뒤쪽 환율을 아무리 흔들어도 앞쪽 원화 값이
 //      흔들리지 않는다(다음 환율을 당겨오면 그 자체가 미래참조다)
 //   5) 2단 blend ≡ 3자 동시 결합 — `(A|B)|G` 가 `wA(1−g) : wB(1−g) : g` 와 같은 곡선인가
-//   6) 옵션 꺼짐 ≡ 기존 결합 — 게이트·금이 없으면 `blendChainResults` 한 번과 **비트까지 동일**
+//   6) 금 꺼짐 ≡ 기존 결합 — 금이 없으면 `blendChainResults` 한 번과 **비트까지 동일**
 //      (기존 프리셋 combo-50 · combo-25-75의 수치가 한 자리도 바뀌지 않는다는 보장)
+//
+// ⚠️ **게이트가 성적에 반영되는 산술 자체**는 여기가 아니라 `tests/xsmomchain.test.ts` §1-b가
+//    집행한다 — 게이트는 곡선 후처리가 아니라 모멘텀 시뮬 안의 노출 훅이기 때문이다.
+//    이 파일은 "어느 달을 닫을지"(마스크)와 "결합·환산·구간"만 본다.
 //
 // 네트워크를 타지 않는다. 합성 시계열만 쓴다.
 
 import { check, close, eq, finish, rng, section } from './harness'
 import { blend3Curves, blendChainResults, blendCurves } from '../src/features/backtest/comboBlend'
 import {
-  applyMonthGate,
-  composeGatedCombo,
+  composeCombo,
   curveAsChain,
+  makeMarketGateExposure,
   makeMonthGateMask,
   regimeMom12_1,
   spliceRegimeCurve,
+  summarizeGate,
   toKrwCurve,
   valueBefore,
   type Curve,
@@ -179,44 +184,61 @@ section('1) 동형 — 이식한 함수들이 정본(idea-lab)과 완전히 같�
 }
 
 // ============================================================================
-section('2) 게이트 산술 — 닫힌 달은 수익률 0, 열린 달은 손대지 않는다')
+section('2) 게이트 마스크 산술 — 어느 달을 닫는가 · 판정 불가는 열어 둔다')
 // ============================================================================
+//
+// ⚠️ 게이트가 성적에 반영되는 산술(청산 비용·재매수)은 `tests/xsmomchain.test.ts` §1-b가
+//    본다. 여기서는 마스크가 **고르는 달**만 검사한다.
 
 {
-  //  1월: 열림 · 2월: 닫힘 · 3월: 열림
-  const curve: Curve = [
-    { date: '2020-01-02', equity: 100 },
-    { date: '2020-01-03', equity: 110 },
-    { date: '2020-02-03', equity: 132 }, // 달이 바뀌는 첫날 — 이 수익률도 2월 것이다
-    { date: '2020-02-04', equity: 66 },
-    { date: '2020-03-02', equity: 132 },
-    { date: '2020-03-03', equity: 198 },
-  ]
-  const gateOf = (date: string) => (date.slice(0, 7) === '2020-02' ? 0 : 1) as 0 | 1
-  const out = applyMonthGate(curve, gateOf)
+  // 손계산이 되는 레짐 곡선을 만든다: 2019년 내내 상승 → 2020-01 판정은 열림.
+  // 그 뒤 급락시켜 12-1이 음수가 되는 달을 만든다.
+  const curve: Curve = []
+  {
+    let v = 100
+    for (const [from, to, step] of [
+      ['2018-01-01', '2019-12-31', 1.002],
+      ['2020-01-01', '2020-12-31', 0.97],
+    ] as const) {
+      for (const d of tradingDates(from, to)) {
+        v *= step
+        curve.push({ date: d, equity: v })
+      }
+    }
+  }
+  const gateOf = makeMonthGateMask(curve)
 
-  eq('길이 보존', out.curve.length, 6)
-  close('시작값 그대로', out.curve[0].equity, 100, 1e-12)
-  close('열린 달은 그대로 (+10%)', out.curve[1].equity, 110, 1e-12)
-  close('닫힌 달 첫날 = 수익률 0', out.curve[2].equity, 110, 1e-12)
-  close('닫힌 달 둘째날도 수익률 0 (−50%가 지워진다)', out.curve[3].equity, 110, 1e-12)
-  // 3월 첫날 수익률은 원곡선 기준 66→132 = ×2 — 게이트가 다시 열렸으니 그대로 탄다
-  close('게이트가 풀리면 원곡선 수익률이 그대로 다시 붙는다', out.curve[4].equity, 220, 1e-12)
-  close('그 다음날 ×1.5', out.curve[5].equity, 330, 1e-12)
+  // 12개월 창을 못 채우는 앞 구간은 **열림**이어야 한다(임의 현금화 금지)
+  eq('창을 못 채우는 첫 달은 열림', gateOf('2018-01-15'), 1)
+  eq('창을 못 채우는 달은 계속 열림', gateOf('2018-06-15'), 1)
+  // 2019년은 직전 12개월이 상승 구간이라 열림
+  eq('상승 구간 뒤는 열림', gateOf('2019-06-15'), 1)
+  // 2020년 하반기는 12-1 창이 급락 구간에 들어가 닫힘
+  eq('급락이 창에 들어오면 닫힘', gateOf('2020-12-15'), 0)
 
-  eq('현금으로 돌린 달 목록', out.gatedMonths.join(','), '2020-02')
-  eq('덮은 달 수', out.totalMonths, 3)
+  // 달 안 어느 날짜로 물어도 같은 값 — 판정 창이 ym만으로 결정된다는 뜻
+  for (const ym of ['2019-06', '2020-12']) {
+    const days = tradingDates(`${ym}-01`, `${ym}-28`)
+    const vals = new Set(days.map((d) => gateOf(d)))
+    eq(`[${ym}] 달 안 모든 날짜가 같은 판정`, vals.size, 1)
+  }
 
-  // 게이트가 전부 열려 있으면 곡선은 **완전히 그대로**여야 한다(값 보존 · 부동소수점까지)
-  const allOpen = applyMonthGate(curve, () => 1)
-  let same = true
-  for (let i = 0; i < curve.length; i++) if (!Object.is(allOpen.curve[i].equity, curve[i].equity)) same = false
-  check('게이트가 다 열려 있으면 곡선이 비트까지 그대로다', same)
-  eq('그 경우 현금 달 0', allOpen.gatedMonths.length, 0)
+  // 노출 함수는 마스크와 같은 값을 준다(넘기는 자리만 다르다)
+  const exposure = makeMarketGateExposure(curve)
+  let expDiff = 0
+  for (const d of tradingDates('2018-01-01', '2020-12-31')) if (exposure(d) !== gateOf(d)) expDiff++
+  eq('makeMarketGateExposure ≡ makeMonthGateMask', expDiff, 0)
 
-  // 전부 닫히면 완전 평평
-  const allShut = applyMonthGate(curve, () => 0)
-  check('게이트가 다 닫히면 곡선이 평평하다', allShut.curve.every((p) => p.equity === 100))
+  // 배지 집계 — 실제로 닫힌 달만 센다
+  const dates = tradingDates('2020-01-01', '2020-12-31')
+  const sum = summarizeGate(dates, gateOf)
+  eq('덮은 달 수', sum.totalMonths, 12)
+  check('닫힌 달이 존재한다', sum.gatedMonths.length > 0, `${sum.gatedMonths.length}달`)
+  check('닫힌 달은 전부 2020년', sum.gatedMonths.every((m) => m.startsWith('2020-')))
+  const allOpen = summarizeGate(dates, () => 1)
+  eq('전부 열리면 닫힌 달 0', allOpen.gatedMonths.length, 0)
+  const allShut = summarizeGate(dates, () => 0)
+  eq('전부 닫히면 닫힌 달 = 전체 달', allShut.gatedMonths.length, allShut.totalMonths)
 }
 
 // ============================================================================
@@ -290,20 +312,21 @@ function fakeChain(curve: Curve, benchOf: (i: number) => number): PitChainResult
   const A = fakeChain(ca, (i) => benchMul[i])
   const B = fakeChain(cb, (i) => benchMul[i])
 
-  const full = composeGatedCombo({ chainA: A, chainB: B, wA: 0.5, capital: CAP, regime, gold, goldW: 0.2 })
+  const gateOf = makeMonthGateMask(regime)
+  const full = composeCombo({ chainA: A, chainB: B, wA: 0.5, capital: CAP, gold, goldW: 0.2 })
+  const fullGate = summarizeGate(DATES, gateOf)
   check('전 구간 결합 곡선이 만들어졌다', full.result.equity.length > 500, `${full.result.equity.length}점`)
-  check('게이트가 실제로 달을 잠갔다', full.gatedMonths.length > 0, `${full.gatedMonths.length}달`)
+  check('게이트가 실제로 달을 잠갔다', fullGate.gatedMonths.length > 0, `${fullGate.gatedMonths.length}달`)
   eq('금 슬리브가 붙은 구간 시작 = GLD 시작', full.goldFrom, goldDates[0])
 
   for (const frac of [0.45, 0.8]) {
     const cutDate = full.result.equity[Math.floor(full.result.equity.length * frac)].date
     const clip = <T extends { date: string }>(xs: T[]) => xs.filter((p) => p.date <= cutDate)
-    const cut = composeGatedCombo({
+    const cut = composeCombo({
       chainA: { ...A, equity: clip(A.equity) },
       chainB: { ...B, equity: clip(B.equity) },
       wA: 0.5,
       capital: CAP,
-      regime: clip(regime),
       gold: clip(gold),
       goldW: 0.2,
     })
@@ -322,8 +345,12 @@ function fakeChain(curve: Curve, benchOf: (i: number) => number): PitChainResult
       diff >= 0 ? `${diff}번째 ${full.result.equity[diff]?.date}: ${full.result.equity[diff]?.equity} vs ${cut.result.equity[diff]?.equity}` : '',
     )
     // 게이트 판정도 잘린 구간 안에서 같아야 한다 — 뒤쪽 레짐 봉을 보고 앞 달을 잠갔다면 여기서 깨진다
-    const before = full.gatedMonths.filter((ym) => ym <= cutDate.slice(0, 7))
-    const cutBefore = cut.gatedMonths.filter((ym) => ym <= cutDate.slice(0, 7))
+    const cutGate = summarizeGate(
+      DATES.filter((d) => d <= cutDate),
+      makeMonthGateMask(clip(regime)),
+    )
+    const before = fullGate.gatedMonths.filter((ym) => ym <= cutDate.slice(0, 7))
+    const cutBefore = cutGate.gatedMonths.filter((ym) => ym <= cutDate.slice(0, 7))
     eq(`${cutDate}까지의 게이트 달 목록 불변`, cutBefore.join(','), before.join(','))
   }
 
@@ -381,7 +408,7 @@ section('5) 2단 blend — 정본 경로와 동일 · 3자 동시 결합과는 �
 //
 // 32차 1위 행의 **정본은 2단 결합**이다: idea-lab MODE=asset은
 //   E1 = blendCurves(chainA, gateChain, 0.5)  →  `E1 + GLD 20%` = blendCurves(E1, G, 0.8)
-// 로 만든다. `composeGatedCombo`가 그 두 줄과 **같은 곡선**을 내는지가 1차 검증이다.
+// 로 만든다. `composeCombo`가 그 두 줄과 **같은 곡선**을 내는지가 1차 검증이다.
 //
 // 그 위에 "2단이 3자 동시 결합과 의미론적으로 같다"는 주석의 주장도 검사한다. 다만 그 등식은
 // **월 경계에서 성립**하는 것이고, 결합 구간이 시작되는 **첫 부분월**에서는 갈린다:
@@ -404,7 +431,7 @@ section('5) 2단 blend — 정본 경로와 동일 · 3자 동시 결합과는 �
     [0.25, 0.3],
     [0.75, 0.1],
   ]) {
-    const two = composeGatedCombo({ chainA: A, chainB: B, wA, capital: CAP, gold, goldW: g }).result
+    const two = composeCombo({ chainA: A, chainB: B, wA, capital: CAP, gold, goldW: g }).result
 
     // (1) 정본 경로 — idea-lab MODE=asset의 두 줄을 그대로 재현한다
     const ref = blendCurves(blendCurves(A.equity, B.equity, wA), gold, 1 - g)
@@ -446,7 +473,7 @@ section('5) 2단 blend — 정본 경로와 동일 · 3자 동시 결합과는 �
 }
 
 // ============================================================================
-section('6) 옵션 꺼짐 ≡ 기존 결합 — 기존 프리셋 수치가 한 자리도 안 바뀐다')
+section('6) 금 꺼짐 ≡ 기존 결합 — 기존 프리셋 수치가 한 자리도 안 바뀐다')
 // ============================================================================
 
 {
@@ -457,7 +484,7 @@ section('6) 옵션 꺼짐 ≡ 기존 결합 — 기존 프리셋 수치가 한 �
   const B = fakeChain(cb, (i) => benchMul[i])
 
   for (const wA of [0.25, 0.5, 0.75]) {
-    const viaCompose = composeGatedCombo({ chainA: A, chainB: B, wA, capital: CAP }).result
+    const viaCompose = composeCombo({ chainA: A, chainB: B, wA, capital: CAP }).result
     const direct = blendChainResults(A, B, wA, CAP)
     eq(`wA=${wA} 길이 일치`, viaCompose.equity.length, direct.equity.length)
     let diff = -1
@@ -471,21 +498,15 @@ section('6) 옵션 꺼짐 ≡ 기존 결합 — 기존 프리셋 수치가 한 �
         break
       }
     }
-    check(`wA=${wA} 옵션 없는 결합이 blendChainResults와 비트까지 같다`, diff < 0, `${diff}번째`)
+    check(`wA=${wA} 금 없는 결합이 blendChainResults와 비트까지 같다`, diff < 0, `${diff}번째`)
     eq(`wA=${wA} 총수익도 동일`, viaCompose.totalPct, direct.totalPct)
     eq(`wA=${wA} MDD도 동일`, viaCompose.mddPct, direct.mddPct)
   }
 
-  // 레짐을 줘도 게이트가 한 번도 안 닫히면 결과가 같아야 한다(마스크가 값 보존이라는 뜻)
-  const alwaysUp: Curve = DATES.map((date, i) => ({ date, equity: 100 * Math.pow(1.001, i) }))
-  const openOnly = composeGatedCombo({ chainA: A, chainB: B, wA: 0.5, capital: CAP, regime: alwaysUp }).result
   const plain = blendChainResults(A, B, 0.5, CAP)
-  let same = true
-  for (let i = 0; i < plain.equity.length; i++) if (!Object.is(openOnly.equity[i].equity, plain.equity[i].equity)) same = false
-  check('한 번도 안 닫히는 게이트는 결합 곡선을 바꾸지 않는다', same)
 
   // 금 데이터가 없으면 금 비중이 0으로 내려앉고, 결과는 기존 결합 그대로다(숨기지 않는다)
-  const noGold = composeGatedCombo({ chainA: A, chainB: B, wA: 0.5, capital: CAP, gold: null, goldW: 0.2 })
+  const noGold = composeCombo({ chainA: A, chainB: B, wA: 0.5, capital: CAP, gold: null, goldW: 0.2 })
   eq('금 데이터가 없으면 적용 비중 0', noGold.goldWApplied, 0)
   eq('금 데이터가 없으면 구간도 안 잘린다', noGold.result.equity.length, plain.equity.length)
 }
@@ -526,7 +547,7 @@ section('8) 결합 곡선 위생 — 금이 붙으면 구간이 잘리고 벤치
   const A = fakeChain(ca, (i) => benchMul[i])
   const B = fakeChain(cb, (i) => benchMul[i])
 
-  const out = composeGatedCombo({ chainA: A, chainB: B, wA: 0.5, capital: CAP, gold, goldW: 0.2 }).result
+  const out = composeCombo({ chainA: A, chainB: B, wA: 0.5, capital: CAP, gold, goldW: 0.2 }).result
   eq('결합 시작 = 금 곡선 시작(겹치는 구간만 남는다)', out.startDate, goldDates[0])
   check('구간이 실제로 잘렸다', out.startDate > A.startDate, `${A.startDate} → ${out.startDate}`)
   check('벤치가 살아 있다(금 껍데기 때문에 null이 되지 않는다)', out.benchTotalPct != null, `${out.benchTotalPct}`)

@@ -31,7 +31,8 @@ import type { CostSettings } from '../src/features/backtest/conditionScreen'
 import { annualize, runPitChained, yearsBetween, type PitChainResult } from '../src/features/backtest/pitChain'
 import { runXsmomChained } from '../src/features/backtest/xsmomChain'
 import {
-  composeGatedCombo,
+  composeCombo,
+  makeMarketGateExposure,
   spliceRegimeCurve,
   toKrwCurve,
   type Curve,
@@ -359,11 +360,12 @@ export function runPreset(
   // 물리는 비용이고, 끄면 사전계산만 그 비용을 면제받아 성적이 낙관적으로 나온다.
   // 방향이 보수적(성적을 낮춤)이고 25차 실측 수치와 정합한다. 옵션 기본값(false)은
   // 건드리지 않는다 — 기존 테스트·다른 호출부의 동작을 바꾸지 않기 위해 호출부에서만 켠다.
-  const runMomentum = (slots: number, gate: boolean) =>
+  const runMomentum = (slots: number, gate: boolean, exposure?: (date: string) => number) =>
     runXsmomChained(histories, {
       cost,
       slots,
       gate,
+      exposure,
       years: PIT_YEARS,
       codesFor: pitCodes,
       resolve,
@@ -373,19 +375,22 @@ export function runPreset(
 
   if (preset.kind === 'condition') return runCondition(preset.spec)
   if (preset.kind === 'momentum') return runMomentum(preset.mom.slots, preset.mom.gate)
+  // 시장게이트는 **슬리브 B를 돌릴 때** 노출 훅으로 들어간다 — 곡선을 나중에 손보지 않는다.
+  // 그래야 게이트 달의 청산 비용·다음 달 재매수 비용이 성적에 실린다(정본과 같은 산술).
+  const regime = preset.marketGate === true ? (extra.regime ?? null) : null
+  const gateOf = regime && regime.length >= 2 ? makeMarketGateExposure(regime) : undefined
   const chainA = runCondition(preset.spec)
-  const chainB = runMomentum(preset.mom.slots, preset.mom.gate)
+  const chainB = runMomentum(preset.mom.slots, preset.mom.gate, gateOf)
   if (chainA.equity.length === 0 || chainB.equity.length === 0)
     throw new Error(`결합할 슬리브 곡선이 비었습니다 (${preset.id})`)
-  // 옵션이 둘 다 꺼져 있으면 `composeGatedCombo`는 `blendChainResults` 한 번과 **완전히 같다** —
+  // 금이 꺼져 있으면 `composeCombo`는 `blendChainResults` 한 번과 **완전히 같다** —
   // 그래서 기존 결합 프리셋(combo-50 · combo-25-75)의 수치는 한 자리도 바뀌지 않는다.
   const goldW = normalizeGoldW(preset.goldW)
-  return composeGatedCombo({
+  return composeCombo({
     chainA,
     chainB,
     wA: preset.wA,
     capital: cost.initialCapital,
-    regime: preset.marketGate === true ? (extra.regime ?? null) : null,
     gold: goldW > 0 ? (extra.gold ?? null) : null,
     goldW,
   }).result

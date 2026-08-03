@@ -25,7 +25,13 @@ import type { DailyBar } from './types'
 import { EXIT_LABELS, type CostSettings } from './conditionScreen'
 import { annualize, runPitChained, yearsBetween, type PitChainResult } from './pitChain'
 import { runXsmomChained } from './xsmomChain'
-import { composeGatedCombo, spliceRegimeCurve, toKrwCurve as toKrwSeries } from './marketGate'
+import {
+  composeCombo,
+  makeMarketGateExposure,
+  spliceRegimeCurve,
+  summarizeGate,
+  toKrwCurve as toKrwSeries,
+} from './marketGate'
 import { PIT_UNION, PIT_YEARS, pitCodes } from './pitUniverse'
 import {
   SPEC_VERSION,
@@ -1070,11 +1076,12 @@ export function SpecSimulator() {
       // 물리는 비용이라 끄면 화면만 그 비용을 면제받아 낙관적으로 보인다. 방향이 보수적이고
       // 사전계산(preset-precompute)과도 같은 전제가 된다. 옵션 기본값(false)은 그대로 두고
       // 호출부에서만 켠다 — 다른 호출부·기존 테스트의 동작을 바꾸지 않기 위해서다.
-      const runMomentum = () =>
+      const runMomentum = (exposure?: (date: string) => number) =>
         runXsmomChained(histories, {
           cost,
           slots: mom.slots,
           gate: mom.gate,
+          exposure,
           years: PIT_YEARS,
           codesFor: pitCodes,
           resolve: (code) => symOf[code],
@@ -1088,14 +1095,13 @@ export function SpecSimulator() {
       if (kind === 'combo') {
         // 결합 = **두 슬리브를 각각 전액 투자로 돌린 곡선**의 월 리밸런스 합성(정본 comboBlend.ts).
         // 두 슬리브가 같은 유니버스·같은 비용·같은 벤치를 쓰므로 결합 곡선이 같은 축에서 읽힌다.
-        const chainA = runCondition()
-        const chainB = runMomentum()
-        if (chainA.equity.length === 0 || chainB.equity.length === 0)
-          throw new Error('결합할 슬리브 곡선이 비었습니다 — 시작일·종료일을 확인하세요')
-
         // ---- 옵션 슬리브(32차) — 시장게이트 레짐 곡선 · 금(GLD) 원화 곡선 ----------
         // 둘 다 **실패해도 백테스트를 막지 않는다**. 옵션만 꺼진 채 결합이 그대로 돌고,
         // 아래 배지가 "실제로 적용된 것"을 보여 준다(설정값이 아니라 결과다 — 규칙 3).
+        //
+        // ⚠️ 레짐은 **슬리브 B를 돌리기 전에** 만들어야 한다. 게이트는 곡선을 나중에 손보는
+        //    후처리가 아니라 시뮬 안으로 들어가는 노출 훅이기 때문이다(그래야 게이트 달의
+        //    청산 비용과 다음 달 재매수 비용이 성적에 실린다 — 정본과 같은 산술).
         let regime: { date: string; equity: number }[] | null = null
         if (marketGate) {
           if (!bench) addNote('⚠️ 벤치마크가 없어 시장게이트를 판정할 수 없습니다 — 게이트 없이 실행합니다.')
@@ -1130,20 +1136,27 @@ export function SpecSimulator() {
           }
         }
 
-        const composed = composeGatedCombo({
+        setProgress('연도별 유니버스 연쇄 백테스트 실행…')
+        const gateOf = regime ? makeMarketGateExposure(regime) : null
+        const chainA = runCondition()
+        // 게이트는 여기서 시뮬 안으로 들어간다 — 곡선을 나중에 마스킹하지 않는다.
+        const chainB = runMomentum(gateOf ?? undefined)
+        if (chainA.equity.length === 0 || chainB.equity.length === 0)
+          throw new Error('결합할 슬리브 곡선이 비었습니다 — 시작일·종료일을 확인하세요')
+
+        const gateInfo = gateOf ? summarizeGate(chainB.equity.map((p) => p.date), gateOf) : null
+        const composed = composeCombo({
           chainA,
           chainB,
           wA: comboWA,
           capital: cost.initialCapital,
-          regime,
           gold,
           goldW,
         })
         chained = composed.result
-        const gatedB = composed.gatedB
         setComboOpts({
-          gatedMonths: composed.gatedMonths.length,
-          totalMonths: composed.totalMonths,
+          gatedMonths: gateInfo?.gatedMonths.length ?? 0,
+          totalMonths: gateInfo?.totalMonths ?? 0,
           goldW: composed.goldWApplied,
           goldFrom: composed.goldFrom,
         })
@@ -1152,12 +1165,11 @@ export function SpecSimulator() {
             `금 슬리브 ${Math.round(composed.goldWApplied * 100)}%가 섞이면서 결합 구간이 ${composed.goldFrom}부터로 잘렸습니다 ` +
               `(${GOLD_SYMBOL} 상장 이후만 겹칩니다) — 2000년부터 시작하는 다른 프리셋과 MDD·CAGR을 직접 비교하지 마세요.`,
           )
-        if (marketGate && regime)
+        if (gateInfo)
           addNote(
-            `시장게이트(12-1): 전체 ${composed.totalMonths}달 중 ${composed.gatedMonths.length}달을 B 슬리브 현금으로 돌렸습니다. ` +
-              '⚠️ 연구 러너(idea-lab)는 이 게이트를 모멘텀 시뮬 안에서 걸어 그 달 첫 거래일 시가에 청산하지만, ' +
-              '이 화면은 이미 만들어진 B 곡선의 그 달 수익률을 0으로 만듭니다 — 청산·재매수 비용과 첫날 갭이 빠지는 만큼 ' +
-              '화면 쪽이 조금 후하게 나옵니다.',
+            `시장게이트(12-1): 전체 ${gateInfo.totalMonths}달 중 ${gateInfo.gatedMonths.length}달을 B 슬리브 현금으로 돌렸습니다 — ` +
+              '그 달 첫 거래일 시가에 전량 청산하고(매도 비용 지불) 게이트가 풀리는 달에 다시 삽니다. ' +
+              '그 청산·재매수 비용은 아래 성적에 이미 반영돼 있습니다.',
           )
         setSleeves([
           {
@@ -1172,16 +1184,17 @@ export function SpecSimulator() {
           },
           {
             key: 'B',
-            // 게이트가 걸렸으면 **게이트를 반영한 곡선**의 성적을 보여 준다 — 결합에 실제로
-            // 들어간 것이 그 곡선이기 때문이다. 매매수·승률만 게이트 이전 원장 값이다
-            // (게이트가 지운 달의 체결이 섞여 있으므로 아래 라벨이 그 사실을 밝힌다).
+            // 게이트가 시뮬 안에서 걸렸으므로 이 행의 **모든 수치**(매매수·승률 포함)가
+            // 게이트를 반영한 값이다 — 게이트 달의 청산이 원장에 그대로 들어 있다.
             label:
               `B 모멘텀 · 상위${mom.slots}${mom.gate ? '+게이트' : ''}` +
-              (composed.gatedMonths.length > 0 ? ` + 시장게이트(12-1) ${composed.gatedMonths.length}달 현금` : ''),
-            totalPct: gatedB.totalPct,
-            cagrPct: gatedB.cagrPct,
-            mddPct: gatedB.mddPct,
-            alphaCagrPct: gatedB.alphaCagrPct,
+              (gateInfo && gateInfo.gatedMonths.length > 0
+                ? ` + 시장게이트(12-1) ${gateInfo.gatedMonths.length}달 현금`
+                : ''),
+            totalPct: chainB.totalPct,
+            cagrPct: chainB.cagrPct,
+            mddPct: chainB.mddPct,
+            alphaCagrPct: chainB.alphaCagrPct,
             tradeCount: chainB.tradeCount,
             winRate: chainB.winRate,
           },
@@ -1390,7 +1403,7 @@ export function SpecSimulator() {
         {kind === 'combo' && (
           <label>
             시장게이트 (12-1) — 슬리브 B
-            <InfoTip text="매월 첫 거래일에 벤치마크(KODEX 200 · 시작 이전 구간은 코스피 종합 수익률로 이어붙임)의 '12개월 전~1개월 전' 수익률을 봅니다. 그 값이 음수면 그 달은 슬리브 B(모멘텀) 전체를 현금으로 둡니다. 판정 창의 두 기준 종가가 모두 그 달보다 과거라 미래참조가 들어갈 자리가 없고, 판정할 데이터가 없는 초기 구간은 게이트를 열어 둡니다(임의로 현금화하지 않습니다). ⚠️ 연구 러너는 이 게이트를 모멘텀 시뮬 안에서 걸어 그 달 첫 거래일 시가에 청산하지만, 이 화면은 이미 만들어진 B 곡선의 그 달 수익률을 0으로 만듭니다 — 청산·재매수 비용과 첫날 갭이 빠지는 만큼 화면 쪽이 조금 후하게 나옵니다." />
+            <InfoTip text="매월 첫 거래일에 벤치마크(KODEX 200 · 시작 이전 구간은 코스피 종합 수익률로 이어붙임)의 '12개월 전~1개월 전' 수익률을 봅니다. 그 값이 음수면 그 달은 슬리브 B(모멘텀) 전체를 현금으로 둡니다 — 그 달 첫 거래일 시가에 보유 종목을 전량 매도하고(수수료·거래세·슬리피지를 물고) 게이트가 풀리는 달에 다시 삽니다. 그 비용이 성적에 그대로 반영됩니다(연구 러너와 같은 산술). 판정 창의 두 기준 종가가 모두 그 달보다 과거라 미래참조가 들어갈 자리가 없고, 판정할 데이터가 없는 초기 구간은 게이트를 열어 둡니다(임의로 현금화하지 않습니다)." />
             <input
               type="checkbox"
               checked={marketGate}
@@ -2016,8 +2029,8 @@ export function SpecSimulator() {
                 {comboOpts && comboOpts.gatedMonths > 0 && (
                   <>
                     {' '}
-                    슬리브 B 행의 수익·MDD는 <strong>시장게이트를 반영한 곡선</strong> 기준이고,{' '}
-                    <strong>매매수·승률만 게이트 이전 원장</strong> 값입니다(게이트가 지운 달의 체결이 섞여 있습니다).
+                    슬리브 B 행은 <strong>시장게이트를 반영한 값</strong>입니다 — 게이트가 시뮬 안에서 걸려
+                    청산·재매수가 원장에 그대로 들어 있으므로 매매수·승률도 게이트 적용 후 수치입니다.
                   </>
                 )}
                 {comboOpts && comboOpts.goldW > 0 && (

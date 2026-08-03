@@ -9,6 +9,9 @@
 //
 // 검증 항목
 //   1) 동형 — src `runXsmomYear` ≡ idea-lab `simulateXsMomYear` (자산곡선·체결·승패 전부)
+//   1-b) 동형(노출 오버레이) — src `runXsmomYear({exposure})` ≡ idea-lab
+//        `simulateRankYear({rank: xsmomRank, keep, exposure})`. 32차 프리셋의 시장게이트가
+//        이 경로를 타므로, 여기가 갈라지면 화면 수치가 연구 수치와 갈라진다.
 //   2) 절단 불변성 — 뒷구간 봉을 잘라내도 잘린 시점 이전의 리밸런스·자산곡선이 완전히 동일
 //   3) 12-1 창 산술 — **최근 1개월을 통째로 버린다**. 당월 데이터를 아무리 변조해도 랭킹 불변,
 //      창 안(12개월 전~1개월 전)을 건드리면 바뀐다
@@ -25,7 +28,11 @@ import {
   shiftMonthStart,
   xsmomRank,
 } from '../src/features/backtest/xsmomChain'
-import { simulateXsMomYear } from '../scripts/idea-lab.entry'
+import {
+  simulateRankYear,
+  simulateXsMomYear,
+  xsmomRank as refXsmomRank,
+} from '../scripts/idea-lab.entry'
 import type { CostSettings } from '../src/features/backtest/conditionScreen'
 import type { DailyBar } from '../src/features/backtest/types'
 
@@ -132,6 +139,152 @@ section('1) 동형 — src runXsmomYear ≡ idea-lab simulateXsMomYear (의미�
       eq(`[${tag}] 연말 미청산 수 일치`, mine.openAtEnd, canon.openAtEnd)
       check(`[${tag}] 실제로 매매가 일어났다(빈 비교 방지)`, mine.fills.length > 0, `fills=${mine.fills.length}`)
     }
+  }
+}
+
+// ============================================================================
+section('1-b) 동형(노출 오버레이) — exposure 훅이 정본 simulateRankYear와 같은 산술인가')
+// ============================================================================
+//
+// 32차 프리셋의 시장게이트(12-1)가 **이 경로**를 탄다. 게이트가 닫힌 달은 "수익률을 0으로
+// 지우는" 것이 아니라 그 달 첫 거래일 시가에 **전량 청산**(매도 비용 지불)하고 풀리는 달에
+// 다시 사는 것이며, 그 비용까지가 정본의 의미론이다. 여기가 갈라지면 화면 수치가 연구
+// 수치와 갈라진다(2026-08-02 시세 로딩 버그와 같은 종류의 사고).
+{
+  const hist = makeUniverse(9, '2018-01-01', '2021-12-31', 7001)
+  const syms = Object.keys(hist)
+
+  /** 시장게이트를 흉내 낸 노출 함수들 — 달만 보고 값을 정한다(규칙 1 계약과 같은 형태). */
+  const SHUT = new Set(['2021-03', '2021-07', '2021-08', '2021-09'])
+  const EXPOSURES: { tag: string; fn: (date: string) => number }[] = [
+    { tag: '게이트 4달 닫힘', fn: (d) => (SHUT.has(d.slice(0, 7)) ? 0 : 1) },
+    { tag: '전부 열림(w=1)', fn: () => 1 },
+    { tag: '전부 닫힘(w=0)', fn: () => 0 },
+    // 시장게이트는 0/1만 쓰지만 훅 자체는 연속값 계약이다 — 슬롯 산술까지 정본과 같은지 본다
+    { tag: '부분 노출(w=0.5)', fn: () => 0.5 },
+    { tag: '첫 달만 닫힘(경계)', fn: (d) => (d.slice(0, 7) === '2021-01' ? 0 : 1) },
+    { tag: '마지막 달만 닫힘(경계)', fn: (d) => (d.slice(0, 7) === '2021-12' ? 0 : 1) },
+  ]
+
+  for (const slots of [4, 5]) {
+    for (const gate of [false, true]) {
+      for (const ex of EXPOSURES) {
+        const mine = runXsmomYear(hist, '2021-01-01', syms, COST, { slots, gate, exposure: ex.fn })
+        const canon = simulateRankYear(hist, '2021-01-01', syms, COST, {
+          slots,
+          rank: refXsmomRank,
+          keep: gate ? (r) => r.aux >= 0 : undefined,
+          exposure: ex.fn,
+        })
+        const tag = `상위${slots}${gate ? '+게이트' : ''} · ${ex.tag}`
+
+        eq(`[${tag}] 자산곡선 길이 일치`, mine.equity.length, canon.equity.length)
+        let maxEqDiff = 0
+        let dateMismatch = 0
+        for (let i = 0; i < Math.min(mine.equity.length, canon.equity.length); i++) {
+          if (mine.equity[i].date !== canon.equity[i].date) dateMismatch++
+          maxEqDiff = Math.max(maxEqDiff, Math.abs(mine.equity[i].equity - canon.equity[i].equity))
+        }
+        eq(`[${tag}] 자산곡선 날짜 전부 일치`, dateMismatch, 0)
+        close(`[${tag}] 자산곡선 값 전부 일치(최대 오차)`, maxEqDiff, 0, 1e-6)
+
+        eq(`[${tag}] 체결 건수 일치`, mine.fills.length, canon.fills.length)
+        let fillMismatch = 0
+        for (let i = 0; i < Math.min(mine.fills.length, canon.fills.length); i++) {
+          const a = mine.fills[i]
+          const b = canon.fills[i]
+          if (
+            a.date !== b.date ||
+            a.sym !== b.sym ||
+            a.side !== b.side ||
+            a.qty !== b.qty ||
+            a.signalDate !== b.signalDate ||
+            Math.abs(a.px - b.px) > 1e-9
+          )
+            fillMismatch++
+        }
+        eq(`[${tag}] 체결 내역 전부 일치`, fillMismatch, 0)
+        eq(`[${tag}] 라운드트립 수 일치`, mine.closed, canon.closed)
+        eq(`[${tag}] 연말 미청산 수 일치`, mine.openAtEnd, canon.openAtEnd)
+      }
+    }
+  }
+
+  // 훅을 **안 주면** 기존 경로와 부동소수점까지 같아야 한다(골든 지문 보호 · 기존 프리셋 불변)
+  for (const slots of [4, 5, 6]) {
+    for (const gate of [false, true]) {
+      const plain = runXsmomYear(hist, '2021-01-01', syms, COST, { slots, gate })
+      const w1 = runXsmomYear(hist, '2021-01-01', syms, COST, { slots, gate, exposure: () => 1 })
+      const tag = `상위${slots}${gate ? '+게이트' : ''}`
+      // w=1은 식이 (eq*1)/denom이라 값은 같지만 **경로가 다르다** — 둘 다 확인한다
+      let diff = 0
+      for (let i = 0; i < plain.equity.length; i++)
+        if (Math.abs(plain.equity[i].equity - w1.equity[i].equity) > 1e-9) diff++
+      eq(`[${tag}] 훅 미지정 ≡ w=1 (노출 훅이 기본 동작을 바꾸지 않는다)`, diff, 0)
+      eq(`[${tag}] 훅 미지정 시 노출 기록은 1`, plain.rebalances[0].exposure, 1)
+    }
+  }
+
+  // 게이트가 닫힌 달에는 **실제로 청산이 일어난다**(비용을 문다) — 커브 마스크와 갈리는 지점
+  {
+    const shut = new Set(['2021-07'])
+    const run = runXsmomYear(hist, '2021-01-01', syms, COST, {
+      slots: 5,
+      gate: false,
+      exposure: (d) => (shut.has(d.slice(0, 7)) ? 0 : 1),
+    })
+    const julyReb = run.rebalances.find((r) => r.date.startsWith('2021-07'))
+    check('게이트 달 리밸런스 기록이 있다', julyReb != null, `${julyReb?.date}`)
+    eq('게이트 달 노출 기록 = 0', julyReb?.exposure, 0)
+    const julySells = run.fills.filter((f) => f.date.startsWith('2021-07') && f.side === 'sell')
+    const julyBuys = run.fills.filter((f) => f.date.startsWith('2021-07') && f.side === 'buy')
+    check('게이트 달에 매도가 일어난다(전량 청산)', julySells.length > 0, `${julySells.length}건`)
+    eq('게이트 달에 매수는 없다', julyBuys.length, 0)
+    // 청산 후 그 달 내내 자산이 평평하지 **않다**는 뜻이 아니라, 현금이라 평평하다.
+    const july = run.equity.filter((p) => p.date.startsWith('2021-07'))
+    const flat = july.every((p) => Math.abs(p.equity - july[july.length - 1].equity) < 1e-6)
+    check('청산 뒤 그 달은 현금이라 자산이 평평하다', flat)
+    // 다음 달에는 다시 산다(재매수 비용을 문다)
+    const augBuys = run.fills.filter((f) => f.date.startsWith('2021-08') && f.side === 'buy')
+    check('게이트가 풀리면 다시 매수한다', augBuys.length > 0, `${augBuys.length}건`)
+  }
+
+  // 연쇄(runXsmomChained)에서도 노출 훅이 그대로 전달되는지 + 절단 불변성
+  {
+    const h = makeUniverse(9, '2018-01-01', '2021-12-31', 7301)
+    const codes = Object.keys(h)
+    const shut = new Set(['2020-04', '2020-05', '2021-02'])
+    const exposure = (d: string) => (shut.has(d.slice(0, 7)) ? 0 : 1)
+    const opts = {
+      cost: COST,
+      slots: 5,
+      gate: true,
+      exposure,
+      years: [2020, 2021],
+      codesFor: () => codes,
+      minSymbols: 3,
+    }
+    const full = runXsmomChained(h, opts)
+    const gated = full.rebalances.filter((r) => r.exposure === 0)
+    eq('연쇄에도 노출 훅이 전달된다(닫힌 달 수)', gated.length, 3)
+
+    const cutDate = '2021-03-31'
+    const part = runXsmomChained(cut(h, cutDate), opts)
+    let diff = -1
+    for (let i = 0; i < part.equity.length; i++) {
+      if (
+        part.equity[i].date !== full.equity[i].date ||
+        Math.abs(part.equity[i].equity - full.equity[i].equity) > 1e-9
+      ) {
+        diff = i
+        break
+      }
+    }
+    check(
+      `노출 훅이 걸린 연쇄도 절단 불변 (${cutDate}까지 ${part.equity.length}점)`,
+      diff < 0 && part.equity.length > 0,
+      diff >= 0 ? `${diff}번째 ${full.equity[diff]?.date}` : '',
+    )
   }
 }
 

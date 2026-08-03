@@ -263,7 +263,10 @@ section('④ presets.ts 불변식 — 화면과 사전계산이 같은 배열을
   check('calmar-max: 리밸런스 비용 미반영 경고', calNote.includes('리밸런스 비용 미반영'))
   check('calmar-max: 달러 노출 의존 경고', calNote.includes('달러'))
   check('calmar-max: 국내 대체품·세제 미반영 경고', calNote.includes('세제'))
-  check('calmar-max: 화면값이 실측치와 다르다는 경고', calNote.includes('일치하지 않는다'))
+  // 게이트 달의 청산·재매수 비용이 반영된다는 사실을 note가 밝혀야 한다
+  // (예전 커브 마스크 구현에서는 이 비용이 빠져 있었고, 그게 폐기 사유였다)
+  check('calmar-max: 게이트 달 청산 비용 반영 명시', calNote.includes('청산'))
+  check('calmar-max: 커브 마스크 시절의 "실측치와 불일치" 문구가 남아 있지 않다', !calNote.includes('일치하지 않는다'))
   check('calmar-max: 매수 권유 아님 명시', calNote.includes('매수 권유가 아니다'))
   // 금 슬리브가 붙은 프리셋은 반드시 시장게이트 옵션 유무와 무관하게 비중이 선택지 안이어야 한다
   for (const p of PRESETS) {

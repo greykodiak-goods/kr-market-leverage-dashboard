@@ -10,6 +10,12 @@
 // `tests/xsmomchain.test.ts`가 두 구현을 같은 합성 데이터로 돌려 **자산곡선·체결이 전부
 // 일치하는지(동형)** 검증한다. 갈라지면 테스트가 깨진다.
 //
+// 2026-08-03: 월별 **노출 오버레이**(`exposure`)를 같은 원칙으로 이식했다 — 정본은
+// idea-lab `simulateRankYear`의 동명 옵션이고, 32차 칼마 1위 프리셋의 시장게이트(12-1)가
+// 이 훅을 쓴다. 게이트가 닫힌 달은 "수익률을 0으로 지우는" 것이 아니라 **그 달 첫 거래일
+// 시가에 전량 청산**(비용 지불)하고 풀리는 달에 다시 사는 것이며, 그 비용까지가 정본의
+// 의미론이다. 지정하지 않으면 슬롯 계산식이 예전 그대로라 기존 수치는 한 자리도 안 변한다.
+//
 // ── 전략 요약 ────────────────────────────────────────────────────────────────
 // 매월 첫 거래일에 "12개월 전 ~ 1개월 전" 수익률로 유니버스를 줄 세워 상위 N만 동일가중
 // 보유하고, 다음 달 첫 거래일 **시가**에 리밸런스한다. 최근 1개월은 단기 반전 효과를 피하려고
@@ -203,6 +209,12 @@ export interface XsmomRebalance {
   gatedOut: string[]
   /** 상위 랭킹(최대 10) — 메모리 상한을 두고 잘라 남긴다 */
   top: MomRow[]
+  /**
+   * 그 달 적용된 노출 비중(오버레이 없으면 항상 1). 0이면 시장 레짐 게이트가 닫혀
+   * **슬리브 전체가 현금**인 달이다 — 화면이 `targets`를 "실제로 담은 종목"으로 읽으면
+   * 거짓이 되므로 이 값을 함께 본다.
+   */
+  exposure: number
 }
 
 export interface XsmomOpts {
@@ -210,6 +222,27 @@ export interface XsmomOpts {
   slots: number
   /** 절대 모멘텀 게이트 — 12-1 수익 < 0인 종목은 그 슬롯을 **현금**으로 둔다 */
   gate: boolean
+  /**
+   * 리스크 오버레이 — 그 달의 **노출 비중** w∈[0,1].
+   *
+   * ⚠️ 정본: idea-lab `simulateRankYear`의 동명 옵션. **한 줄도 재해석하지 않고 옮겼다**
+   *    (`tests/xsmomchain.test.ts`의 동형 테스트가 두 구현을 대조한다).
+   *
+   * 리밸런스일(월 첫 거래일)에만 읽어 슬롯 금액을 `eq×w/denom`으로 줄이고, 남는 몫은
+   * 현금으로 둔다. **분모(denom)는 건드리지 않는다** — 분모를 같이 줄이면 남은 종목에
+   * 레버리지를 거는 셈이라 A/B가 오염된다(절대모멘텀 게이트와 같은 이유).
+   *
+   * `w=0`이면 그 달은 슬리브 전체가 현금이다(시장 레짐 게이트). 이때 실제로 일어나는 일은
+   * "수익률을 0으로 지우는 것"이 아니라 **그 달 첫 거래일 시가에 보유 종목을 전량 매도**하는
+   * 것이다 — 매도 수수료·거래세·슬리피지를 그대로 물고, 게이트가 풀리는 달에 다시 사면서
+   * 매수 비용도 문다. 그 비용이 성적에 반영되는 것이 정본의 의미론이다.
+   *
+   * ⚠️ 규칙 1: 이 함수는 리밸런스일 **이전에 확정된** 정보만으로 값을 정해야 한다
+   *    (호출부가 지키는 계약이며, 절단 불변성 테스트가 집행한다).
+   * 지정하지 않으면 슬롯 계산식 자체가 기존 경로 그대로다 — **부동소수점까지 동일**하며
+   * 기존 골든 지문이 그대로 유지된다.
+   */
+  exposure?: (date: string) => number
 }
 
 export interface XsmomYearRun {
@@ -352,7 +385,9 @@ export function runXsmomYear(
       const picked = ranked.slice(0, denom)
       const targets = opts.gate ? picked.filter((r) => r.mom >= 0) : picked
       const targetSet = new Set(targets.map((r) => r.sym))
-      const slot = eq / denom
+      // 오버레이가 없으면 식 자체가 예전 그대로다(부동소수점까지 동일 — 골든 지문 보호).
+      const w = opts.exposure ? Math.min(1, Math.max(0, opts.exposure(date))) : 1
+      const slot = opts.exposure ? (eq * w) / denom : eq / denom
 
       // 1) 목표 밖 전량 매도 (봉이 없으면 못 판다 — 다음 기회로 이월)
       for (const s of [...book.positions.keys()]) {
@@ -385,6 +420,7 @@ export function runXsmomYear(
         targets: targets.map((r) => r.sym),
         gatedOut: picked.filter((r) => !targetSet.has(r.sym)).map((r) => r.sym),
         top: ranked.slice(0, 10),
+        exposure: w,
       })
     }
     equity.push({ date, equity: bookMark(book, closeAt(date)) })
@@ -421,6 +457,11 @@ export interface XsmomChainOptions {
   slots: number
   /** 절대 모멘텀 게이트 */
   gate: boolean
+  /**
+   * 월별 노출 비중 오버레이 — `XsmomOpts.exposure`와 같은 계약이며 그대로 전달된다.
+   * 지정하지 않으면 기존 경로와 **부동소수점까지 동일**하다.
+   */
+  exposure?: (date: string) => number
   /** 실행할 연도 목록 — 시장 중립을 위해 **호출부가 반드시 준다**. */
   years: number[]
   /** 연도 → 유니버스 코드 — 시장 중립을 위해 **호출부가 반드시 준다**. */
@@ -571,7 +612,11 @@ export function runXsmomChained(
       continue
     }
 
-    const run = runXsmomYear(hist, effStart, tradable, cost, { slots: opts.slots, gate: opts.gate })
+    const run = runXsmomYear(hist, effStart, tradable, cost, {
+      slots: opts.slots,
+      gate: opts.gate,
+      exposure: opts.exposure,
+    })
 
     const base = factor
     for (const p of run.equity) {
@@ -601,18 +646,23 @@ export function runXsmomChained(
     const last = run.rebalances.length ? run.rebalances[run.rebalances.length - 1] : null
     if (last) {
       const tset = new Set(last.targets)
+      // 노출이 0인 달은 랭킹 상위였더라도 **한 주도 담기지 않았다** — 그 달에 `passed: true`를
+      // 띄우면 화면이 거짓말을 한다(담지 않은 종목을 담았다고 보여 준다).
+      const shutOut = last.exposure <= 0
       lastScreen = last.top.map((r, i) => ({
         symbol: r.sym,
         changePct: r.mom * 100,
         rank: i + 1,
-        passed: tset.has(r.sym),
-        reasons: tset.has(r.sym)
-          ? [`12-1 모멘텀 ${(r.mom * 100).toFixed(1)}% · 상위 ${last.denom}`]
-          : [
-              r.mom < 0
-                ? `절대모멘텀 게이트 — 12-1 ${(r.mom * 100).toFixed(1)}% < 0 이라 이 슬롯은 현금`
-                : `상위 ${last.denom} 밖 (12-1 ${(r.mom * 100).toFixed(1)}%)`,
-            ],
+        passed: !shutOut && tset.has(r.sym),
+        reasons: shutOut
+          ? [`시장 레짐 게이트 — 이 달은 슬리브 전체가 현금 (12-1 ${(r.mom * 100).toFixed(1)}%)`]
+          : tset.has(r.sym)
+            ? [`12-1 모멘텀 ${(r.mom * 100).toFixed(1)}% · 상위 ${last.denom}`]
+            : [
+                r.mom < 0
+                  ? `절대모멘텀 게이트 — 12-1 ${(r.mom * 100).toFixed(1)}% < 0 이라 이 슬롯은 현금`
+                  : `상위 ${last.denom} 밖 (12-1 ${(r.mom * 100).toFixed(1)}%)`,
+              ],
       }))
       lastScreenDate = last.date
     }

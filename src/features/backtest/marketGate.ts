@@ -8,25 +8,22 @@
 // 그것을 **그대로 이식한 사본**이다:
 //   · `spliceRegimeCurve`  — 벤치 시작 이전 구간을 코스피 종합(^KS11) 수익률로 잇기
 //   · `regimeMom12_1`      — 레짐 곡선의 12-1 모멘텀
-//   · `makeRegimeExposure(curve, 'mom12_1')` → 여기서는 `makeMonthGateMask`
+//   · `makeRegimeExposure(curve, 'mom12_1')` → 여기서는 `makeMonthGateMask` / `makeMarketGateExposure`
 //   · `toKrwCurve`         — 달러 곡선 × 원/달러(결측일 직전 환율 이월)
-//   · `valueBefore` / `curveIdxBefore` / `monthEndCloses`
+//   · `valueBefore` / `curveIdxBefore`
 // 옮겨 적기는 조용히 갈라지므로 `tests/marketgate.test.ts`의 **동형 테스트**가 두 구현을
 // 같은 합성 데이터로 나란히 돌려 완전 일치를 강제한다. 고칠 일이 생기면 정본을 먼저 고쳐라.
 //
-// ── ⚠️ 정본과 **다른 한 곳** (반드시 읽을 것 · 규칙 3) ──────────────────────────
-// 게이트를 **거는 자리**가 다르다.
-//   · idea-lab: 모멘텀 시뮬 **안**에서 건다(`simulateRankYear`의 `exposure`). 게이트 달의
-//     첫 거래일 **시가**에 보유 종목을 전량 매도하고(수수료·거래세·슬리피지를 물고)
-//     달 끝까지 현금으로 있는다. 다음 달에 다시 사면서 매수 비용을 또 문다.
-//   · 이 모듈: 이미 만들어진 **B 슬리브 곡선 위**에 건다. 그 달에 속한 일수익률을 전부 1로
-//     만든다("그 달은 현금").
-// "그 달은 현금"이라는 **의미는 같지만 산술은 완전히 같지 않다.** 곡선 마스크에는
-//   ① 게이트 달 첫날의 (전일 종가 → 시가) 갭 ② 그 청산 비용 ③ 다음 달 재매수 비용
-// 이 빠지고, 셋 다 **성적을 후하게** 만드는 방향이다. 따라서 이 경로의 수치는 32차 실측치와
-// 소수점까지 일치하지 않으며 **낙관 쪽으로 조금 치우친다**(같은 크기대이되 상한값이다).
-// 정확한 재현은 `xsmomChain`에 `exposure` 훅을 이식해야 가능하고, 그것은 별건이다.
-// 화면 배지와 프리셋 note가 이 사실을 그대로 드러낸다.
+// ── 게이트를 **어디에** 거는가 (2026-08-03 총괄 판정) ─────────────────────────
+// 게이트는 **모멘텀 시뮬 안**에서 건다. `makeMarketGateExposure`가 만든 노출 함수를
+// `runXsmomChained`의 `exposure` 훅(= idea-lab `simulateRankYear`의 동명 옵션을 이식한 것)에
+// 넘기면, 게이트가 닫힌 달은 **첫 거래일 시가에 보유 종목을 전량 매도**하고(수수료·거래세·
+// 슬리피지를 물고) 풀리는 달에 다시 산다(매수 비용도 문다). 정본과 **같은 산술**이다.
+//
+// ⚠️ 한때 여기 있던 "B 곡선의 그 달 수익률을 0으로 만드는" 커브 마스크는 **폐기했다.**
+//    의미는 비슷해 보여도 청산·재매수 비용과 게이트 달 첫날 갭이 빠져 성적이 **낙관 쪽으로**
+//    치우쳤고, 사전계산 라벨이 화면 엔진 수치를 그대로 싣는 구조라 그 낙관이 그대로 대표에게
+//    노출된다(규칙 3 위반). 다시 만들지 마라 — 노출 훅이 정본이다.
 //
 // ── 규칙 1(미래참조 금지) 설계 ────────────────────────────────────────────────
 //   · 게이트 판정 창은 **달(ym)만으로** 결정된다: 그 달 1일 기준 12-1 모멘텀이므로
@@ -127,59 +124,35 @@ export function makeMonthGateMask(curve: Curve): (date: string) => 0 | 1 {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 게이트 적용 — 곡선의 "그 달 수익률을 0으로"
-// ---------------------------------------------------------------------------
+/**
+ * `runXsmomChained`의 `exposure` 훅에 그대로 넘길 수 있는 노출 함수.
+ * 시장게이트는 0/1 두 값뿐이라 마스크와 같은 함수지만, **넘기는 자리가 노출 훅**이라는
+ * 사실을 호출부에서 읽히게 하려고 이름을 따로 둔다.
+ */
+export function makeMarketGateExposure(curve: Curve): (date: string) => number {
+  return makeMonthGateMask(curve)
+}
 
-export interface GateApplied {
-  curve: Curve
+export interface GateSummary {
   /** 게이트가 현금으로 돌린 달 목록(`YYYY-MM` 오름차순) */
   gatedMonths: string[]
-  /** 곡선이 덮은 전체 달 수 — 배지에서 "몇 달 중 몇 달"을 보이려는 것 */
+  /** 대상 구간이 덮은 전체 달 수 — 배지에서 "몇 달 중 몇 달"을 보이려는 것 */
   totalMonths: number
 }
 
 /**
- * 게이트가 닫힌 달의 **일수익률을 전부 1로** 만든 곡선을 돌려준다.
- *
- * 날짜 i의 수익률(= i−1 → i)은 **날짜 i가 속한 달**에 귀속시킨다. 곡선의 첫 점은
- * 직전 값이 없어 수익률 자체가 없으므로 그대로 둔다(그 달이 닫혀 있어도 시작값은 시작값이다).
- *
- * ⚠️ 구현 노트 — 수익률을 하나씩 곱해 쌓지 않고 **누적 배율(scale)** 로 원곡선 값을 옮긴다.
- *    수익률을 곱해 쌓으면 게이트가 한 번도 안 닫혀도 부동소수점 오차가 누적돼 곡선이
- *    미세하게 달라지고, 그러면 "게이트를 안 걸면 기존 결합과 같다"는 보장이 깨진다
- *    (기존 프리셋 수치가 조용히 흔들린다). 이 구현은 닫힌 달이 없으면 **입력 곡선을
- *    비트까지 그대로** 돌려준다 — `tests/marketgate.test.ts`가 그것을 강제한다.
- *
- * 미래참조 없음: 마스크는 날짜(달)만으로 결정되고 그 판정 창은 전부 과거다.
+ * 화면 배지용 집계 — 실행 구간의 날짜들에 마스크를 물어 **실제로 닫힌 달**을 센다.
+ * 성적 계산에는 관여하지 않는다(성적은 노출 훅을 받은 시뮬이 만든다).
  */
-export function applyMonthGate(curve: Curve, gateOf: (date: string) => 0 | 1): GateApplied {
+export function summarizeGate(dates: string[], gateOf: (date: string) => number): GateSummary {
   const months = new Set<string>()
   const gated = new Set<string>()
-  if (curve.length < 1) return { curve: [], gatedMonths: [], totalMonths: 0 }
-  const out: Curve = [{ date: curve[0].date, equity: curve[0].equity }]
-  months.add(ymOf(curve[0].date))
-  if (gateOf(curve[0].date) === 0) gated.add(ymOf(curve[0].date))
-  /** 원곡선 값 → 게이트 곡선 값으로 옮기는 누적 배율. 닫힌 달을 지날 때만 갱신된다. */
-  let scale = 1
-  for (let i = 1; i < curve.length; i++) {
-    const date = curve[i].date
-    const ym = ymOf(date)
+  for (const d of dates) {
+    const ym = ymOf(d)
     months.add(ym)
-    const open = gateOf(date)
-    if (open === 0) gated.add(ym)
-    const cur = curve[i].equity
-    if (open === 1 && curve[i - 1].equity > 0) {
-      out.push({ date, equity: cur * scale })
-    } else {
-      // 그 날의 수익을 지운다 = 직전 값을 그대로 이어받고, 이후 원곡선을 다시 붙일
-      // 배율을 그 지점에서 새로 잡는다.
-      const held = out[i - 1].equity
-      out.push({ date, equity: held })
-      if (cur > 0) scale = held / cur
-    }
+    if (gateOf(d) <= 0) gated.add(ym)
   }
-  return { curve: out, gatedMonths: [...gated].sort(), totalMonths: months.size }
+  return { gatedMonths: [...gated].sort(), totalMonths: months.size }
 }
 
 // ---------------------------------------------------------------------------
@@ -227,7 +200,7 @@ function drawdowns(curve: Curve): { mddPct: number; ddOf: number[] } {
  * 배수 곡선을 **결과 화면이 그대로 읽는** `PitChainResult`로 감싼다.
  *
  * ⚠️ **매매 원장은 비운다**(`trades: []` · `tradeCount: 0` · `winRate: null`) —
- *    합성·마스킹된 곡선에 귀속되는 체결이 없기 때문이며 "매매가 0건"이라는 뜻이 아니다.
+ *    합성된 보유 곡선에 귀속되는 체결이 없기 때문이며 "매매가 0건"이라는 뜻이 아니다.
  *    `blendChainResults`와 같은 규약이다.
  *
  * `benchTotalPct`는 **`blendChainResults`의 `hasBench` 검사를 통과시키기 위한 통로**다 —
@@ -286,86 +259,30 @@ export function curveAsChain(
   }
 }
 
-export interface GatedChain {
-  chain: PitChainResult
-  gatedMonths: string[]
-  totalMonths: number
-}
-
-/**
- * 슬리브 곡선에 시장게이트를 걸어 **연도별 메타(perYear)는 그대로 둔 채** 결과를 다시 만든다.
- *
- * 연도별 행의 `mapped`·`total`·`cash`·`trades`·`symbols`는 게이트와 무관한 유니버스 사실이라
- * 원본을 물려주고, **수익률만** 게이트 곡선으로 다시 잰다. 총수익·CAGR·MDD도 다시 잰다 —
- * 이 값들은 화면의 "슬리브 B" 요약 카드에 그대로 나가므로 게이트가 반영돼야 정직하다.
- *
- * ⚠️ 원장(trades)은 원본을 **버린다** — 게이트가 지운 달의 체결이 원장에 남아 있으면
- *    곡선과 원장이 어긋난 거짓 화면이 된다. 매매수는 A·B 단독 실행에서 읽어야 한다.
- */
-export function applyGateToChain(
-  chain: PitChainResult,
-  gateOf: (date: string) => 0 | 1,
-  capital: number,
-): GatedChain {
-  const applied = applyMonthGate(
-    chain.equity.map((p) => ({ date: p.date, equity: p.equity })),
-    gateOf,
-  )
-  const shell = curveAsChain(applied.curve, {
-    capital,
-    benchTotalPct: chain.benchTotalPct,
-    benchCagrPct: chain.benchCagrPct,
-  })
-  // 벤치 시계열은 원본 곡선에 실린 값을 그대로 쓴다(게이트는 전략 쪽만 건드린다)
-  const equity: EquityPoint[] = shell.equity.map((p, i) => ({
-    ...p,
-    benchmark: chain.equity[i]?.benchmark ?? p.benchmark,
-  }))
-  return {
-    chain: {
-      ...shell,
-      equity,
-      perYear: chain.perYear,
-      openAtEnd: chain.openAtEnd,
-      mappedAvgPct: chain.mappedAvgPct,
-      lastScreen: chain.lastScreen,
-      lastScreenDate: chain.lastScreenDate,
-    },
-    gatedMonths: applied.gatedMonths,
-    totalMonths: applied.totalMonths,
-  }
-}
-
 // ---------------------------------------------------------------------------
-// 3자 결합 실행 — 화면과 사전계산이 **같은 함수**를 부른다
+// 결합 합성 — 화면과 사전계산이 **같은 함수**를 부른다
 // ---------------------------------------------------------------------------
 
-export interface GatedComboInput {
+export interface ComboInput {
   /** 슬리브 A(조건식) 연쇄 결과 */
   chainA: PitChainResult
-  /** 슬리브 B(모멘텀) 연쇄 결과 — 게이트는 여기에만 걸린다 */
+  /**
+   * 슬리브 B(모멘텀) 연쇄 결과.
+   * ⚠️ 시장게이트는 **이 곡선을 만들 때 이미** 반영돼 있어야 한다(`runXsmomChained`의
+   *    `exposure` 훅). 여기서 곡선을 다시 손대지 않는다 — 그렇게 하면 청산 비용이 빠진다.
+   */
   chainB: PitChainResult
   /** A:B 가중 */
   wA: number
   capital: number
-  /**
-   * 레짐 곡선(벤치 + 폴백 이음). null이면 게이트를 걸지 않는다 —
-   * 데이터가 없다고 임의로 현금화하지 않는다(규칙 1의 "판정 불가면 기본값").
-   */
-  regime?: Curve | null
   /** 금(원화) 곡선. null이거나 `goldW`가 0이면 금 슬리브 없음 = 기존 결합 그대로 */
   gold?: Curve | null
   goldW?: number
 }
 
-export interface GatedComboOutput {
+export interface ComboOutput {
   /** 화면·사전계산이 그대로 읽는 최종 결과 */
   result: PitChainResult
-  /** 게이트를 건 슬리브 B(요약 카드용) — 게이트가 없으면 원본 그대로 */
-  gatedB: PitChainResult
-  /** 현금으로 돌린 달 목록 · 곡선이 덮은 전체 달 수 (화면 배지) */
-  gatedMonths: string[]
-  totalMonths: number
   /** 금 슬리브가 실제로 섞인 구간의 시작일 — 없으면 null */
   goldFrom: string | null
   /** 실제로 적용된 금 비중(데이터가 없으면 0으로 내려간다 — 숨기지 않는다) */
@@ -373,11 +290,12 @@ export interface GatedComboOutput {
 }
 
 /**
- * 결합(A:B) + B 시장게이트 + 금 슬리브를 **2단 blend**로 합성한다.
+ * 결합(A:B) + 금 슬리브를 **2단 blend**로 합성한다.
  *
  * 왜 2단인가 — 그게 **정본이 하는 것**이기 때문이다. idea-lab MODE=asset의 32차 1위 행은
  *   `E1 = blendCurves(chainA, gateChain, 0.5)` → `blendCurves(E1, GLD, 0.8)`
- * 두 줄이고, 이 함수는 그 두 줄과 **같은 곡선**을 낸다(`tests/marketgate.test.ts` §5).
+ * 두 줄이고(여기서 `gateChain`은 **노출 훅을 받은 모멘텀 연쇄**다), 이 함수는 그 두 줄과
+ * **같은 곡선**을 낸다(`tests/marketgate.test.ts` §5).
  *
  * 3자 동시 결합(`comboBlend.blend3Curves`)과의 관계: `blendMonthlyRebalanced`가 같은 월
  * 경계에서 리밸런스하므로 두 방식은 **첫 달 경계 이후로는 같은 곡선**이다. 다만 결합 구간이
@@ -389,25 +307,14 @@ export interface GatedComboOutput {
  * 겹치지 않는 구간을 남기면 그 구간이 통째로 한쪽 곡선의 성적이 되기 때문이다.
  * 호출부는 `goldFrom`을 화면에 그대로 드러내야 한다(규칙 3).
  */
-export function composeGatedCombo(input: GatedComboInput): GatedComboOutput {
+export function composeCombo(input: ComboInput): ComboOutput {
   const { chainA, chainB, wA, capital } = input
-  const gate = input.regime && input.regime.length >= 2 ? makeMonthGateMask(input.regime) : null
-  const applied = gate ? applyGateToChain(chainB, gate, capital) : null
-  const gatedB = applied ? applied.chain : chainB
-
-  const combo = blendChainResults(chainA, gatedB, wA, capital)
+  const combo = blendChainResults(chainA, chainB, wA, capital)
 
   const goldW = input.goldW ?? 0
   const gold = input.gold ?? null
   if (!(goldW > 0) || !gold || gold.length < 2) {
-    return {
-      result: combo,
-      gatedB,
-      gatedMonths: applied?.gatedMonths ?? [],
-      totalMonths: applied?.totalMonths ?? 0,
-      goldFrom: null,
-      goldWApplied: 0,
-    }
+    return { result: combo, goldFrom: null, goldWApplied: 0 }
   }
 
   // 금 껍데기의 `benchTotalPct`는 `blendChainResults`의 벤치 유무 검사를 통과시키는 통로일 뿐이다 —
@@ -420,9 +327,6 @@ export function composeGatedCombo(input: GatedComboInput): GatedComboOutput {
   const result = blendChainResults(combo, goldChain, 1 - goldW, capital)
   return {
     result,
-    gatedB,
-    gatedMonths: applied?.gatedMonths ?? [],
-    totalMonths: applied?.totalMonths ?? 0,
     goldFrom: result.equity.length ? result.equity[0].date : null,
     goldWApplied: goldW,
   }
