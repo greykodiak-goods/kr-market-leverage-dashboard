@@ -3,7 +3,7 @@
 
 import { useState } from 'react'
 import { getDailyHistory, type HistoryResult } from '../../lib/history'
-import { runPortfolio, type PortfolioResult } from './portfolio'
+import { runPortfolio, worstCalendarYear, type PortfolioResult } from './portfolio'
 import { modelMeta, MODEL_META, type ModelConfig } from './models'
 import { DEFAULT_IB_PARAMS, DEFAULT_VR_PARAMS } from './algoEngine'
 import { DEFAULT_ROTATION } from './rotation'
@@ -66,6 +66,9 @@ export function ModelDetail({
   const meta = modelMeta(modelId)
   const isAlgo = meta.type === 'algo'
   const isRot = meta.type === 'rotation'
+  // 자금관리형 엔진 분기는 modelId가 아니라 meta.algo로 한다 — 같은 기법의
+  // 종목 변형 모델이 파라미터 편집기 없이 뜨는 것을 막는다.
+  const algo = meta.algo
   const doc = findDoc(modelId)
 
   const [busy, setBusy] = useState(false)
@@ -111,9 +114,9 @@ export function ModelDetail({
       ? `팩터 점수 상위 ${cfg.quant?.factor.topN ?? 4}종목을 ${cfg.quant?.risk.sizing === 'inverseVol' ? '변동성에 반비례해(역변동성 가중)' : '균등하게'} 배분합니다${cfg.quant?.risk.volTarget ? `, 그 뒤 포트폴리오 예상 변동성이 연 ${cfg.quant?.risk.targetVolPct}%가 되도록 총 노출을 조절합니다` : ''}. 레짐이 위험이면 노출을 ${cfg.quant?.regime.riskOffExposurePct ?? 0}%로 낮춥니다. 목표 대비 ${cfg.quant?.rebalanceBandPct ?? 5}%p 이상 벗어날 때만 주문을 내므로(밴드 리밸런싱) 부분 매수·부분 매도가 발생합니다.`
       : meta.type === 'rule'
       ? `슬롯 ${cfg.sig?.topN ?? 3}개 균등 분할. 한 종목에 "그 시점 총자산 ÷ ${cfg.sig?.topN ?? 3}"만큼만 넣습니다(현금이 모자라면 그만큼). 즉 전액 매수가 아니라 약 ${Math.round(100 / (cfg.sig?.topN ?? 3))}%씩 나눠 담습니다. 매도는 해당 종목 전량이며(부분 매도 없음), 슬롯이 비어야 새로 삽니다.`
-      : modelId === 'infinite-buying'
+      : algo === 'infinite-buying'
         ? `1회분 = 사이클 원금 ÷ ${cfg.ib?.splits ?? 40}. 매일 정액 0.5회분(항상) + 평단매수 0.5회분(종가가 평단 아래일 때만) 매수하고, 목표가 도달 시 전량 매도합니다. 전액 매수가 아니라 소액 분할입니다.`
-        : modelId === 'value-rebalancing'
+        : algo === 'value-rebalancing'
           ? `전량 매매가 아닙니다. 목표 평가금(V값)과 현재 평가금의 차액만큼만 부분 매수/매도합니다 — 그래서 수량이 매번 다릅니다.`
           : `보유 ${cfg.rot?.topN ?? 1}종목 균등 분할 — 한 종목당 "총자산 ÷ ${cfg.rot?.topN ?? 1}"${(cfg.rot?.topN ?? 1) === 1 ? '(1종목이므로 사실상 전액)' : `(약 ${Math.round(100 / (cfg.rot?.topN ?? 1))}%)`}. 리밸런싱일에 목표에서 빠진 종목은 전량 매도하고, 새로 들어온 종목을 같은 비중으로 채웁니다.`
 
@@ -122,6 +125,14 @@ export function ModelDetail({
   const hasLeveraged = cfg.symbols.some((s) => LEVERAGED.has(s))
   const hasForeign = cfg.symbols.some((s) => !s.endsWith('.KS') && !s.startsWith('^KS'))
   const mixed = hasForeign && cfg.symbols.some((s) => s.endsWith('.KS') || s.startsWith('^KS'))
+
+  // 레버리지 ETF 낙폭은 **기억으로 적지 않는다** — 로드된 실데이터에서 직접
+  // 계산해 [실측]으로 찍는다. 실행 전에는 표시할 실측치가 없으므로 정성 경고만
+  // 뜬다(숫자를 지어내는 것보다 낫다).
+  const leveragedMeasured = cfg.symbols
+    .filter((s) => LEVERAGED.has(s) && (histories[s]?.bars?.length ?? 0) > 0)
+    .map((s) => ({ symbol: s, worst: worstCalendarYear(histories[s].bars) }))
+    .filter((x): x is { symbol: string; worst: NonNullable<ReturnType<typeof worstCalendarYear>> } => x.worst != null)
 
   return (
     <div>
@@ -152,6 +163,14 @@ export function ModelDetail({
         ))}
       </div>
 
+      {meta.unvalidated && (
+        <div className="bt-warn">
+          🔬 <strong>기법 재현 · 검증 전</strong> — 이 조합은 승격 관문(전·후반 알파 · PBO&lt;0.5 · 워크포워드 OOS
+          알파 · 고원)을 통과한 적이 없습니다. <strong>승자 전략·추천·검증된 프리셋이 아닙니다.</strong> "이 기법이
+          이 종목에서 어떻게 도는지" 재현해 보기 위한 시뮬레이션 대상이며, 결과는 그 전제로만 읽어 주세요.
+        </div>
+      )}
+
       <div className="bt-strategy-desc bt-model-desc">{meta.desc}</div>
 
       {doc && (
@@ -179,8 +198,28 @@ export function ModelDetail({
       <UniverseEditor symbols={cfg.symbols} onChange={(symbols) => onPatch({ symbols })} isPool={isRot || meta.type === 'rule'} />
       {hasLeveraged && (
         <div className="bt-warn bt-lev-warn">
-          ⚠️ 유니버스에 레버리지 ETF 포함 — 변동성 잠식으로 장기 성과가 기초지수와 크게 괴리될 수 있고, 하락장에서
-          −80~90%대 낙폭이 실제 발생한 상품군입니다(SOXL 2022년 약 −91%).
+          ⚠️ 유니버스에 레버리지 ETF 포함 — TQQQ(나스닥100 3배)·SOXL(반도체 3배)은 <strong>일간</strong> 3배를
+          재조정하는 상품이라, 기초지수가 제자리로 돌아와도 원본이 줄어듭니다(<strong>변동성 잠식</strong>). 하락장에서
+          −80~90%대 낙폭이 실제 발생한 상품군이며, 발행사도 장기 보유 상품이 아니라고 고지합니다. 무한매수법·VR은
+          "장기 우상향 + 고변동"을 전제로 설계된 기법이라, 그 전제가 깨져 추세가 꺾이면 분할매수는 물타기가 되고
+          원금이 소진됩니다.
+          {leveragedMeasured.length > 0 ? (
+            <div className="bt-chart-caption">
+              [실측] 로드된 데이터에서 계산한 최악 달력연도 —{' '}
+              {leveragedMeasured
+                .map(
+                  (x) =>
+                    `${x.symbol} ${x.worst.year}년: 연중 최대낙폭 ${x.worst.mddPct.toFixed(1)}% · 연간 수익률 ${fmtPct(x.worst.retPct)}`,
+                )
+                .join(' / ')}
+              . 종가 기준·로드 구간 한정이며, 이 값은 표시 전용으로 매매 판단에 쓰이지 않습니다.
+            </div>
+          ) : (
+            <div className="bt-chart-caption">
+              [실측 대기] 낙폭 수치는 기억이 아니라 실제 데이터에서 계산해 표기합니다 — 아래 "평가 실행"을 누르면
+              로드된 데이터 기준 최악 연도 낙폭이 여기에 찍힙니다.
+            </div>
+          )}
         </div>
       )}
       {mixed && (
@@ -269,7 +308,7 @@ export function ModelDetail({
           </>
         )}
 
-        {modelId === 'infinite-buying' && (
+        {algo === 'infinite-buying' && (
           <div className="bt-controls bt-algo-params">
             <label>
               분할 수 (T)
@@ -292,7 +331,7 @@ export function ModelDetail({
           </div>
         )}
 
-        {modelId === 'value-rebalancing' && (
+        {algo === 'value-rebalancing' && (
           <div className="bt-controls bt-algo-params">
             <label>
               리밸런싱 주기 (거래일)
@@ -453,7 +492,7 @@ export function ModelDetail({
         {!isAlgo && cfg.settings.stopLossPct == null && (
           <span className="bt-warn">⚠️ 손절 미설정 — 최대 낙폭이 크게 확대될 수 있습니다</span>
         )}
-        {modelId === 'infinite-buying' && (cfg.ib ?? DEFAULT_IB_PARAMS).cycleStopPct == null && (
+        {algo === 'infinite-buying' && (cfg.ib ?? DEFAULT_IB_PARAMS).cycleStopPct == null && (
           <span className="bt-warn">⚠️ 사이클 손절 없음(v1 기본) — 장기 하락장에서 원금 대부분이 묶일 수 있습니다</span>
         )}
       </div>

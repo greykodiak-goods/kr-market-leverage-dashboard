@@ -6,6 +6,7 @@ import type { HistoryResult } from '../../lib/history'
 import type { PortfolioResult } from './portfolio'
 import { explainRuleSignal, type SignalExplain } from './explain'
 import { DEFAULT_IB_PARAMS, DEFAULT_VR_PARAMS } from './algoEngine'
+import { modelAlgo } from './models'
 import type { ModelConfig } from './models'
 
 export interface SymbolSignal {
@@ -71,6 +72,10 @@ export function computeSignals(
     }))
   }
 
+  // 판정 설명도 엔진 분기와 같은 기준(meta.algo)을 쓴다 — 여기만 modelId 문자열
+  // 비교로 남으면 새 조합이 "규칙 정보 없음"으로 표시된다.
+  const algo = modelAlgo(modelId)
+
   return result.sleeves.map((sleeve) => {
     const hist = histories[sleeve.symbol]
     const bars = hist?.bars ?? []
@@ -81,7 +86,7 @@ export function computeSignals(
       ? `${open.qty.toLocaleString()}주 · 평단 ${open.entryPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
       : '보유 없음'
 
-    if (modelId === 'infinite-buying') {
+    if (algo === 'infinite-buying') {
       const p = cfg.ib ?? DEFAULT_IB_PARAMS
       const target = open ? open.entryPrice * (1 + p.targetPct / 100) : null
       const last = bars[i]?.c ?? 0
@@ -119,7 +124,7 @@ export function computeSignals(
       }
     }
 
-    if (modelId === 'value-rebalancing') {
+    if (algo === 'value-rebalancing') {
       const p = cfg.vr ?? DEFAULT_VR_PARAMS
       return {
         symbol: sleeve.symbol,

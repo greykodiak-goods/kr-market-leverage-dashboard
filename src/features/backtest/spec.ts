@@ -74,14 +74,9 @@ export function fingerprint(spec: ModelSpec): string {
 
 export function buildSpec(modelId: string, cfg: ModelConfig): ModelSpec {
   const meta = modelMeta(modelId)
-  const engine =
-    modelId === 'infinite-buying'
-      ? 'infinite-buying'
-      : modelId === 'value-rebalancing'
-        ? 'value-rebalancing'
-        : meta.type === 'rotation'
-          ? 'rotation'
-          : 'rule'
+  // 엔진은 모델 id가 아니라 meta.algo가 정한다(models.ts AlgoKind 주석 참조).
+  // 기존 두 모델은 algo 값이 곧 종전 문자열이라 지문(fingerprint)이 바뀌지 않는다.
+  const engine: ModelSpec['engine'] = meta.algo ?? (meta.type === 'rotation' ? 'rotation' : 'rule')
 
   const rules: ModelSpec['rules'] = {}
   if (engine === 'rule' && cfg.strategy) {

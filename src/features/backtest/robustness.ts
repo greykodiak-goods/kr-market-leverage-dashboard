@@ -101,7 +101,9 @@ export function buildVariants(modelId: string, base: ModelConfig): Variant[] {
     }
     for (const f of [0.5, 2]) push(`리밸주기 ×${f}`, '파라미터', { rot: { ...rot, rebalanceDays: scaled(rot.rebalanceDays, f, 5) } })
     push(`최근제외 ${rot.skipDays}→${rot.skipDays > 0 ? 0 : 21}`, '파라미터', { rot: { ...rot, skipDays: rot.skipDays > 0 ? 0 : 21 } })
-  } else if (modelId === 'infinite-buying') {
+  } else if (meta.algo === 'infinite-buying') {
+    // 엔진 분기와 같은 기준(meta.algo). modelId 문자열이면 같은 기법의 종목
+    // 변형 모델이 VR 변형(아래 else)으로 잘못 흔들린다.
     const ib = base.ib ?? DEFAULT_IB_PARAMS
     for (const f of [0.5, 1.5]) push(`분할수 ×${f}`, '파라미터', { ib: { ...ib, splits: scaled(ib.splits, f, 2) } })
     for (const t of [Math.max(1, ib.targetPct - 5), ib.targetPct + 5]) {

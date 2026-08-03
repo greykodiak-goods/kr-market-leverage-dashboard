@@ -89,9 +89,62 @@ function runSleeve(modelId: string, cfg: ModelConfig, hist: HistoryResult, sleev
   const bars = hist.bars
   const startIdx = computeStartIdx(bars, cfg.startDate)
   const settings = { ...cfg.settings, initialCapital: sleeveCapital }
-  if (modelId === 'infinite-buying') return runInfiniteBuying(bars, startIdx, cfg.ib ?? DEFAULT_IB_PARAMS, settings)
-  if (modelId === 'value-rebalancing') return runValueRebalancing(bars, startIdx, cfg.vr ?? DEFAULT_VR_PARAMS, settings)
+  // 엔진 선택은 **모델 id가 아니라 meta.algo**가 결정한다. 같은 기법을 다른
+  // 종목에 얹은 모델이 새 id로 들어와도 여기서 조용히 규칙형으로 새지 않는다.
+  const meta = modelMeta(modelId)
+  const identity = { strategyId: modelId, strategyName: meta.name }
+  if (meta.algo === 'infinite-buying') {
+    return runInfiniteBuying(bars, startIdx, cfg.ib ?? DEFAULT_IB_PARAMS, settings, identity)
+  }
+  if (meta.algo === 'value-rebalancing') {
+    return runValueRebalancing(bars, startIdx, cfg.vr ?? DEFAULT_VR_PARAMS, settings, identity)
+  }
   return runBacktest(bars, startIdx, cfg.strategy ?? clonePreset(modelId), settings)
+}
+
+// ---- 레버리지 ETF 실측 위험 (표시 전용) ------------------------------------
+// 규칙 4의 "극단 낙폭 경고"에 숫자를 하드코딩하지 않기 위한 계산기다.
+// 기억으로 적은 수치("2022년 약 −91%")는 검증할 수 없고 데이터가 바뀌면 거짓이
+// 되므로, 실제로 로드된 봉에서 달력연도별 낙폭을 직접 계산해 화면에 [실측]으로
+// 찍는다.
+//
+// ⚠️ 이 값은 **사후 통계이며 어떤 매매 판단에도 쓰이지 않는다.** 엔진 바깥의
+//    표시 경로에서만 호출되므로 규칙 1(미래참조 금지)과 무관하다 — 엔진에
+//    끌어다 쓰지 말 것(연 전체를 훑는 순간 그 자체가 미래참조가 된다).
+export interface CalendarYearRisk {
+  year: string
+  mddPct: number // 그 해 안에서의 최대 낙폭 % (연중 고점 대비, 음수)
+  retPct: number // 그 해 수익률 % (연중 첫 종가 → 마지막 종가)
+  days: number
+}
+
+export function buyHoldYearlyRisk(bars: { date: string; c: number }[]): CalendarYearRisk[] {
+  const byYear = new Map<string, { c: number }[]>()
+  for (const b of bars) {
+    const y = b.date.slice(0, 4)
+    const arr = byYear.get(y)
+    if (arr) arr.push(b)
+    else byYear.set(y, [b])
+  }
+  const out: CalendarYearRisk[] = []
+  for (const [year, rows] of [...byYear.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+    if (rows.length < 2 || rows[0].c <= 0) continue
+    let peak = rows[0].c
+    let mdd = 0
+    for (const r of rows) {
+      peak = Math.max(peak, r.c)
+      if (peak > 0) mdd = Math.min(mdd, ((r.c - peak) / peak) * 100)
+    }
+    out.push({ year, mddPct: mdd, retPct: (rows[rows.length - 1].c / rows[0].c - 1) * 100, days: rows.length })
+  }
+  return out
+}
+
+/** 로드된 구간에서 가장 낙폭이 컸던 달력연도. 데이터가 없으면 null. */
+export function worstCalendarYear(bars: { date: string; c: number }[]): CalendarYearRisk | null {
+  const rows = buyHoldYearlyRisk(bars).filter((r) => r.days >= 60) // 상장 첫 해 등 반쪽 연도 제외
+  if (rows.length === 0) return null
+  return rows.reduce((a, b) => (b.mddPct < a.mddPct ? b : a))
 }
 
 // 슬리브 자산곡선들을 날짜 유니언 위에서 합산(장 휴일 어긋남은 직전값 유지).
