@@ -28,6 +28,10 @@
 //   아직 리포에 없다). 화면과 **같은 어댑터**(src/features/backtest/priceSource.ts)를 쓰므로
 //   두 쪽이 다른 소스로 갈릴 수 없다. `krx`인데 데이터가 없으면 **굽기를 중단한다**(폴백 없음).
 //   ⚠️ 벤치(KODEX 200)·참고선(QQQ·QLD·금·환율)은 소스와 무관하게 **항상 야후**다.
+//   ⚠️ 2026-08-03 — 야후에서 받되 **비교 대상**(벤치·QQQ 벽)은 `COMPARE_BASIS`를 따른다.
+//      국내 시세가 KRX 정본(가격수익)이면 `adjclose ÷ close` 계수를 곱하지 않아 배당 기준을 맞춘다.
+//      **신호 입력**(레짐 지수·게이트 벤치)과 **보유 자산 슬리브**(금)는 총수익 그대로다 —
+//      비교 기준을 바꾸면서 전략 행동까지 바꾸지 않기 위해서다(그 편향은 산출물 note에 남긴다).
 //
 // 실행: node scripts/preset-precompute.mjs   (GHA backtest.yml MODE=presets)
 //       PRICE_SOURCE=krx node scripts/preset-precompute.mjs
@@ -90,6 +94,22 @@ const OUT_PATH = join(root, 'public', 'data', 'presets-precomputed.json')
  *   어느 시세로 구운 수치인지 산출물이 스스로 말하게 한다. 야후(총수익)와 KRX 정본(가격수익)은
  *   같은 표에서 비교하면 안 되는 값이라, 소스 표기가 없으면 그 표가 곧 거짓이 된다(규칙 3).
  * 전부 필드 추가만이라 화면(precomputed.ts)은 schema 1·2·3 산출물도 계속 읽는다(없는 값은 '—'·상수 강등).
+ *
+ * ── 2026-08-03 **비교 기준(compareBasis)은 schema를 올리지 못한 채** 추가됐다 ─────────────
+ * 벤치(KODEX 200)·참고 벽(QQQ)을 전략과 **같은 수익 기준**으로 받았는지 산출물이 스스로 말하도록
+ * `compareBasis` 필드를 넣었다. 원래 지시는 **schema 5로 올리는 것**이었는데 올리지 못했다:
+ *   ⛔ 화면 리더 `src/features/backtest/precomputed.ts`의 `SUPPORTED_PRECOMPUTE_SCHEMAS`가
+ *      `[1, 2, 3, 4]`라서, 5로 구우면 `toPrecomputedIndex()`가 산출물을 **통째로 거부**한다
+ *      (화면에서 사전계산 프리셋이 사라진다 — `tests/perfstats.test.ts`가 실제로 이를 잡았다).
+ *      그 파일은 이 작업의 **파일 경계 밖**(수정 금지)이라 같이 고칠 수 없었다.
+ * **버전을 올리지 않아도 의미는 깨지지 않는다** — 신·구 판별은 필드의 유무가 하기 때문이다:
+ *   · 필드가 **있으면** 그 값이 사실이다(이 러너는 항상 명시적으로 굽는다).
+ *   · 필드가 **없으면 `'total'`이 사실이다** — 2026-08-03 이전 산출물은 전략이 KRX 가격수익이어도
+ *     벤치·벽만 야후 총수익으로 구웠다. 조용히 새 기본값('price')으로 읽으면 옛 수치의 의미가 바뀐다.
+ *     (`priceSource`가 없으면 'yahoo'로 읽는 것과 **정확히 같은 패턴**이다.)
+ * 후속(총괄 몫, 이 PR 밖): ① `SUPPORTED_PRECOMPUTE_SCHEMAS`에 `5` 추가 → ② 리더에
+ *   `compareBasis?: ReturnBasis` + **없으면 `'total'`** 폴백 → ③ 여기 `PRECOMPUTE_SCHEMA = 5`.
+ *   세 개는 **같은 PR에서** 움직여야 한다(하나만 가면 화면이 죽거나 표기가 사라진다).
  */
 export const PRECOMPUTE_SCHEMA = 4
 
@@ -136,7 +156,61 @@ function log(msg: string) {
 // 데이터 로더 — spec-backtest.entry.ts / idea-lab.entry.ts와 같은 방식
 // ============================================================================
 
-async function fetchDaily(symbol: string, range = RANGE): Promise<DailyBar[]> {
+// ---------------------------------------------------------------- 비교 기준
+//
+// 정본 규약은 `scripts/idea-lab.entry.ts`가 갖는다(2026-08-03 `2dbfbac`). 여기서는 **같은 이름·같은
+// 의미**로 자립적으로 구현한다 — 러너끼리 import하면 의존이 얽히므로 `fetchDaily`가 복제돼 있는
+// 것과 같은 구조를 따른다.
+
+/**
+ * 수익 기준 — 배당을 넣느냐 빼느냐.
+ *   `total` = 총수익(배당 재투자). 야후 `adjclose ÷ close` 계수를 OHLC에 곱한다.
+ *   `price` = 가격수익(배당 제외). 계수를 곱하지 않는다.
+ *
+ * 왜 골라야 하나: 국내 유니버스를 KRX 정본으로 바꾸면 **전략은 가격수익**이 되는데(KRX 원주가에는
+ * 현금배당이 반영되지 않는다), 벤치(KODEX 200)와 QQQ 벽은 야후 adjclose 기반이라 **총수익**이었다.
+ * 즉 "배당 없는 전략 vs 배당 있는 지수"를 붙여 놓고 알파를 잰 셈이고, KODEX 200 배당수익률만큼
+ * **모든 알파가 전략에 불리하게** 찍혔다. 그래서 시세 소스가 krx면 벤치·벽도 가격수익으로 맞춘다.
+ *
+ * ⚠️ 이건 "전략을 유리하게 만드는 보정"이 아니다. 어느 쪽으로도 기울지 않은 비교를 만드는 것이고,
+ *    그래서 결과가 나빠질 수도 좋아질 수도 있다. 바꾼 뒤의 수치만 쓴다.
+ */
+export type ReturnBasis = 'total' | 'price'
+
+/** 시세 소스에 맞는 비교 기준 — 전략과 벤치의 배당 반영 여부를 일치시킨다. */
+export function compareBasisFor(source: PriceSource): ReturnBasis {
+  return source === 'krx' ? 'price' : 'total'
+}
+
+/**
+ * 벤치·벽처럼 **전략과 비교되는** 자산의 수익 기준. `main()` 시작에서 한 번 정해진다.
+ * 국내 유니버스 시세는 `loadKrPrices` 어댑터를 지나므로 이 값을 보지 않는다.
+ */
+let COMPARE_BASIS: ReturnBasis = 'total'
+export function setCompareBasis(b: ReturnBasis): void {
+  COMPARE_BASIS = b
+}
+/** 지금 걸려 있는 비교 기준(테스트·진단용). */
+export function compareBasis(): ReturnBasis {
+  return COMPARE_BASIS
+}
+export function compareBasisNote(b: ReturnBasis): string {
+  return b === 'price'
+    ? '비교 기준: **가격수익**(배당 제외) — 전략(KRX 원주가)과 벤치·벽을 **같은 기준**으로 맞췄다. ' +
+        '벤치의 배당수익률만큼 알파를 깎던 편향이 제거된 수치다.'
+    : '비교 기준: **총수익**(배당 재투자) — 전략도 야후 adjclose 기반이라 벤치와 기준이 같다.'
+}
+
+/**
+ * **비교 대상**(벤치·참고 벽) 전용 로더 — 기준을 한 자리에서 건다.
+ * 벤치와 벽이 각자 다른 기준으로 로드되면 같은 표 안에서 배당이 섞이고,
+ * 그 차이는 알파 몇 %p로 조용히 흡수된다.
+ */
+export function fetchCompare(symbol: string, range = RANGE): Promise<DailyBar[]> {
+  return fetchDaily(symbol, range, COMPARE_BASIS)
+}
+
+export async function fetchDaily(symbol: string, range = RANGE, basis: ReturnBasis = 'total'): Promise<DailyBar[]> {
   const qs = range.startsWith('since:')
     ? `period1=${Math.floor(Date.parse(range.slice(6)) / 1000)}&period2=${Math.floor(Date.now() / 1000)}`
     : `range=${range}`
@@ -159,8 +233,10 @@ async function fetchDaily(symbol: string, range = RANGE): Promise<DailyBar[]> {
     const cl = q.close?.[i]
     const v = q.volume?.[i]
     if ([o, h, l, cl].some((x: unknown) => x == null || !Number.isFinite(x as number))) continue
-    // 총수익 보정(규칙 3): adjclose ÷ close 계수를 OHLC에 적용 (배당 재투자 기준)
-    const f = adj[i] != null && Number.isFinite(adj[i]!) && cl > 0 ? adj[i]! / cl : 1
+    // 총수익 보정(규칙 3): adjclose ÷ close 계수를 OHLC에 적용 (배당 재투자 기준).
+    // basis='price'면 곱하지 않는다 — 배당을 뺀 가격수익으로 남긴다(전략과 기준 맞추기).
+    const f =
+      basis === 'price' ? 1 : adj[i] != null && Number.isFinite(adj[i]!) && cl > 0 ? adj[i]! / cl : 1
     // 한국거래소는 서머타임이 없으므로 KST(+9h) 고정 — 화면(exchangeLocalDate)과 수식이 같다.
     const date = new Date(ts[i] * 1000 + 9 * 3600 * 1000).toISOString().slice(0, 10)
     out.push({ date, t: ts[i], o: o * f, h: h * f, l: l * f, c: cl * f, v: Number.isFinite(v) ? v : 0 })
@@ -230,6 +306,16 @@ export interface PrecomputedFile {
   priceSourceNote: string
   /** 그 소스의 한계 목록 — 화면이 그대로 나열한다(규칙 3) */
   priceSourceLimits: string[]
+  /**
+   * 벤치(KODEX 200)·참고 벽(QQQ)을 **어느 수익 기준으로** 받았는지(2026-08-03~).
+   * `total` = 총수익(배당 재투자) · `price` = 가격수익(배당 제외).
+   *
+   * ⚠️ **2026-08-03 이전 산출물에는 이 필드가 없다 → `'total'`로 읽어야 한다.** 그때는 전략이 KRX
+   * 가격수익이어도 벤치·벽만 야후 총수익으로 구웠다는 것이 **사실**이기 때문이다. 없는 값을
+   * 새 기본값('price')으로 읽으면 옛 수치의 의미가 조용히 바뀐다(`priceSource`와 같은 패턴).
+   * schema 번호를 못 올린 사정은 `PRECOMPUTE_SCHEMA` 주석 참조 — 신·구 판별은 **필드의 유무**가 한다.
+   */
+  compareBasis: ReturnBasis
 }
 
 /** `YYYY-MM-DD`에서 n년 뺀 문자열. 문자열 비교로만 쓰므로 2/29 같은 날도 사전순으로 안전하다. */
@@ -401,8 +487,15 @@ export function buildPayload(
   walls: WallStats[] = [],
   /** 국내 시세 소스 메타(schema 4~). 안 넘기면 야후 전제 — 옛 호출부와 수치가 갈리지 않는다. */
   priceMeta?: Pick<PriceSourceMeta, 'source' | 'note' | 'limits'>,
+  /**
+   * 벤치·벽의 비교 기준(2026-08-03~). **안 넘기면 `'total'`** — 그 이전 산출물이 전부
+   * 총수익 벤치로 구워졌다는 것이 사실이므로, 옛 호출부의 의미를 그대로 보존한다
+   * (바로 위 `priceSource ?? 'yahoo'`와 정확히 같은 패턴).
+   */
+  basis?: ReturnBasis,
 ): PrecomputedFile {
   const source: PriceSource = priceMeta?.source ?? 'yahoo'
+  const compareBasis: ReturnBasis = basis ?? 'total'
   return {
     schema: PRECOMPUTE_SCHEMA,
     asOf,
@@ -412,6 +505,7 @@ export function buildPayload(
     priceSource: source,
     priceSourceNote: priceMeta?.note ?? `시세: Yahoo Finance chart v8 · ${KR_LOAD_NOTE}`,
     priceSourceLimits: priceMeta?.limits ? [...priceMeta.limits] : [],
+    compareBasis,
     note:
       '시뮬레이터 프리셋을 화면과 같은 엔진·같은 비용으로 미리 돌린 산출물이다. ' +
       '곡선은 주 1점으로 줄였고(최저점·최종일 보존), 요약 수치는 줄이기 전 원곡선에서 쟀다. ' +
@@ -429,6 +523,17 @@ export function buildPayload(
           ? 'KRX 일별 정본(원주가·분할보정 · **배당 미반영 = 가격수익**)'
           : 'Yahoo 일봉(**총수익 = 배당 재투자** · 상폐 종목 부재)'
       }. ${MIXED_SOURCE_NOTE} ` +
+      // 비교 기준 — 벤치·벽이 전략과 같은 배당 기준인지 산출물이 스스로 말한다(규칙 3).
+      (compareBasis === 'price'
+        ? '⚖️ 비교 기준: **가격수익**(배당 제외) — 벤치(KODEX 200)와 참고 벽(QQQ)도 전략과 **같은 기준**으로 ' +
+          '받았다(야후 adjclose 계수를 곱하지 않았다). 벤치의 배당수익률만큼 알파를 깎던 편향이 제거된 수치이며, ' +
+          '이건 전략을 유리하게 만드는 보정이 아니라 **기울지 않은 비교**다(결과가 나빠질 수도 있다). ' +
+          '⚠️ 2026-08-03 이전 산출물(compareBasis 필드가 없는 파일)의 알파는 벤치만 총수익이라 전략에 불리하게 찍혀 있었으므로 ' +
+          '**직접 비교하지 마라.** 남는 한계 두 가지: ① **절대 수익률**은 양쪽에서 배당을 똑같이 뺀 값이라 ' +
+          '총수익 기준 표와 나란히 놓을 수 없다. ② **결합 프리셋의 금(GLD) 슬리브는 여전히 총수익**이다 — ' +
+          '슬리브는 비교 대상이 아니라 전략이 **보유하는 자산**이라 기준을 걸지 않았고, 그만큼 ' +
+          '가격수익 전략 안에 총수익 자산이 섞여 있다. 레짐(시장게이트) 시계열도 **신호 입력**이라 총수익 그대로다. '
+        : '⚖️ 비교 기준: **총수익**(배당 재투자) — 전략도 야후 adjclose 기반이라 벤치와 기준이 같다. ') +
       `${source === 'yahoo' ? `${KR_LOAD_NOTE} ` : ''}` +
       '매수 권유가 아니다.',
     presets,
@@ -572,6 +677,17 @@ async function main(): Promise<void> {
   //        야후로 조용히 내려가면 총수익/가격수익이 섞인 표가 나온다.
   const priceSource = priceSourceFromEnv(process.env)
   log(`시세 소스: ${priceSource}${priceSource === 'yahoo' ? ' (기본 · PRICE_SOURCE=krx로 전환)' : ' (PRICE_SOURCE=krx)'}`)
+  // 비교 기준을 **여기 한 곳에서** 정한다. 벤치와 벽이 각자 다른 기준으로 로드되면 같은 표 안에서
+  // 배당이 섞이고, 그 차이는 알파 몇 %p로 조용히 흡수된다.
+  const basis = compareBasisFor(priceSource)
+  setCompareBasis(basis)
+  log(`⚖️ ${compareBasisNote(basis)}`)
+  if (basis === 'price')
+    log(
+      '   ↑ 2026-08-03 이전 산출물(compareBasis 필드가 없는 파일)의 알파는 **벤치만 총수익**이라 전략에 불리하게 찍혀 있었다 — ' +
+        '그 수치와 직접 비교하지 마라. 이건 전략을 유리하게 만드는 보정이 아니라 기울지 않은 비교이며, ' +
+        '결과가 나빠질 수도 있다.',
+    )
   const load = await loadKrPrices(universe.union, priceSource, {
     // 동시성 1 = 기존 순차 로딩 그대로(유량 제한 안쪽). 수치는 한 자리도 바뀌지 않는다.
     yahoo: { fetchDaily: (sym) => fetchDaily(sym), betweenAttempts: () => sleep(120), concurrency: 1 },
@@ -596,16 +712,48 @@ async function main(): Promise<void> {
   if (okCount === 0) throw new Error(`시세를 하나도 받지 못했습니다 — ${priceSource} 응답을 확인하세요`)
 
   // ---- 벤치마크(KODEX 200) — 알파 판정 기준(규칙 5) ----
+  //
+  // 벤치는 **비교 대상**이므로 COMPARE_BASIS를 따른다(KRX 소스면 가격수익).
   let bench: DailyBar[] | undefined
   try {
-    const b = await fetchDaily(BENCH_SYMBOL)
+    const b = await fetchCompare(BENCH_SYMBOL)
     if (b.length >= 2) bench = b
   } catch {
     /* 아래에서 경고 */
   }
   if (!bench) log('⚠️ 벤치마크(KODEX 200) 로드 실패 — 알파는 null로 굽습니다')
+  else
+    log(
+      `벤치마크 ${BENCH_SYMBOL} ${bench.length}봉 · ` +
+        `${basis === 'price' ? '가격수익(배당 제외 — 전략과 같은 기준)' : '총수익(배당 재투자)'}`,
+    )
+
+  /**
+   * 시장게이트가 보는 레짐 벤치. **비교 기준과 무관하게 항상 총수익**이다 —
+   * 레짐은 비교 대상이 아니라 **신호 입력**이라서, 여기에 기준을 걸면 배당 비대칭 제거가
+   * 전략 행동까지 바꿔 버린다. 이번 변경은 "무엇과 비교하는가"만 건드린다.
+   * 총수익 모드(야후 경로)에서는 위 벤치와 같은 값이라 **추가 호출이 아예 없다.**
+   */
+  let benchRegime: DailyBar[] | undefined = bench
+  const needGate = PRESETS.some((p) => p.kind === 'combo' && p.marketGate === true)
+  const needGold = PRESETS.some((p) => p.kind === 'combo' && normalizeGoldW(p.goldW) > 0)
+  if (basis === 'price' && needGate && bench) {
+    await sleep(120)
+    try {
+      const rb = await fetchDaily(BENCH_SYMBOL) // 기본값 total — 신호 입력이라 기준을 따르지 않는다
+      benchRegime = rb.length >= 2 ? rb : undefined
+    } catch {
+      benchRegime = undefined
+    }
+    log(
+      benchRegime
+        ? `레짐용 벤치: ${BENCH_SYMBOL} **총수익** ${benchRegime.length}봉 — 신호 입력이라 비교 기준을 따르지 않는다.`
+        : `⚠️ 레짐용 벤치(${BENCH_SYMBOL} · 총수익) 로드 실패 — 시장게이트 없이 굽습니다(가격수익 벤치로 대신하지 않습니다).`,
+    )
+  }
 
   // ---- 레짐 지수 — 프리셋 중 regime을 쓰는 것이 있으면 함께 받는다 ----
+  // ⚠️ 이 계열은 **신호 입력**이라 비교 기준을 따르지 않는다(기본 total 그대로).
   const regimeSymbols = new Set<string>()
   for (const p of PRESETS) if (p.kind !== 'momentum' && p.spec.regime) regimeSymbols.add(p.spec.regime.symbol)
   for (const sym of regimeSymbols) {
@@ -622,19 +770,19 @@ async function main(): Promise<void> {
   //
   // 32차 프리셋(calmar-max)만 쓰는 계열이다. 필요한 프리셋이 없으면 아예 받지 않는다.
   // 하나라도 실패하면 **그 옵션만** 꺼지고 나머지는 그대로 돈다(경고를 남긴다).
+  // needGate·needGold는 위 벤치 절에서 이미 정했다(레짐용 총수익 벤치를 받을지 판단해야 했다).
   const extra: ExtraSeries = {}
-  const needGate = PRESETS.some((p) => p.kind === 'combo' && p.marketGate === true)
-  const needGold = PRESETS.some((p) => p.kind === 'combo' && normalizeGoldW(p.goldW) > 0)
   if (needGate) {
-    if (!bench) log('⚠️ 벤치가 없어 시장게이트 레짐을 만들 수 없습니다 — 게이트 없이 실행합니다')
+    if (!benchRegime) log('⚠️ 벤치가 없어 시장게이트 레짐을 만들 수 없습니다 — 게이트 없이 실행합니다')
     else {
       let fb: DailyBar[] = []
       try {
+        // 폴백 지수도 **신호 입력**이라 총수익 그대로다(비교 기준을 따르지 않는다).
         fb = await fetchDaily(REGIME_FALLBACK_SYMBOL)
       } catch {
         log(`⚠️ 레짐 폴백(${REGIME_FALLBACK_SYMBOL}) 로드 실패 — 벤치 구간만으로 게이트를 판정합니다`)
       }
-      const spliced = spliceRegimeCurve(bench, fb)
+      const spliced = spliceRegimeCurve(benchRegime, fb)
       extra.regime = spliced.length >= 2 ? spliced : null
       log(
         `레짐 판정 시계열: ${BENCH_SYMBOL}${fb.length ? ` + ${REGIME_FALLBACK_SYMBOL} 폴백(수익률만 이어 붙임 · 이음매 레벨 정합)` : ''}` +
@@ -644,8 +792,12 @@ async function main(): Promise<void> {
   }
   if (needGold) {
     try {
+      // ⚠️ 금(GLD)은 **비교 대상이 아니라 전략이 보유하는 자산**이다 — 기준을 걸지 않는다
+      //    (총수익 그대로). 그래서 가격수익 모드에서는 "가격수익 전략에 총수익 슬리브가 섞여
+      //    있다"는 편향이 남는다. 숨기지 않고 산출물 note와 아래 로그에 한 줄로 남긴다(규칙 3).
       const gld = await fetchDaily(GOLD_SYMBOL)
       await sleep(120)
+      // 환율(KRW=X)은 배당 개념이 없어 adjclose가 close와 같다 → 계수가 항상 1이라 기준과 무관하다.
       const fx = await fetchDaily(FX_SYMBOL)
       const curve = toKrwCurve(gld, fx)
       if (curve.length >= 2) {
@@ -654,6 +806,12 @@ async function main(): Promise<void> {
           `금 슬리브: ${GOLD_SYMBOL} ${gld.length}봉 · 환율 ${fx.length}봉 → 원화 곡선 ${curve.length}점 ` +
             `(${curve[0].date}~${curve[curve.length - 1].date}) · 결측일 직전 환율 이월 · 환헤지 없음`,
         )
+        if (basis === 'price')
+          log(
+            `⚠️ 한계: 금 슬리브(${GOLD_SYMBOL})는 **총수익**(배당·분배금 재투자) 그대로다 — 슬리브는 비교 대상이 ` +
+              '아니라 전략이 보유하는 자산이라 기준을 걸지 않았다. 그만큼 **가격수익 전략 안에 총수익 자산이 ' +
+              '섞여 있다**(결합 프리셋의 금 비중만큼 성적이 후해진다).',
+          )
       } else log(`⚠️ ${GOLD_SYMBOL} 원화 환산 실패(환율 구간 불일치) — 금 슬리브 없이 실행합니다`)
     } catch (e) {
       log(`⚠️ ${GOLD_SYMBOL}·${FX_SYMBOL} 로드 실패 — 금 슬리브 없이 실행합니다 (${String(e)})`)
@@ -696,8 +854,11 @@ async function main(): Promise<void> {
     const to = out.reduce((a, p) => (p.endDate > a ? p.endDate : a), out[0].endDate)
     log(`\n참고 벽 구간 ${from} ~ ${to} — 전략 실행 구간으로 잘라 다시 잰다(옮겨 적은 값이 아니다).`)
     try {
-      const q = await fetchDaily(QQQ_SYMBOL)
+      // QQQ 벽도 비교 대상이다 — 전략이 가격수익인데 벽만 배당 재투자면 벽이 부당하게 높아진다.
+      const q = await fetchCompare(QQQ_SYMBOL)
       await sleep(120)
+      // 환율(KRW=X)은 **배당 개념이 없어** adjclose가 close와 같다 → 계수가 항상 1이다.
+      // 기준을 걸든 안 걸든 같은 값이라 여기는 기본(total)로 둔다(무관함을 코드로 남긴다).
       const fx = await fetchDaily(FX_SYMBOL)
       const krw = toKrwCurve(q, fx)
       const w = wallStats('qqqKrw', 'QQQ 원화 보유', krw, from, to)
@@ -727,11 +888,12 @@ async function main(): Promise<void> {
     }
   }
 
-  const payload = buildPayload(out, asOf, new Date().toISOString(), cost, walls, load.meta)
+  const payload = buildPayload(out, asOf, new Date().toISOString(), cost, walls, load.meta, basis)
   mkdirSync(dirname(OUT_PATH), { recursive: true })
   writeFileSync(OUT_PATH, `${JSON.stringify(payload)}\n`, 'utf8')
   log(
-    `\n✅ ${OUT_PATH} · 프리셋 ${out.length}개 · 참고 벽 ${walls.length}개 · asOf ${asOf} · 시세 소스 ${payload.priceSource}`,
+    `\n✅ ${OUT_PATH} · 프리셋 ${out.length}개 · 참고 벽 ${walls.length}개 · asOf ${asOf} · ` +
+      `시세 소스 ${payload.priceSource} · 비교 기준 ${payload.compareBasis} · schema ${payload.schema}`,
   )
   log(
     '⚠️ 랭킹은 KRX 실측이라 목록 선택편향이 없지만 **가격 생존편향(상폐 종목 시세 부재)은 남아 있고**, ' +

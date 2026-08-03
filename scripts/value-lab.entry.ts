@@ -71,6 +71,8 @@ import {
   parseKrxDailyStock,
 } from '../src/features/backtest/krxDailyPrices'
 import { KRX_PIT_PATH, krxPitMarketCodes, krxPitSourceNote, krxPitYears, parseKrxPitUniverse } from '../src/features/backtest/krxPitUniverse'
+// 비교 기준(배당 반영 여부)을 시세 소스에서 유도하려고 타입만 가져온다 — 이 러너는 KRX 정본 전용이다.
+import type { PriceSource } from '../src/features/backtest/priceSource'
 import {
   DSR_PASS_THRESHOLD,
   PBO_WARN_THRESHOLD,
@@ -850,11 +852,77 @@ export function loadValueUniverse(root = ROOT): { narrow: ValueUniverse; wide: V
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+// ---------------------------------------------------------------- 비교 기준
+//
+// 정본 규약은 `scripts/idea-lab.entry.ts`가 갖는다(2026-08-03 `2dbfbac`). 여기서는 **같은 이름·같은
+// 의미**로 자립적으로 구현한다 — 러너끼리 import하면 의존이 얽히므로 `fetchDaily`가 복제돼 있는
+// 것과 같은 구조를 따른다.
+
+/**
+ * 수익 기준 — 배당을 넣느냐 빼느냐.
+ *   `total` = 총수익(배당 재투자). 야후 `adjclose ÷ close` 계수를 OHLC에 곱한다.
+ *   `price` = 가격수익(배당 제외). 계수를 곱하지 않는다.
+ *
+ * 왜 골라야 하나: 이 러너의 국내 시세는 **KRX 일별 정본**이라 전략이 **가격수익**인데(KRX 원주가에는
+ * 현금배당이 반영되지 않는다), 벤치(KODEX 200)와 QQQ 벽은 야후 adjclose 기반이라 **총수익**이었다.
+ * 즉 "배당 없는 전략 vs 배당 있는 지수"를 붙여 놓고 알파를 잰 셈이고, KODEX 200 배당수익률만큼
+ * **모든 알파가 전략에 불리하게** 찍혔다. 그래서 벤치·벽도 가격수익으로 맞춘다.
+ *
+ * ⚠️ 이건 "전략을 유리하게 만드는 보정"이 아니다. 어느 쪽으로도 기울지 않은 비교를 만드는 것이고,
+ *    그래서 결과가 나빠질 수도 좋아질 수도 있다. 바꾼 뒤의 수치만 쓴다.
+ */
+export type ReturnBasis = 'total' | 'price'
+
+/** 시세 소스에 맞는 비교 기준 — 전략과 벤치의 배당 반영 여부를 일치시킨다. */
+export function compareBasisFor(source: PriceSource): ReturnBasis {
+  return source === 'krx' ? 'price' : 'total'
+}
+
+/**
+ * 이 러너의 국내 시세 소스는 **항상 KRX 정본**이다 — `loadKrxPrices()`가 리포의 정본 파일을 직접
+ * 읽으므로 `PRICE_SOURCE` 선택지가 없다(오프라인 모드도 그 정본으로 동일가중 지수를 만든다).
+ * 그래서 비교 기준은 상수처럼 `price`로 정해지지만, **소스에서 유도한다는 사실**을 코드로 남긴다 —
+ * 나중에 야후 경로가 생기면 `compareBasisFor`가 자동으로 `total`을 준다.
+ */
+export const VALUE_PRICE_SOURCE: PriceSource = 'krx'
+
+/**
+ * 벤치·벽처럼 **전략과 비교되는** 자산의 수익 기준. `run()` 시작에서 한 번 정해진다.
+ * 국내 유니버스 시세(KRX 정본)는 야후를 타지 않으므로 이 값을 보지 않는다.
+ */
+let COMPARE_BASIS: ReturnBasis = 'total'
+export function setCompareBasis(b: ReturnBasis): void {
+  COMPARE_BASIS = b
+}
+/** 지금 걸려 있는 비교 기준(테스트·진단용). */
+export function compareBasis(): ReturnBasis {
+  return COMPARE_BASIS
+}
+export function compareBasisNote(b: ReturnBasis): string {
+  return b === 'price'
+    ? '비교 기준: **가격수익**(배당 제외) — 전략(KRX 원주가)과 벤치·벽을 **같은 기준**으로 맞췄다. ' +
+        '벤치의 배당수익률만큼 알파를 깎던 편향이 제거된 수치다.'
+    : '비교 기준: **총수익**(배당 재투자) — 전략도 야후 adjclose 기반이라 벤치와 기준이 같다.'
+}
+
+/**
+ * **비교 대상**(벤치·참고 벽) 전용 로더 — 기준을 한 자리에서 건다.
+ * 벤치와 벽이 각자 다른 기준으로 로드되면 같은 표 안에서 배당이 섞이고,
+ * 그 차이는 알파 몇 %p로 조용히 흡수된다.
+ */
+export function fetchCompare(symbol: string, range = VALUE_BENCH_RANGE): Promise<DailyBar[]> {
+  return fetchDaily(symbol, range, COMPARE_BASIS)
+}
+
 /**
  * 야후 일봉. `scripts/shortterm-lab.entry.ts`와 **같은 규약**(총수익 보정 · KST 날짜)이다.
  * idea-lab의 로더가 export돼 있지 않아 복제한다 — 정본 합류는 별도 작업이다.
  */
-export async function fetchDaily(symbol: string, range = VALUE_BENCH_RANGE): Promise<DailyBar[]> {
+export async function fetchDaily(
+  symbol: string,
+  range = VALUE_BENCH_RANGE,
+  basis: ReturnBasis = 'total',
+): Promise<DailyBar[]> {
   const qs = range.startsWith('since:')
     ? `period1=${Math.floor(Date.parse(range.slice(6)) / 1000)}&period2=${Math.floor(Date.now() / 1000)}`
     : `range=${range}`
@@ -875,8 +943,14 @@ export async function fetchDaily(symbol: string, range = VALUE_BENCH_RANGE): Pro
     const cl = q.close?.[i]
     const v = q.volume?.[i]
     if ([o, h, l, cl].some((x: unknown) => x == null || !Number.isFinite(x as number))) continue
-    // 총수익 보정(규칙 3): adjclose ÷ close 계수를 OHLC에 적용
-    const fac = adj[i] != null && Number.isFinite(adj[i] as number) && cl > 0 ? (adj[i] as number) / cl : 1
+    // 총수익 보정(규칙 3): adjclose ÷ close 계수를 OHLC에 적용.
+    // basis='price'면 곱하지 않는다 — 배당을 뺀 가격수익으로 남긴다(전략과 기준 맞추기).
+    const fac =
+      basis === 'price'
+        ? 1
+        : adj[i] != null && Number.isFinite(adj[i] as number) && cl > 0
+          ? (adj[i] as number) / cl
+          : 1
     const date = new Date(ts[i] * 1000 + 9 * 3600 * 1000).toISOString().slice(0, 10) // KST
     out.push({ date, t: ts[i], o: o * fac, h: h * fac, l: l * fac, c: cl * fac, v: Number.isFinite(v) ? v : 0 })
   }
@@ -934,8 +1008,11 @@ export function equalWeightIndex(
 /** QQQ 원화 환산 보유 곡선(참고 벽). 실패하면 null — 벽 행만 빠지고 모드는 계속 돈다. */
 async function loadQqqKrwCurve(): Promise<{ curve: { date: string; equity: number }[]; note: string } | null> {
   try {
-    const qqq = await fetchDaily('QQQ')
+    // QQQ 벽도 비교 대상이다 — 전략이 가격수익인데 벽만 배당 재투자면 벽이 부당하게 높아진다.
+    const qqq = await fetchCompare('QQQ')
     await sleep(120)
+    // 환율(KRW=X)은 **배당 개념이 없어** adjclose가 close와 같다 → 계수가 항상 1이다.
+    // 기준을 걸든 안 걸든 같은 값이라 여기는 기본(total)로 둔다(무관함을 코드로 남긴다).
     const fx = await fetchDaily('KRW=X')
     const curve = toKrwCurve(qqq, fx)
     if (curve.length < 2) {
@@ -1203,7 +1280,14 @@ export function headline(
   return passed.length
 }
 
-export function disclaimer(offline: boolean): void {
+export function disclaimer(
+  offline: boolean,
+  /**
+   * 이 실행의 비교 기준. 안 넘기면 `'total'` — 2026-08-03 이전 회차는 전부 총수익 벤치였다는
+   * **사실**을 기본값으로 둔다(조용히 새 기본값으로 읽지 않는다).
+   */
+  basis: ReturnBasis = 'total',
+): void {
   log('')
   log('---')
   log('⚠️ **투자자문이 아니다.** 위 수치는 과거 시뮬레이션의 사후 통계이며 미래 수익을 보장하지 않는다.')
@@ -1215,6 +1299,15 @@ export function disclaimer(offline: boolean): void {
   if (offline) {
     log('   · 전략과 벤치가 **같은 KRX 정본**(배당 미반영·가격수익)이라 배당 편향은 서로 상쇄된다 —')
     log('     대신 벤치가 KODEX 200이 아니므로 이 알파는 이전 회차 알파와 **다른 물건**이다.')
+  } else if (basis === 'price') {
+    log('   · **배당 비대칭은 2026-08-03에 제거했다.** KRX 일별 정본은 **배당 미반영**(가격수익)이고,')
+    log('     벤치(야후 KODEX 200)와 QQQ 벽도 이제 **같은 가격수익**으로 받는다(adjclose 계수를 곱하지 않는다).')
+    log('     ⚠️ 이건 전략을 유리하게 만드는 보정이 아니라 **기울지 않은 비교**이며 결과가 나빠질 수도 있다.')
+    log('     이전 회차 알파는 벤치만 총수익이라 전략에 불리하게 찍혀 있었으므로 **직접 비교하지 마라.**')
+    log('   · 남는 것은 **절대 수익률**이다 — 양쪽에서 배당을 똑같이 뺐을 뿐이라 이 표의 CAGR을 총수익 기준')
+    log('     표와 나란히 놓을 수 없고, 배당수익률이 높은 전략과 낮은 전략을 이 표로는 구분하지 못한다.')
+    log('   · 시장게이트(12-1)가 보는 곡선만은 **총수익 벤치**로 남겨 뒀다 — 게이트는 비교 대상이 아니라')
+    log('     신호 입력이라서, 비교 기준을 바꾸면서 전략 행동까지 바꾸지 않기 위해서다.')
   } else {
     log('   · KRX 일별 정본은 **배당 미반영**(가격수익)인데 벤치(야후 KODEX 200)는 **총수익**이다 —')
     log('     알파는 그만큼 **전략에 불리한 쪽으로** 편향돼 있다(배당수익률만큼).')
@@ -1244,15 +1337,23 @@ function runOneVariant(
   deps: ValueDeps,
   benchEq: { date: string; equity: number }[],
   half: number,
+  /**
+   * 시장게이트가 보는 곡선. **비교 기준과 무관하게 항상 총수익**이며, 안 넘기면 `benchEq`다
+   * (2026-08-03 이전 호출부의 동작 그대로 — 그때는 둘이 같은 곡선이었다).
+   * 왜 나눴나: 게이트는 비교 대상이 아니라 **신호 입력**이라서, 여기에 비교 기준을 걸면
+   * 배당 비대칭 제거가 전략 행동까지 바꿔 버린다. 이번 변경은 "무엇과 비교하는가"만 건드린다.
+   */
+  regimeEq: { date: string; equity: number }[] = benchEq,
 ): VariantResult {
   const diag = newRankDiag()
   const rank = makeValueRankFn(deps, v.factors, diag)
   // 시장게이트 = 34차와 **같은 정본 함수**(idea-lab `makeRegimeExposure`). 벤치 곡선의 12-1
   // 모멘텀이 음수인 달은 노출 0 → 월 첫 거래일 시가에 전량 매도하고 그 달을 현금으로 넘긴다
   // (청산·재매수 비용을 그대로 문다). 판정 불가(데이터 부족)면 **열림(1)**이다.
-  // ⚠️ 게이트가 보는 곡선은 알파 계산에 쓰는 벤치와 **같은 곡선**이다 — offline 모드에서는
-  //    그것이 KODEX 200이 아니라 유니버스 동일가중 지수라 게이트의 의미도 함께 달라진다.
-  const exposure = v.gate ? makeRegimeExposure(benchEq, 'mom12_1') : undefined
+  // ⚠️ 게이트가 보는 곡선은 **총수익 벤치**다(알파용 벤치와 배당 기준이 다를 수 있다) —
+  //    offline 모드에서는 그것이 KODEX 200이 아니라 유니버스 동일가중 지수라 게이트의 의미도
+  //    함께 달라진다.
+  const exposure = v.gate ? makeRegimeExposure(regimeEq, 'mom12_1') : undefined
   const chain = runCustomChain(
     yearly,
     (slice) => simulateRankYear(slice.hist, `${slice.y}-01-01`, slice.syms, COST, { slots: v.slots, rank, exposure }),
@@ -1276,6 +1377,18 @@ async function run(mode: 'all' | 'offline'): Promise<void> {
   log('저PBR·저PER·고ROE를 KRX 실측 유니버스 위에서 월 리밸런스로 돌린다. 유니버스·비용·판정 프레임은')
   log('34차(krxcal)·36차(short)와 같고 **랭킹 지표만** 바뀐다 — 그래야 "재무 신호가 가격 신호보다 나은가"가')
   log('나란히 읽힌다. 변형은 **18개 고정**이며 늘리지 않는다(누적 시도가 DSR의 분모다).')
+  // 비교 기준을 **여기 한 곳에서** 정한다. 벤치와 벽이 각자 다른 기준으로 로드되면 같은 표 안에서
+  // 배당이 섞이고, 그 차이는 알파 몇 %p로 조용히 흡수된다.
+  const basis = compareBasisFor(VALUE_PRICE_SOURCE)
+  setCompareBasis(basis)
+  log('')
+  log(`⚖️ ${compareBasisNote(basis)}`)
+  if (basis === 'price')
+    log(
+      '   ↑ 2026-08-03 이전 회차의 알파는 **벤치만 총수익**이라 전략에 불리하게 찍혀 있었다 — ' +
+        '그 수치와 직접 비교하지 마라. 이건 전략을 유리하게 만드는 보정이 아니라 기울지 않은 비교이며, ' +
+        '결과가 나빠질 수도 있다.',
+    )
   if (offline) {
     log('')
     log('## ⚠️ [벤치=유니버스 동일가중 · KODEX 200 아님] — 오프라인 모드')
@@ -1317,15 +1430,23 @@ async function run(mode: 'all' | 'offline'): Promise<void> {
 
   // ---- 벤치마크 ----
   let benchEq: { date: string; equity: number }[]
+  /**
+   * 시장게이트(12-1)가 보는 곡선. **비교 기준과 무관하게 항상 총수익**이다 —
+   * 게이트는 비교 대상이 아니라 **신호 입력**이라서, 여기에 기준을 걸면 배당 비대칭 제거가
+   * 전략 행동까지 바꿔 버린다. 이번 변경은 "무엇과 비교하는가"만 건드린다.
+   */
+  let regimeEq: { date: string; equity: number }[]
   let benchLabel: string
   if (offline) {
     benchEq = equalWeightIndex(prices.histories, narrow.union, '2013-01-01')
+    regimeEq = benchEq // 오프라인 벤치는 KRX 정본에서 만들어 이미 가격수익이다(야후 계수가 없다).
     benchLabel = '유니버스 10+10 동일가중 지수 [KODEX 200 아님]'
     if (benchEq.length < 2) throw new Error('오프라인 벤치(동일가중 지수)를 만들지 못했다 — 시세 로드를 확인하라')
   } else {
     let bench: DailyBar[]
     try {
-      bench = await fetchDaily(BENCH)
+      // 벤치는 **비교 대상**이므로 COMPARE_BASIS를 따른다.
+      bench = await fetchCompare(BENCH)
     } catch (e) {
       // 조용한 폴백 금지 — 벤치가 없으면 규칙 5의 판정 자체가 성립하지 않는다.
       throw new Error(
@@ -1337,7 +1458,33 @@ async function run(mode: 'all' | 'offline'): Promise<void> {
     benchEq = benchCurve(bench)
     benchLabel = `${BENCH} KODEX 200`
     log('')
-    log(`벤치 ${BENCH} ${bench.length}봉 (${bench[0].date}~${bench[bench.length - 1].date}) — 알파는 겹치는 구간에서만 계산한다.`)
+    log(
+      `벤치 ${BENCH} ${bench.length}봉 (${bench[0].date}~${bench[bench.length - 1].date}) · ` +
+        `${basis === 'price' ? '가격수익(배당 제외 — 전략과 같은 기준)' : '총수익(배당 재투자)'}` +
+        ' — 알파는 겹치는 구간에서만 계산한다.',
+    )
+    if (basis === 'total') regimeEq = benchEq
+    else {
+      // 가격수익 모드에서만 게이트용 총수익 벤치를 **따로** 받는다. 총수익 모드(야후 경로)에서는
+      // 추가 호출이 아예 없으므로 기존 수치·호출 횟수가 한 자리도 바뀌지 않는다.
+      await sleep(120)
+      let regimeBench: DailyBar[]
+      try {
+        regimeBench = await fetchDaily(BENCH) // 기본값 total — 신호 입력이라 기준을 따르지 않는다
+      } catch (e) {
+        throw new Error(
+          `게이트용 벤치(${BENCH} · 총수익) 로드 실패 — ${String(e)}. 게이트 시계열이 없으면 ` +
+            '게이트 변형이 조용히 다른 실험이 되므로 실행을 중단한다.',
+        )
+      }
+      if (regimeBench.length < 2)
+        throw new Error(`게이트용 벤치(${BENCH} · 총수익) 봉이 ${regimeBench.length}개다 — 실행을 중단한다`)
+      regimeEq = benchCurve(regimeBench)
+      log(
+        `게이트(시장 레짐) 시계열: ${BENCH} **총수익** ${regimeBench.length}봉 — 신호 입력이라 비교 기준을 ` +
+          '따르지 않는다. 비교 기준을 바꾸면서 전략 행동까지 바꾸지 않기 위해서다.',
+      )
+    }
   }
 
   // ---- 18변형 실행 ----
@@ -1351,7 +1498,7 @@ async function run(mode: 'all' | 'offline'): Promise<void> {
   const results: VariantResult[] = []
   for (const v of variants) {
     const yearly = v.width === '40+40' ? yearlyWide : yearlyNarrow
-    results.push(runOneVariant(v, yearly, deps, benchEq, half))
+    results.push(runOneVariant(v, yearly, deps, benchEq, half, regimeEq))
   }
 
   variantTable(results, half, benchLabel)
@@ -1397,7 +1544,7 @@ async function run(mode: 'all' | 'offline'): Promise<void> {
   produced++
 
   headline(results, of, qqqWall, years, half)
-  disclaimer(offline)
+  disclaimer(offline, basis)
 }
 
 /** 위생 게이트만 — 네트워크·시세 로딩 없이 배제 규칙의 실측 결과를 본다. */
