@@ -168,7 +168,44 @@ export const f2 = (v: number | null) => (v == null ? '—' : `${v >= 0 ? '+' : '
 // 데이터 로더 — spec-backtest.entry.ts에서 복사 (정본 합류 예정)
 // ============================================================================
 
-async function fetchDaily(symbol: string, range = '10y'): Promise<DailyBar[]> {
+/**
+ * 수익 기준 — 배당을 넣느냐 빼느냐.
+ *   `total` = 총수익(배당 재투자). 야후 `adjclose ÷ close` 계수를 OHLC에 곱한다.
+ *   `price` = 가격수익(배당 제외). 계수를 곱하지 않는다.
+ *
+ * 왜 골라야 하나 (2026-08-03 대표 질문 "데이터가 이상한 거야, 기법을 못 찾는 거야"):
+ *   국내 유니버스를 KRX 정본으로 바꾸면서 **전략은 가격수익**이 됐는데(KRX 원주가에는
+ *   현금배당이 반영되지 않는다), 벤치(KODEX 200)는 야후 adjclose 기반이라 **총수익**이었다.
+ *   즉 "배당 없는 전략 vs 배당 있는 지수"를 붙여 놓고 알파를 잰 셈이고, KODEX 200
+ *   배당수익률만큼 **모든 알파가 전략에 불리하게** 찍혔다.
+ *   그래서 시세 소스가 krx면 벤치·벽도 가격수익으로 맞춘다 — 같은 기준끼리 비교한다.
+ *
+ * ⚠️ 이건 "전략을 유리하게 만드는 보정"이 아니다. 어느 쪽으로도 기울지 않은 비교를
+ *    만드는 것이고, 그래서 결과가 나빠질 수도 좋아질 수도 있다. 바꾼 뒤의 수치만 쓴다.
+ */
+export type ReturnBasis = 'total' | 'price'
+
+/** 시세 소스에 맞는 비교 기준 — 전략과 벤치의 배당 반영 여부를 일치시킨다. */
+export function compareBasisFor(source: PriceSource): ReturnBasis {
+  return source === 'krx' ? 'price' : 'total'
+}
+
+/**
+ * 벤치·벽처럼 **전략과 비교되는** 자산의 수익 기준. `run()` 시작에서 한 번 정해진다.
+ * 전략 종목 자체의 로딩은 `loadKrPrices` 어댑터를 지나므로 이 값을 보지 않는다.
+ */
+let COMPARE_BASIS: ReturnBasis = 'total'
+export function setCompareBasis(b: ReturnBasis): void {
+  COMPARE_BASIS = b
+}
+export function compareBasisNote(b: ReturnBasis): string {
+  return b === 'price'
+    ? '비교 기준: **가격수익**(배당 제외) — 전략(KRX 원주가)과 벤치·벽을 **같은 기준**으로 맞췄다. ' +
+        '벤치의 배당수익률만큼 알파를 깎던 편향이 제거된 수치다.'
+    : '비교 기준: **총수익**(배당 재투자) — 전략도 야후 adjclose 기반이라 벤치와 기준이 같다.'
+}
+
+async function fetchDaily(symbol: string, range = '10y', basis: ReturnBasis = 'total'): Promise<DailyBar[]> {
   const qs = range.startsWith('since:')
     ? `period1=${Math.floor(Date.parse(range.slice(6)) / 1000)}&period2=${Math.floor(Date.now() / 1000)}`
     : `range=${range}`
@@ -191,8 +228,10 @@ async function fetchDaily(symbol: string, range = '10y'): Promise<DailyBar[]> {
     const cl = q.close?.[i]
     const v = q.volume?.[i]
     if ([o, h, l, cl].some((x: unknown) => x == null || !Number.isFinite(x as number))) continue
-    // 총수익 보정(규칙 3): adjclose ÷ close 계수를 OHLC에 적용 (배당 재투자 기준)
-    const f = adj[i] != null && Number.isFinite(adj[i]!) && cl > 0 ? adj[i]! / cl : 1
+    // 총수익 보정(규칙 3): adjclose ÷ close 계수를 OHLC에 적용 (배당 재투자 기준).
+    // basis='price'면 곱하지 않는다 — 배당을 뺀 가격수익으로 남긴다(전략과 기준 맞추기).
+    const f =
+      basis === 'price' ? 1 : adj[i] != null && Number.isFinite(adj[i]!) && cl > 0 ? adj[i]! / cl : 1
     const date = new Date(ts[i] * 1000 + 9 * 3600 * 1000).toISOString().slice(0, 10) // KST
     out.push({ date, t: ts[i], o: o * f, h: h * f, l: l * f, c: cl * f, v: Number.isFinite(v) ? v : 0 })
   }
@@ -314,7 +353,8 @@ export async function loadKrHistories(
  */
 async function fetchBenchOrEmpty(range: string): Promise<DailyBar[]> {
   try {
-    const b = await fetchDaily(BENCH, range)
+    // COMPARE_BASIS를 따른다 — KRX 소스면 벤치도 가격수익으로 받아 전략과 기준을 맞춘다.
+    const b = await fetchDaily(BENCH, range, COMPARE_BASIS)
     if (b.length >= 2) return b
     log(`⚠️ 벤치(${BENCH}) 응답이 ${b.length}봉뿐이다 — **알파 열을 비운다**(없는 값을 0으로 채우지 않는다).`)
     return []
@@ -3948,7 +3988,10 @@ export const FX_NOTE = '환산: Yahoo KRW=X 종가 기준 · 결측일은 직전
 /** QQQ 원화 환산 보유 곡선. 로드 실패 시 null(비교 행만 생략하고 모드는 계속 돈다). */
 async function loadQqqKrwCurve(range = 'since:1999-01-01'): Promise<HoldRow | null> {
   try {
-    const qqq = await fetchDaily('QQQ', range)
+    // QQQ 벽도 COMPARE_BASIS를 따른다 — 전략이 가격수익인데 벽만 배당 재투자면
+    // 벽이 부당하게 높아진다(37차에서 "QQQ 쪽이 유리하다"고 한계로만 적어 뒀던 항목).
+    // 환율(KRW=X)은 배당 개념이 없어 계수가 항상 1이라 기준의 영향을 받지 않는다.
+    const qqq = await fetchDaily('QQQ', range, COMPARE_BASIS)
     await sleep(120)
     const fx = await fetchDaily(FX_KRW, range)
     const curve = toKrwCurve(qqq, fx)
@@ -7038,8 +7081,18 @@ const MODES: Record<string, () => Promise<void>> = {
  */
 export async function runMode(mode: string, entry: () => Promise<void>): Promise<void> {
   const source = ideaPriceSource()
+  // 비교 기준을 **여기 한 곳에서** 정한다. 벤치·벽이 각자 다른 기준으로 로드되면
+  // 같은 표 안에서 배당이 섞이고, 그 차이는 알파 몇 %p로 조용히 흡수된다.
+  const basis = compareBasisFor(source)
+  setCompareBasis(basis)
   log(priceSourceHeadline(source, source === 'krx' ? await krxSpanLabel() : null))
   log(`⚠️ ${MIXED_SOURCE_NOTE}`)
+  log(`⚖️ ${compareBasisNote(basis)}`)
+  if (basis === 'price')
+    log(
+      '   ↑ 2026-08-03 이전 회차의 알파는 **벤치만 총수익**이라 전략에 불리하게 찍혀 있었다 — ' +
+        '그 수치와 직접 비교하지 마라.',
+    )
   log('')
   RETURNS.begin(mode, source)
   await entry()

@@ -34,6 +34,8 @@ import { KR_MIN_BARS } from '../src/lib/history'
 import {
   RETURNS,
   RETURNS_SCHEMA,
+  compareBasisFor,
+  compareBasisNote,
   ideaPriceSource,
   krxYearGuard,
   loadKrHistories,
@@ -323,6 +325,21 @@ async function main() {
     eq('모르는 값은 기본값으로 좁힌다', ideaPriceSource({ PRICE_SOURCE: 'naver' }), 'krx')
     eq('range 파싱', rangeStart('since:2008-01-01'), '2008-01-01')
     eq('range가 since 형식이 아니면 null', rangeStart('10y'), null)
+  }
+
+  // ⑥ **배당 비대칭.** 전략이 KRX 원주가(가격수익)인데 벤치·벽만 야후 adjclose(총수익)면
+  //    KODEX 200 배당수익률만큼 알파가 전략에 불리하게 찍힌다. 2026-08-03 이전 전 회차가
+  //    그 상태였다. 소스에 따라 비교 기준이 자동으로 맞춰지는지 못박는다.
+  section('6) 비교 기준 — 전략과 벤치·벽의 배당 반영 여부를 일치시킨다')
+
+  {
+    eq('krx 소스면 벤치·벽도 가격수익', compareBasisFor('krx'), 'price')
+    eq('yahoo 소스면 둘 다 총수익', compareBasisFor('yahoo'), 'total')
+    const p = compareBasisNote('price')
+    check('가격수익 문구가 "같은 기준"을 말한다', p.includes('가격수익') && p.includes('같은 기준'), p)
+    check('편향이 제거됐음을 명시', p.includes('편향'), p)
+    const t = compareBasisNote('total')
+    check('총수익 문구는 기준이 같음을 말한다', t.includes('총수익') && t.includes('기준이 같다'), t)
   }
 
   section('5) 변형별 일간 수익률 계열 — 과최적화 소급 채점 입력')
