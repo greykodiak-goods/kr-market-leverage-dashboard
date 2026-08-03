@@ -30,10 +30,25 @@ import { dirname, join } from 'node:path'
 import type { CostSettings } from '../src/features/backtest/conditionScreen'
 import { annualize, runPitChained, yearsBetween, type PitChainResult } from '../src/features/backtest/pitChain'
 import { runXsmomChained } from '../src/features/backtest/xsmomChain'
-import { blendChainResults } from '../src/features/backtest/comboBlend'
+import {
+  composeGatedCombo,
+  spliceRegimeCurve,
+  toKrwCurve,
+  type Curve,
+} from '../src/features/backtest/marketGate'
 import { perfStatFields, type PerfStatFields } from '../src/features/backtest/perfStats'
 import { PIT_UNION, PIT_YEARS, pitCodes } from '../src/features/backtest/pitUniverse'
-import { BENCH_SYMBOL, DEFAULT_COST, PRESETS, type Preset, type StrategyKind } from '../src/features/backtest/presets'
+import {
+  BENCH_SYMBOL,
+  DEFAULT_COST,
+  FX_SYMBOL,
+  GOLD_SYMBOL,
+  PRESETS,
+  REGIME_FALLBACK_SYMBOL,
+  normalizeGoldW,
+  type Preset,
+  type StrategyKind,
+} from '../src/features/backtest/presets'
 import type { StrategySpec } from '../src/features/backtest/strategySpec'
 import type { DailyBar } from '../src/features/backtest/types'
 import { KR_LOAD_NOTE, KR_MIN_BARS, loadKrDual } from '../src/lib/history'
@@ -296,6 +311,8 @@ export function buildPayload(
       '시뮬레이터 프리셋을 화면과 같은 엔진·같은 비용으로 미리 돌린 [추정] 산출물이다. ' +
       '곡선은 주 1점으로 줄였고(최저점·최종일 보존), 요약 수치는 줄이기 전 원곡선에서 쟀다. ' +
       '유니버스는 연도별 시총 상위 10+10 [추정]이며 상장폐지 종목의 가격 부재로 생존편향이 남아 있다. ' +
+      '⚠️ 금(GLD 원화) 슬리브가 붙은 프리셋은 곡선이 **2004-11부터** 시작한다(GLD 상장) — ' +
+      '2000년부터 시작하는 다른 프리셋과 구간이 달라 MDD·CAGR을 직접 비교하면 거짓이다. 각 행의 startDate를 보라. ' +
       '샤프·소르티노는 무위험수익률 0% 가정이라 실제 국고채 수익률만큼 낮아진다. ' +
       `${KR_LOAD_NOTE} ` +
       '매수 권유가 아니다.',
@@ -307,6 +324,18 @@ export function buildPayload(
 // 실행
 // ============================================================================
 
+/**
+ * 결합 프리셋의 옵션 슬리브(레짐·금)에 쓰는 보조 시계열.
+ * 로드에 실패하면 **그 옵션만 꺼진 채** 나머지가 그대로 돈다 — 프리셋 전체를 죽이지 않는다.
+ * 대신 `main()`이 경고를 남기고, 화면·산출물은 그 사실을 숨기지 않는다(규칙 3).
+ */
+export interface ExtraSeries {
+  /** 레짐 곡선(벤치 + ^KS11 폴백 이음) — 없으면 시장게이트 미적용 */
+  regime?: Curve | null
+  /** 금(GLD) 원화 곡선 — 없으면 금 슬리브 미적용 */
+  gold?: Curve | null
+}
+
 /** 프리셋 하나를 화면과 **같은 실행 경로**로 돌린다. */
 export function runPreset(
   preset: Preset,
@@ -314,6 +343,7 @@ export function runPreset(
   symOf: Record<string, string>,
   bench: DailyBar[] | undefined,
   cost: CostSettings,
+  extra: ExtraSeries = {},
 ): PitChainResult {
   const resolve = (code: string) => symOf[code]
   const runCondition = (spec: StrategySpec) => {
@@ -347,7 +377,18 @@ export function runPreset(
   const chainB = runMomentum(preset.mom.slots, preset.mom.gate)
   if (chainA.equity.length === 0 || chainB.equity.length === 0)
     throw new Error(`결합할 슬리브 곡선이 비었습니다 (${preset.id})`)
-  return blendChainResults(chainA, chainB, preset.wA, cost.initialCapital)
+  // 옵션이 둘 다 꺼져 있으면 `composeGatedCombo`는 `blendChainResults` 한 번과 **완전히 같다** —
+  // 그래서 기존 결합 프리셋(combo-50 · combo-25-75)의 수치는 한 자리도 바뀌지 않는다.
+  const goldW = normalizeGoldW(preset.goldW)
+  return composeGatedCombo({
+    chainA,
+    chainB,
+    wA: preset.wA,
+    capital: cost.initialCapital,
+    regime: preset.marketGate === true ? (extra.regime ?? null) : null,
+    gold: goldW > 0 ? (extra.gold ?? null) : null,
+    goldW,
+  }).result
 }
 
 async function main(): Promise<void> {
@@ -397,6 +438,48 @@ async function main(): Promise<void> {
     }
   }
 
+  // ---- 결합 옵션 슬리브 — 시장게이트용 레짐 곡선 · 금(GLD) 원화 곡선 ----
+  //
+  // 32차 프리셋(calmar-max)만 쓰는 계열이다. 필요한 프리셋이 없으면 아예 받지 않는다.
+  // 하나라도 실패하면 **그 옵션만** 꺼지고 나머지는 그대로 돈다(경고를 남긴다).
+  const extra: ExtraSeries = {}
+  const needGate = PRESETS.some((p) => p.kind === 'combo' && p.marketGate === true)
+  const needGold = PRESETS.some((p) => p.kind === 'combo' && normalizeGoldW(p.goldW) > 0)
+  if (needGate) {
+    if (!bench) log('⚠️ 벤치가 없어 시장게이트 레짐을 만들 수 없습니다 — 게이트 없이 실행합니다')
+    else {
+      let fb: DailyBar[] = []
+      try {
+        fb = await fetchDaily(REGIME_FALLBACK_SYMBOL)
+      } catch {
+        log(`⚠️ 레짐 폴백(${REGIME_FALLBACK_SYMBOL}) 로드 실패 — 벤치 구간만으로 게이트를 판정합니다`)
+      }
+      const spliced = spliceRegimeCurve(bench, fb)
+      extra.regime = spliced.length >= 2 ? spliced : null
+      log(
+        `레짐 판정 시계열: ${BENCH_SYMBOL}${fb.length ? ` + ${REGIME_FALLBACK_SYMBOL} 폴백(수익률만 이어 붙임 · 이음매 레벨 정합)` : ''}` +
+          ` · ${spliced.length}점 (${spliced[0]?.date ?? '—'}~)`,
+      )
+    }
+  }
+  if (needGold) {
+    try {
+      const gld = await fetchDaily(GOLD_SYMBOL)
+      await sleep(120)
+      const fx = await fetchDaily(FX_SYMBOL)
+      const curve = toKrwCurve(gld, fx)
+      if (curve.length >= 2) {
+        extra.gold = curve
+        log(
+          `금 슬리브: ${GOLD_SYMBOL} ${gld.length}봉 · 환율 ${fx.length}봉 → 원화 곡선 ${curve.length}점 ` +
+            `(${curve[0].date}~${curve[curve.length - 1].date}) · 결측일 직전 환율 이월 · 환헤지 없음`,
+        )
+      } else log(`⚠️ ${GOLD_SYMBOL} 원화 환산 실패(환율 구간 불일치) — 금 슬리브 없이 실행합니다`)
+    } catch (e) {
+      log(`⚠️ ${GOLD_SYMBOL}·${FX_SYMBOL} 로드 실패 — 금 슬리브 없이 실행합니다 (${String(e)})`)
+    }
+  }
+
   // ---- asOf = 실제로 받은 데이터의 마지막 거래일 ----
   let asOf = ''
   for (const bars of [...Object.values(histories), ...(bench ? [bench] : [])]) {
@@ -409,7 +492,7 @@ async function main(): Promise<void> {
   const out: PrecomputedPreset[] = []
   for (const preset of PRESETS) {
     const t0 = Date.now()
-    const result = runPreset(preset, histories, symOf, bench, cost)
+    const result = runPreset(preset, histories, symOf, bench, cost, extra)
     const row = summarizePreset(preset, result, cost.initialCapital)
     out.push(row)
     log(

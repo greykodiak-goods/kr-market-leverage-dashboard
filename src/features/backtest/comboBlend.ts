@@ -111,6 +111,43 @@ export function blendCurves(
   return dates.map((date, i) => ({ date, equity: v[i] }))
 }
 
+/**
+ * 3자 월별 리밸런스 결합 — **2단 `blendCurves`로 합성한다.**
+ *
+ * ⚠️ 정본: `scripts/idea-lab.entry.ts`의 `blend3Curves`. 그대로 이식한 사본이며
+ *    `tests/marketgate.test.ts`의 동형 테스트가 두 구현을 대조한다.
+ *
+ * 의미론이 진짜 3자 결합과 **동일한 이유**: `blendMonthlyRebalanced`는 달이 바뀌는 첫
+ * 거래일에 총자산을 목표 가중으로 되돌리고 달 안에서는 각 슬리브가 제 수익률대로 표류한다.
+ * 안쪽 결합(b:c = wB:wC)을 하나의 슬리브로 보면 그 슬리브의 월초 구성은 항상
+ * wB/(wB+wC) : wC/(wB+wC)이고, 바깥 결합이 그 슬리브에 (wB+wC)를 배정하므로 월초 전체
+ * 구성은 정확히 wA : wB : wC가 된다. 두 결합이 **같은 월 경계**에서 리밸런스하므로
+ * 달 안 표류도 3자 동시 결합과 같다.
+ *
+ * 묶는 순서(`(a|(b|c))` vs `((a|b)|c)`)는 실수 산술에서는 같은 값이지만 부동소수점
+ * 반올림이 달라 마지막 자리가 갈릴 수 있다 — 테스트가 상대오차로 대조하는 이유다.
+ *
+ * 가중치는 내부에서 합 1로 정규화한다. wB+wC가 0이면 a 그대로(정규화한 배수 곡선).
+ */
+export function blend3Curves(
+  a: { date: string; equity: number }[],
+  b: { date: string; equity: number }[],
+  c: { date: string; equity: number }[],
+  wA: number,
+  wB: number,
+  wC: number,
+): { date: string; equity: number }[] {
+  const sum = wA + wB + wC
+  if (!(sum > 0)) return []
+  const [nA, nB, nC] = [wA / sum, wB / sum, wC / sum]
+  if (!(nB + nC > 0)) {
+    const base = a.length && a[0].equity > 0 ? a[0].equity : 1
+    return a.map((p) => ({ date: p.date, equity: p.equity / base }))
+  }
+  const inner = blendCurves(b, c, nB / (nB + nC))
+  return blendCurves(a, inner, nA)
+}
+
 // ---------------------------------------------------------------------------
 // 화면 어댑터 — 결합 곡선을 `PitChainResult` 호환 형태로 감싼다
 // ---------------------------------------------------------------------------

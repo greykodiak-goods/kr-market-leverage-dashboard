@@ -24,7 +24,14 @@ import {
   weekBucket,
   type CurvePoint,
 } from '../scripts/preset-precompute.entry'
-import { COMBO_WEIGHTS, MOM_SLOT_CHOICES, PRESETS, DEFAULT_COST } from '../src/features/backtest/presets'
+import {
+  COMBO_WEIGHTS,
+  DEFAULT_COST,
+  GOLD_WEIGHTS,
+  MOM_SLOT_CHOICES,
+  PRESETS,
+  normalizeGoldW,
+} from '../src/features/backtest/presets'
 import { augmentPresetLabel, mddChip, tenYearChip } from '../src/features/backtest/precomputed'
 import type { PitChainResult } from '../src/features/backtest/pitChain'
 
@@ -236,6 +243,37 @@ section('④ presets.ts 불변식 — 화면과 사전계산이 같은 배열을
   const combo25 = PRESETS.find((p) => p.id === 'combo-25-75')
   check('combo-25-75 존재', combo25 != null)
   check('combo-25-75는 결합·wA 0.25', combo25?.kind === 'combo' && combo25.wA === 0.25)
+
+  // 2026-08-03 대표 지시로 추가한 32차 칼마 1위
+  const cal = PRESETS.find((p) => p.id === 'calmar-max')
+  check('calmar-max 존재', cal != null)
+  check(
+    'calmar-max는 결합·wA 0.5·상위5+게이트·시장게이트 on·금 20%',
+    cal?.kind === 'combo' &&
+      cal.wA === 0.5 &&
+      cal.mom.slots === 5 &&
+      cal.mom.gate === true &&
+      cal.marketGate === true &&
+      normalizeGoldW(cal.goldW) === 0.2,
+  )
+  const calNote = cal?.kind === 'combo' ? cal.note : ''
+  // 구간이 다르다는 사실은 이 프리셋에서 **가장 잘 오해되는 지점**이라 note에서 강제한다
+  check('calmar-max: 곡선 시작(2004-11) 명시', calNote.includes('2004-11'))
+  check('calmar-max: 닷컴 붕괴 제외 명시', calNote.includes('닷컴'))
+  check('calmar-max: 리밸런스 비용 미반영 경고', calNote.includes('리밸런스 비용 미반영'))
+  check('calmar-max: 달러 노출 의존 경고', calNote.includes('달러'))
+  check('calmar-max: 국내 대체품·세제 미반영 경고', calNote.includes('세제'))
+  check('calmar-max: 화면값이 실측치와 다르다는 경고', calNote.includes('일치하지 않는다'))
+  check('calmar-max: 매수 권유 아님 명시', calNote.includes('매수 권유가 아니다'))
+  // 금 슬리브가 붙은 프리셋은 반드시 시장게이트 옵션 유무와 무관하게 비중이 선택지 안이어야 한다
+  for (const p of PRESETS) {
+    if (p.kind !== 'combo') continue
+    check(
+      `${p.id}: 금 비중이 화면 선택지 안에 있다`,
+      (GOLD_WEIGHTS as readonly number[]).includes(normalizeGoldW(p.goldW)),
+      `goldW=${p.goldW}`,
+    )
+  }
 
   // 화면에서 고를 수 없는 값이 프리셋에 들어가면 셀렉트가 빈칸이 된다(2026-08-02 실제로 걸림)
   for (const p of PRESETS) {

@@ -25,7 +25,7 @@ import type { DailyBar } from './types'
 import { EXIT_LABELS, type CostSettings } from './conditionScreen'
 import { annualize, runPitChained, yearsBetween, type PitChainResult } from './pitChain'
 import { runXsmomChained } from './xsmomChain'
-import { blendChainResults } from './comboBlend'
+import { composeGatedCombo, spliceRegimeCurve, toKrwCurve as toKrwSeries } from './marketGate'
 import { PIT_UNION, PIT_YEARS, pitCodes } from './pitUniverse'
 import {
   SPEC_VERSION,
@@ -43,11 +43,17 @@ import {
   COMBO_WEIGHTS,
   DEFAULT_COMBO_WA,
   DEFAULT_COST,
+  DEFAULT_GOLD_W,
   DEFAULT_MOM,
+  FX_SYMBOL,
+  GOLD_SYMBOL,
+  GOLD_WEIGHTS,
   KOSPI_REGIME,
   MOM_SLOT_CHOICES,
   PRESETS,
   PRESET_PIT_BASE,
+  REGIME_FALLBACK_SYMBOL,
+  normalizeGoldW,
   normalizeWA,
   type MomentumParams,
   type StrategyKind,
@@ -87,6 +93,10 @@ interface Saved {
   mom?: MomentumParams
   /** 결합 모드의 슬리브 A 가중(0.25·0.5·0.75) — 없으면 기본 0.5 */
   comboWA?: number
+  /** 결합 모드에서 B 슬리브에 시장게이트(12-1)를 걸었는지 — 없으면 끔 */
+  marketGate?: boolean
+  /** 결합 모드의 금(GLD 원화) 슬리브 비중 — 없으면 0(금 없음) */
+  goldW?: number
   spec: StrategySpec
   startDate: string
   /** 종료일 — 이 날짜 이후 봉을 잘라내고 실행한다. 없거나 빈 문자열이면 데이터 끝까지.
@@ -102,7 +112,8 @@ interface Saved {
 // ⚠️ 알파(규칙 5) 판정 기준은 여전히 KODEX 200이다. QQQ는 판정에 들어가지 않는다 —
 //    통화·시장·거래시간이 다른 자산을 판정 기준으로 섞으면 알파의 의미가 무너진다.
 const QQQ_SYMBOL = 'QQQ'
-const FX_SYMBOL = 'KRW=X' // USD/KRW 일봉 종가. 결측일은 직전값 이월.
+// USD/KRW 일봉 종가(결측일은 직전값 이월)는 참고 벤치(QQQ)와 금 슬리브가 **같은 심볼**을 쓴다 —
+// presets.ts의 FX_SYMBOL 하나만 정본으로 두고 여기서 다시 정의하지 않는다.
 const QQQ_LABEL = 'QQQ(원화 환산)'
 
 /** 유니버스는 하나뿐이다 — 시세는 전 연도 합집합을 한 번만 받아 모든 해가 나눠 쓴다. */
@@ -143,6 +154,8 @@ function loadSaved(): Saved {
           kind: s.kind === 'momentum' || s.kind === 'combo' ? s.kind : 'condition',
           mom: s.mom ?? DEFAULT_MOM,
           comboWA: normalizeWA(s.comboWA),
+          marketGate: s.marketGate === true,
+          goldW: normalizeGoldW(s.goldW),
         }
     }
   } catch {
@@ -152,6 +165,8 @@ function loadSaved(): Saved {
     kind: 'condition',
     mom: DEFAULT_MOM,
     comboWA: DEFAULT_COMBO_WA,
+    marketGate: false,
+    goldW: DEFAULT_GOLD_W,
     spec: PRESET_PIT_BASE,
     startDate: '',
     endDate: '',
@@ -803,6 +818,9 @@ export function SpecSimulator() {
   const [mom, setMom] = useState<MomentumParams>(saved.mom ?? DEFAULT_MOM)
   /** 결합 모드의 슬리브 A 가중 */
   const [comboWA, setComboWA] = useState<number>(normalizeWA(saved.comboWA))
+  /** 결합 모드 옵션 — B 슬리브 시장게이트(12-1) · 금(GLD 원화) 슬리브 비중 (32차) */
+  const [marketGate, setMarketGate] = useState<boolean>(saved.marketGate === true)
+  const [goldW, setGoldW] = useState<number>(normalizeGoldW(saved.goldW))
   /** 모멘텀·결합 프리셋을 고르면 그 경고문을 화면에 띄운다(라벨만으로는 낙폭 맥락이 안 전달된다) */
   const [momNote, setMomNote] = useState<string | null>(null)
   const [spec, setSpec] = useState<StrategySpec>(saved.spec)
@@ -826,6 +844,16 @@ export function SpecSimulator() {
   const [runCapital, setRunCapital] = useState<number | null>(null)
   /** 결합 모드에서 두 슬리브를 **단독으로** 돌린 성적 — 결합 곡선에 없는 매매수·승률이 여기 있다 */
   const [sleeves, setSleeves] = useState<SleeveSummary[] | null>(null)
+  /**
+   * 결합 옵션이 **실제로 무엇을 했는지** — 게이트가 현금으로 돌린 달 수, 금 슬리브가 섞인 구간.
+   * 설정값이 아니라 **실행 결과**다(레짐·금 데이터를 못 받으면 0/null로 내려앉는다).
+   */
+  const [comboOpts, setComboOpts] = useState<{
+    gatedMonths: number
+    totalMonths: number
+    goldW: number
+    goldFrom: string | null
+  } | null>(null)
 
   const addNote = (m: string) => setNotes((prev) => (prev.includes(m) ? prev : [...prev, m]))
 
@@ -850,12 +878,12 @@ export function SpecSimulator() {
     try {
       localStorage.setItem(
         STORE_KEY,
-        JSON.stringify({ kind, mom, comboWA, spec, startDate, endDate, cost } satisfies Saved),
+        JSON.stringify({ kind, mom, comboWA, marketGate, goldW, spec, startDate, endDate, cost } satisfies Saved),
       )
     } catch {
       /* 저장 실패는 치명적이지 않다 */
     }
-  }, [kind, mom, comboWA, spec, startDate, endDate, cost])
+  }, [kind, mom, comboWA, marketGate, goldW, spec, startDate, endDate, cost])
 
   const flat = useMemo(() => asFlatAnd(spec.entry), [spec.entry])
   // 종목 목록은 실행 시 그 해 유니버스로 주입되므로, 검증에는 대표로 첫 해 목록을 쓴다.
@@ -865,7 +893,10 @@ export function SpecSimulator() {
   )
 
   /** 전략 설정 지문 — 사전계산 블록이 지금 설정과 같은 전략을 가리키는지 판정한다 */
-  const settingsSig = useMemo(() => JSON.stringify({ kind, mom, comboWA, spec }), [kind, mom, comboWA, spec])
+  const settingsSig = useMemo(
+    () => JSON.stringify({ kind, mom, comboWA, marketGate, goldW, spec }),
+    [kind, mom, comboWA, marketGate, goldW, spec],
+  )
   /** 지문이 어긋나면 띄우지 않는다(설정을 손대면 사전계산 결과는 그 설정의 것이 아니다) */
   const showPre = shownPre != null && precomputed != null && preSig === settingsSig
   /**
@@ -1061,7 +1092,73 @@ export function SpecSimulator() {
         const chainB = runMomentum()
         if (chainA.equity.length === 0 || chainB.equity.length === 0)
           throw new Error('결합할 슬리브 곡선이 비었습니다 — 시작일·종료일을 확인하세요')
-        chained = blendChainResults(chainA, chainB, comboWA, cost.initialCapital)
+
+        // ---- 옵션 슬리브(32차) — 시장게이트 레짐 곡선 · 금(GLD) 원화 곡선 ----------
+        // 둘 다 **실패해도 백테스트를 막지 않는다**. 옵션만 꺼진 채 결합이 그대로 돌고,
+        // 아래 배지가 "실제로 적용된 것"을 보여 준다(설정값이 아니라 결과다 — 규칙 3).
+        let regime: { date: string; equity: number }[] | null = null
+        if (marketGate) {
+          if (!bench) addNote('⚠️ 벤치마크가 없어 시장게이트를 판정할 수 없습니다 — 게이트 없이 실행합니다.')
+          else {
+            setProgress(`시장게이트 레짐 지수(${REGIME_FALLBACK_SYMBOL}) 로딩…`)
+            let fb: DailyBar[] = []
+            try {
+              fb = (await getDailyHistory(REGIME_FALLBACK_SYMBOL, BACKTEST_HISTORY_RANGE)).bars
+            } catch {
+              addNote(
+                `⚠️ 레짐 폴백 지수(${REGIME_FALLBACK_SYMBOL}) 로드 실패 — 벤치 구간만으로 게이트를 판정합니다. ` +
+                  '벤치가 시작하기 전 달은 판정 불가라 게이트가 열린 채로 지나갑니다.',
+              )
+            }
+            const spliced = spliceRegimeCurve(bench, fb)
+            regime = spliced.length >= 2 ? spliced : null
+          }
+        }
+        let gold: { date: string; equity: number }[] | null = null
+        if (goldW > 0) {
+          setProgress(`금 슬리브(${GOLD_SYMBOL}·${FX_SYMBOL}) 로딩…`)
+          try {
+            const [g, fx] = await Promise.all([
+              getDailyHistory(GOLD_SYMBOL, BACKTEST_HISTORY_RANGE),
+              getDailyHistory(FX_SYMBOL, BACKTEST_HISTORY_RANGE),
+            ])
+            const curve = toKrwSeries(g.bars, fx.bars)
+            if (curve.length >= 2) gold = curve
+            else addNote(`⚠️ ${GOLD_SYMBOL} 원화 환산 실패(환율 구간 불일치) — 금 슬리브 없이 실행합니다.`)
+          } catch {
+            addNote(`⚠️ ${GOLD_SYMBOL}·${FX_SYMBOL} 로드 실패 — 금 슬리브 없이 실행합니다.`)
+          }
+        }
+
+        const composed = composeGatedCombo({
+          chainA,
+          chainB,
+          wA: comboWA,
+          capital: cost.initialCapital,
+          regime,
+          gold,
+          goldW,
+        })
+        chained = composed.result
+        const gatedB = composed.gatedB
+        setComboOpts({
+          gatedMonths: composed.gatedMonths.length,
+          totalMonths: composed.totalMonths,
+          goldW: composed.goldWApplied,
+          goldFrom: composed.goldFrom,
+        })
+        if (composed.goldWApplied > 0)
+          addNote(
+            `금 슬리브 ${Math.round(composed.goldWApplied * 100)}%가 섞이면서 결합 구간이 ${composed.goldFrom}부터로 잘렸습니다 ` +
+              `(${GOLD_SYMBOL} 상장 이후만 겹칩니다) — 2000년부터 시작하는 다른 프리셋과 MDD·CAGR을 직접 비교하지 마세요.`,
+          )
+        if (marketGate && regime)
+          addNote(
+            `시장게이트(12-1): 전체 ${composed.totalMonths}달 중 ${composed.gatedMonths.length}달을 B 슬리브 현금으로 돌렸습니다. ` +
+              '⚠️ 연구 러너(idea-lab)는 이 게이트를 모멘텀 시뮬 안에서 걸어 그 달 첫 거래일 시가에 청산하지만, ' +
+              '이 화면은 이미 만들어진 B 곡선의 그 달 수익률을 0으로 만듭니다 — 청산·재매수 비용과 첫날 갭이 빠지는 만큼 ' +
+              '화면 쪽이 조금 후하게 나옵니다.',
+          )
         setSleeves([
           {
             key: 'A',
@@ -1075,11 +1172,16 @@ export function SpecSimulator() {
           },
           {
             key: 'B',
-            label: `B 모멘텀 · 상위${mom.slots}${mom.gate ? '+게이트' : ''}`,
-            totalPct: chainB.totalPct,
-            cagrPct: chainB.cagrPct,
-            mddPct: chainB.mddPct,
-            alphaCagrPct: chainB.alphaCagrPct,
+            // 게이트가 걸렸으면 **게이트를 반영한 곡선**의 성적을 보여 준다 — 결합에 실제로
+            // 들어간 것이 그 곡선이기 때문이다. 매매수·승률만 게이트 이전 원장 값이다
+            // (게이트가 지운 달의 체결이 섞여 있으므로 아래 라벨이 그 사실을 밝힌다).
+            label:
+              `B 모멘텀 · 상위${mom.slots}${mom.gate ? '+게이트' : ''}` +
+              (composed.gatedMonths.length > 0 ? ` + 시장게이트(12-1) ${composed.gatedMonths.length}달 현금` : ''),
+            totalPct: gatedB.totalPct,
+            cagrPct: gatedB.cagrPct,
+            mddPct: gatedB.mddPct,
+            alphaCagrPct: gatedB.alphaCagrPct,
             tradeCount: chainB.tradeCount,
             winRate: chainB.winRate,
           },
@@ -1093,6 +1195,7 @@ export function SpecSimulator() {
           )
       } else {
         setSleeves(null)
+        setComboOpts(null)
         chained = kind === 'momentum' ? runMomentum() : runCondition()
       }
       if (chained.perYear.length === 0) throw new Error('실행할 연도가 없습니다 — 시작일·종료일을 확인하세요')
@@ -1281,6 +1384,38 @@ export function SpecSimulator() {
             </select>
             <span className="bt-hint">
               50:50이 26차 검증 기본안이고, 25:75·75:25는 <strong>가중 민감도를 보기 위한 참고</strong>입니다
+            </span>
+          </label>
+        )}
+        {kind === 'combo' && (
+          <label>
+            시장게이트 (12-1) — 슬리브 B
+            <InfoTip text="매월 첫 거래일에 벤치마크(KODEX 200 · 시작 이전 구간은 코스피 종합 수익률로 이어붙임)의 '12개월 전~1개월 전' 수익률을 봅니다. 그 값이 음수면 그 달은 슬리브 B(모멘텀) 전체를 현금으로 둡니다. 판정 창의 두 기준 종가가 모두 그 달보다 과거라 미래참조가 들어갈 자리가 없고, 판정할 데이터가 없는 초기 구간은 게이트를 열어 둡니다(임의로 현금화하지 않습니다). ⚠️ 연구 러너는 이 게이트를 모멘텀 시뮬 안에서 걸어 그 달 첫 거래일 시가에 청산하지만, 이 화면은 이미 만들어진 B 곡선의 그 달 수익률을 0으로 만듭니다 — 청산·재매수 비용과 첫날 갭이 빠지는 만큼 화면 쪽이 조금 후하게 나옵니다." />
+            <input
+              type="checkbox"
+              checked={marketGate}
+              onChange={(e) => setMarketGate(e.target.checked)}
+              disabled={busy}
+            />
+            <span className="bt-hint">
+              벤치 12-1 모멘텀이 음수인 달은 <strong>B 슬리브 전체를 현금</strong>으로 (32차)
+            </span>
+          </label>
+        )}
+        {kind === 'combo' && (
+          <label>
+            금 슬리브 (GLD 원화)
+            <InfoTip text="금 ETF(GLD)를 총수익 보정한 뒤 원/달러 종가를 곱해 원화 곡선으로 만들고, 결합 곡선과 매월 첫 거래일에 이 비율로 되돌립니다(환율 결측일은 직전 환율 이월 — 다음 환율을 당겨오면 미래참조입니다). ⚠️ GLD가 2004-11에 상장해서 이 옵션을 켜면 곡선이 2004-11부터 시작합니다 — 2000년부터 도는 다른 설정과 MDD·CAGR을 직접 비교하면 거짓입니다(겪은 위기의 수가 다릅니다). ⚠️ 원화 곡선에는 금 가격과 원/달러 변동이 섞여 있어 낙폭 완화의 상당 부분이 금이 아니라 달러 노출일 수 있습니다. 슬리브 간 이체 비용·환전 스프레드·세제는 반영되지 않았습니다." />
+            <select value={goldW} onChange={(e) => setGoldW(normalizeGoldW(Number(e.target.value)))} disabled={busy}>
+              {GOLD_WEIGHTS.map((w) => (
+                <option key={w} value={w}>
+                  {w === 0 ? '없음 (금 0%)' : `금 ${Math.round(w * 100)}% : 주식 ${Math.round((1 - w) * 100)}%`}
+                  {w === 0.2 ? ' (32차 실측값)' : w === 0 ? '' : ' [민감도 참고]'}
+                </option>
+              ))}
+            </select>
+            <span className="bt-hint">
+              켜면 곡선이 <strong>2004-11부터</strong> 시작합니다(GLD 상장) — 다른 설정과 구간이 달라집니다
             </span>
           </label>
         )}
@@ -1682,10 +1817,13 @@ export function SpecSimulator() {
               setMom(p.mom)
               setMomNote(p.note)
             } else {
-              // 결합 프리셋은 **두 슬리브를 한꺼번에** 세팅한다 — 한쪽만 바뀌면 검증된 조합이 아니게 된다
+              // 결합 프리셋은 **두 슬리브와 옵션을 한꺼번에** 세팅한다 —
+              // 한쪽만 바뀌면 검증된 조합이 아니게 된다(옵션도 조합의 일부다).
               setSpec(p.spec)
               setMom(p.mom)
               setComboWA(normalizeWA(p.wA))
+              setMarketGate(p.marketGate === true)
+              setGoldW(normalizeGoldW(p.goldW))
               setMomNote(p.note)
             }
             // 사전계산이 있으면 **즉시** 결과를 띄운다(수십 초짜리 실행을 기다리지 않는다).
@@ -1698,6 +1836,8 @@ export function SpecSimulator() {
                 kind: p.kind,
                 mom: p.kind === 'condition' ? mom : p.mom,
                 comboWA: p.kind === 'combo' ? normalizeWA(p.wA) : comboWA,
+                marketGate: p.kind === 'combo' ? p.marketGate === true : marketGate,
+                goldW: p.kind === 'combo' ? normalizeGoldW(p.goldW) : goldW,
                 spec: p.kind === 'momentum' ? spec : p.spec,
               }),
             )
@@ -1853,12 +1993,40 @@ export function SpecSimulator() {
           </div>
 
           {/* 슬리브 단독 성적 — 결합 곡선에 없는 매매 원장이 여기 있다 */}
+          {kind === 'combo' && comboOpts && (comboOpts.gatedMonths > 0 || comboOpts.goldW > 0) && (
+            <div className="badges">
+              {comboOpts.gatedMonths > 0 && (
+                <span className="badge sample">
+                  시장게이트 적용 {comboOpts.gatedMonths}달 / {comboOpts.totalMonths}달 (B 슬리브 현금)
+                </span>
+              )}
+              {comboOpts.goldW > 0 && (
+                <span className="badge sample">
+                  금 슬리브 {Math.round(comboOpts.goldW * 100)}% · {comboOpts.goldFrom ?? '—'}~
+                </span>
+              )}
+            </div>
+          )}
           {kind === 'combo' && sleeves && (
             <div className="bt-table-wrap">
               <div className="bt-chart-caption">
                 슬리브 단독 성적 — 각 슬리브를 <strong>전액 투자 기준</strong>으로 따로 돌린 결과입니다. 결합 성적은
                 이 두 곡선을 월초 {Math.round(comboWA * 100)}:{Math.round((1 - comboWA) * 100)}로 되돌리며 합성한 것이라
                 매매 원장이 없습니다 — <strong>매매수·승률은 이 표에서 읽으세요</strong>.
+                {comboOpts && comboOpts.gatedMonths > 0 && (
+                  <>
+                    {' '}
+                    슬리브 B 행의 수익·MDD는 <strong>시장게이트를 반영한 곡선</strong> 기준이고,{' '}
+                    <strong>매매수·승률만 게이트 이전 원장</strong> 값입니다(게이트가 지운 달의 체결이 섞여 있습니다).
+                  </>
+                )}
+                {comboOpts && comboOpts.goldW > 0 && (
+                  <>
+                    {' '}
+                    금 슬리브 {Math.round(comboOpts.goldW * 100)}%는 이 표에 없습니다 — 위 결합 곡선에만 섞여 있고
+                    매매 원장이 없는 보유 곡선입니다.
+                  </>
+                )}
               </div>
               <table>
                 <thead>
