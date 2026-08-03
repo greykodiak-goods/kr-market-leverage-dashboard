@@ -528,3 +528,618 @@ export function exchangeLocalDate(epochSec: number, gmtOffsetSec: number): strin
 export function fallbackGmtOffset(symbol: string): number {
   return /\.(KS|KQ)$/i.test(symbol) ? 32400 : 0
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 미장 **실측** 시점 고정 유니버스 — 스키마·파서·로더·되감기 신뢰구간 게이트
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// 왜 이 절이 생겼나 (2026-08-03):
+//   위 US_PIT20·US_PIT80은 **[추정] 목록**이다(모델 지식 재구성 — 파일 머리 주석이
+//   스스로 그렇게 밝히고 있다). 국장에서 똑같은 결함이 실제로 터졌다: 33차에서 [추정]
+//   목록을 KRX 실측 목록으로 바꾸자 알파가 +21.9%p → +2.6%p로 무너졌고 승자 3종 중
+//   2종이 전멸했다. **목록이 틀리면 그 목록 위에서 고른 파라미터도 같이 무효다.**
+//   미장 쪽 유일한 판정 통과분(27차 US PIT 80 · xsmom 상위8+게이트 · 알파 +4.7%p)도
+//   [추정] 목록 위에 있으므로, 실측으로 바꾸기 전에는 그 수치를 믿을 수 없다.
+//
+//   그래서 공개 소스(Wikipedia)에서 **시점별 실제 지수 구성종목**을 받아
+//   `public/data/us-pit/universe.json`에 저장하고, 이 절이 그 파일의 **스키마 단일
+//   원본**이 된다. 쓰는 쪽(`scripts/us-pit-collect.entry.ts`)과 읽는 쪽(화면·러너)이
+//   같은 타입·같은 검증을 통과한다. 참고 정본은 `krxPitUniverse.ts`다.
+//
+// ⚠️ **의미가 바뀐다 — 지수 구성종목 ≠ 시총 상위 N.**
+//   US_PIT20/US_PIT80은 "그 해 시총 상위 N"이었다. S&P 500은 **위원회가 고르는 목록**이고
+//   편입 자체가 이벤트다(편입 발표 후 상승 — index inclusion effect). 따라서 실측
+//   유니버스로 갈아끼운 수치를 옛 US_PIT 수치와 나란히 놓고 "좋아졌다/나빠졌다"로 읽으면
+//   거짓이다. 시총 순위가 필요하면 **구성종목 × 그 시점 시총**으로 따로 뽑아야 하고,
+//   그 시총 자체가 PIT여야 한다(오늘 시총으로 과거 순위를 매기면 그것이 곧 미래참조 —
+//   규칙 1 위반). 이 모듈은 **순위를 만들지 않는다**(`rankSource: 'none'`).
+//
+// ⚠️ **[추정] 폴백을 두지 않는다.** 실측 파일을 못 읽으면 조용히 US_PIT20/80으로
+//   내려가지 않고 **던진다**(`US_PIT_REAL_LOAD_FAIL`). 33차가 무너진 경로가 바로 "틀린
+//   목록 위에서 조용히 계속 도는 것"이었다. `krxUniverseSource.ts`와 같은 이유다.
+//   US_PIT20·US_PIT80은 **삭제하지 않았다** — 24·26·27차 재현에 그대로 필요하다.
+//
+// ⚠️ 생존편향은 여기서도 **제거되지 않고 측정만 된다.** 그 시절 구성종목이었다가
+//   상장폐지된 회사는 목록에 **그대로 남기고**(빼지 않는다) Yahoo에 가격이 없으면 그 해
+//   매핑 실패로 계수한다 — US_PIT20의 3중 처리 규약을 그대로 잇는다.
+
+/** 리포 기준 상대 경로 — 쓰는 쪽(수집기)·읽는 쪽(스크립트)이 같은 상수를 쓴다. */
+export const US_PIT_REAL_PATH = 'public/data/us-pit/universe.json'
+/** 화면이 fetch할 정적 자산 경로(BASE_URL 뒤에 붙인다). */
+export const US_PIT_REAL_ASSET_PATH = 'data/us-pit/universe.json'
+
+/** 수집 대상 지수. 둘 다 Wikipedia의 "현재 목록 + 변경 이력" 구조가 같다. */
+export type UsIndexKey = 'sp500' | 'ndx'
+export const US_INDEX_KEYS: readonly UsIndexKey[] = ['sp500', 'ndx'] as const
+
+/**
+ * 지수별 구성종목 수 밴드 — **되감기 신뢰 게이트 ①**.
+ *
+ * 근거(sp500): 1996-01-02 ~ 2026-01-14의 실제 구성종목 수를 공개 실측 데이터셋
+ * (github.com/fja05680/sp500 — A.Clenow 원본 + Wikipedia 갱신, 2718개 변경일 스냅샷)에서
+ * 세어 보면 **연초 스냅샷 487~506**, 전 구간 최소 487 · 최대 507이고 연간 순증감 |net|의
+ * 최대가 **5**였다(2026-08-03 측정). 밴드는 관측 구간 [487, 507]을 그 최대 순증감의
+ * 2배(±10)만큼 넓힌 **[477, 517]**로 잡는다. 되감은 목록의 크기가 이 밖으로 나가면 변경
+ * 이력표에 "한쪽만 적힌 행"(편입만 있고 짝이 되는 제외가 없음)이 누적됐다는 뜻이다.
+ *
+ * ndx는 같은 방식으로 측정하지 못했다 — 지수 정의상 100~102종목이라는 사실만으로
+ * [95, 107]을 잡았다. **[미검증]** — 첫 수집 실행의 실제 값으로 확정한다.
+ */
+export const US_INDEX_SIZE_BAND: Record<UsIndexKey, [number, number]> = {
+  sp500: [477, 517],
+  ndx: [95, 107], // [미검증]
+}
+
+/** 밴드 근거 한 줄 — 데이터 파일에 그대로 박아 둔다(나중에 "왜 이 숫자?"를 잃지 않게). */
+export const US_SIZE_BAND_BASIS =
+  'sp500: 1996~2026 실제 구성종목 수 관측치 [487, 507](연초 스냅샷 487~506 · 연간 순증감 최대 ±5, ' +
+  'fja05680/sp500 2026-08-03 측정)을 순증감 최대의 2배만큼 넓힘 → [477, 517]. ' +
+  'ndx: 지수 정의(100~102)에서 잡은 [95, 107] [미검증]'
+
+/**
+ * **되감기 신뢰 게이트 ②** — "늦게 편입된 종목이 과거 목록에 남아 있는 수"의 허용치.
+ *
+ * 현재 구성종목 표에는 `Date added`(편입일) 열이 있다. 되감기가 완전하다면 기준일 D의
+ * 복원 목록에는 **편입일이 D보다 늦은 종목이 하나도 없어야 한다.** 하나라도 있으면 그
+ * 종목의 편입 행이 변경 이력표에서 빠졌다는 **직접 증거**다(추정이 아니다).
+ * 기본값 0 — 한 건도 허용하지 않는다.
+ *
+ * ⚠️ 이 게이트는 **한 방향만** 잡는다. "그 시절 있었다가 지금은 없는 회사"는 현재 표에
+ *   없으므로 편입일을 알 수 없고, 그 종목의 누락은 여기서 안 잡힌다. 즉 두 게이트를
+ *   모두 통과해도 "완전하다"는 증명이 아니라 **"발견 가능한 결함이 없다"**는 뜻이다.
+ */
+export const US_LATE_ADDED_MAX = 0
+
+/** 한 종목 한 줄 — 그 시점 티커·회사명·(알면) 편입일. **시총 순위는 없다.** */
+export interface UsPitEntry {
+  /** 그 시점 표기 티커(PIT 정직성). 조회는 `resolveUsRealTicker`가 현재 티커로 바꾼다. */
+  ticker: string
+  name: string
+  /** 지수 편입일 `YYYY-MM-DD`. 현재 구성종목 표에 없거나 파싱 불가면 null. */
+  addedOn: string | null
+}
+
+/** 한 해의 복원 목록 + 그 해의 자기검증 결과. */
+export interface UsPitYearRecord {
+  /** 이 목록이 성립하는 기준일 `YYYY-MM-DD`(그 해 첫 거래일 근사). */
+  asOfDate: string
+  members: UsPitEntry[]
+  /** 편입일이 asOfDate보다 늦은 종목 수 = **누락된 변경행의 하한**(0이어야 정상). */
+  lateAdded: number
+  /** 그 표본 몇 개(진단용 · 최대 10개). */
+  lateAddedSample: string[]
+  /** 편입일을 알아 위 검사를 적용할 수 있었던 종목 수(검사 커버리지). */
+  dateAddedKnown: number
+}
+
+/** 연도별 게이트 판정. */
+export interface UsPitYearVerdict {
+  size: number
+  sizeOk: boolean
+  lateAdded: number
+  lateAddedOk: boolean
+  ok: boolean
+}
+
+/** `reliableFrom`을 어떻게 판정했는지 — 숫자로 남긴다. */
+export interface UsPitReliability {
+  sizeBand: [number, number]
+  sizeBandBasis: string
+  lateAddedMax: number
+  /** 변경 이력표에서 파싱한 가장 이른 행의 날짜 — 이보다 과거는 되감기 자체가 불가능하다. */
+  changesFirstDate: string
+  /** 파싱한 변경행 수(0이면 수집기가 던진다 — 조용한 빈 결과 금지). */
+  changeRows: number
+  years: Record<string, UsPitYearVerdict>
+}
+
+/** `public/data/us-pit/universe.json`의 전체 스키마. */
+export interface UsPitRealUniverse {
+  source: string
+  sourceUrl: string
+  license: string
+  index: UsIndexKey
+  /** 수집 실행일 `YYYY-MM-DD`(랭킹 기준일이 아니라 **뽑은 날**). */
+  asOf: string
+  /** 무엇을 담은 목록인지 한 줄 — "시총 상위 N이 아니다"를 문장으로 못 박는다. */
+  basis: string
+  /** 시총 순위 정보가 **없다**는 사실을 스키마에 박는다. 있는 척하지 않기 위해서다. */
+  rankSource: 'none'
+  /** 되감기를 신뢰할 수 있는 **가장 이른 해**. 이보다 과거는 접근에 명시적 동의가 필요하다. */
+  reliableFrom: number
+  reliability: UsPitReliability
+  /** 복원 시도했으나 만들지 못한 해. */
+  missingYears: number[]
+  /** 연도(4자리 문자열) → 그 해 복원 목록. `reliableFrom` 미만 연도도 들어 있을 수 있다. */
+  years: Record<string, UsPitYearRecord>
+}
+
+export const US_PIT_REAL_SOURCE = 'Wikipedia'
+export const US_PIT_REAL_LICENSE = 'CC BY-SA 4.0 (Wikipedia)'
+
+/** 지수별 Wikipedia 문서·근거 문장. 수집기와 스키마가 같은 상수를 쓴다. */
+export const US_INDEX_META: Record<UsIndexKey, { page: string; url: string; basis: string }> = {
+  sp500: {
+    page: 'List of S&P 500 companies',
+    url: 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies',
+    basis:
+      'S&P 500 **지수 구성종목**(위원회 선정) — 시총 상위 N이 아니다. 현재 구성종목 표를 ' +
+      '변경 이력표("Selected changes to the list of S&P 500 components")로 역방향 되감아 복원. 순위 없음.',
+  },
+  ndx: {
+    page: 'Nasdaq-100',
+    url: 'https://en.wikipedia.org/wiki/Nasdaq-100',
+    basis:
+      'Nasdaq-100 **지수 구성종목**(규칙 기반 선정) — 시총 상위 N이 아니다. 현재 구성종목 표를 ' +
+      '변경 이력표로 역방향 되감아 복원. 순위 없음. [미검증 — 첫 수집 실행에서 확정]',
+  },
+}
+
+function ufail(msg: string): never {
+  throw new Error(`us-pit universe.json 스키마 위반 — ${msg}`)
+}
+
+function parseUsEntries(raw: unknown, where: string): UsPitEntry[] {
+  if (!Array.isArray(raw)) ufail(`${where}가 배열이 아니다`)
+  if (raw.length === 0) ufail(`${where}가 비어 있다`)
+  const out: UsPitEntry[] = []
+  raw.forEach((r, i) => {
+    if (typeof r !== 'object' || r == null) ufail(`${where}[${i}]가 객체가 아니다`)
+    const e = r as Record<string, unknown>
+    const ticker = String(e.ticker ?? '')
+    const name = String(e.name ?? '')
+    const addedOn = e.addedOn == null ? null : String(e.addedOn)
+    // 미국 티커: 영문 대문자 1~5자 + 클래스 접미사(BRK-B). 소문자·공백·거래소 접미사(.KS)는 거부.
+    if (!/^[A-Z]{1,5}(-[A-Z])?$/.test(ticker))
+      ufail(`${where}[${i}].ticker가 미국 티커 형식이 아니다 (${ticker || '없음'})`)
+    if (!name.trim()) ufail(`${where}[${i}].name이 비어 있다 (${ticker})`)
+    if (addedOn !== null && !/^\d{4}-\d{2}-\d{2}$/.test(addedOn))
+      ufail(`${where}[${i}].addedOn이 YYYY-MM-DD도 null도 아니다 (${ticker}: ${addedOn})`)
+    out.push({ ticker, name, addedOn })
+  })
+  return out
+}
+
+/**
+ * JSON을 검증하며 읽는다. **거부하는 것**(조용히 넘어가면 백테스트가 거짓말을 한다):
+ *   · 필수 필드 누락·타입 오류 · 티커 형식 위반
+ *   · 한 해 안의 **중복 티커**
+ *   · 덮는 구간 안의 **결측 연도** — `missingYears`에 명시되지 않은 구멍은 거부
+ *   · `missingYears`에 넣어 놓고 `years`에도 있는 모순
+ *   · `reliableFrom`이 판정표(`reliability.years`)와 어긋나는 것 — 신뢰구간을 손으로
+ *     늘려 적는 것도, 반대로 통과한 해를 임의로 버리는 것도 막는다. **경계는 게이트가 정한다.**
+ *   · 게이트 판정이 실제 목록 크기·위반 수와 다른 것(판정 위조 방지)
+ */
+export function parseUsPitRealUniverse(raw: unknown): UsPitRealUniverse {
+  if (typeof raw !== 'object' || raw == null) ufail('최상위가 객체가 아니다')
+  const o = raw as Record<string, unknown>
+  const source = String(o.source ?? '')
+  const sourceUrl = String(o.sourceUrl ?? '')
+  const license = String(o.license ?? '')
+  const asOf = String(o.asOf ?? '')
+  const basis = String(o.basis ?? '')
+  const index = String(o.index ?? '') as UsIndexKey
+  if (!source.trim()) ufail('source가 비어 있다')
+  if (!sourceUrl.trim()) ufail('sourceUrl이 비어 있다')
+  if (!license.trim()) ufail('license가 비어 있다 — 출처 라이선스를 지우지 마라(CC BY-SA)')
+  if (!US_INDEX_KEYS.includes(index)) ufail(`index가 ${US_INDEX_KEYS.join('|')}가 아니다 (${index || '없음'})`)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf)) ufail(`asOf가 YYYY-MM-DD가 아니다 (${asOf || '없음'})`)
+  if (!basis.trim()) ufail('basis가 비어 있다')
+  if (o.rankSource !== 'none')
+    ufail(`rankSource는 'none'이어야 한다 (${String(o.rankSource)}) — 이 파일에는 시총 순위가 없다`)
+
+  if (!Array.isArray(o.missingYears)) ufail('missingYears가 배열이 아니다')
+  const missingYears = o.missingYears.map((v, i) => {
+    const y = Number(v)
+    if (!Number.isInteger(y) || y < 1900 || y > 2999) ufail(`missingYears[${i}]가 연도가 아니다 (${String(v)})`)
+    return y
+  })
+
+  if (typeof o.years !== 'object' || o.years == null || Array.isArray(o.years)) ufail('years가 객체가 아니다')
+  const yearsRaw = o.years as Record<string, unknown>
+  const keys = Object.keys(yearsRaw)
+  if (keys.length === 0) ufail('years가 비어 있다')
+
+  const years: Record<string, UsPitYearRecord> = {}
+  for (const k of keys) {
+    if (!/^\d{4}$/.test(k)) ufail(`years 키가 4자리 연도가 아니다 (${k})`)
+    const yv = yearsRaw[k]
+    if (typeof yv !== 'object' || yv == null) ufail(`years.${k}가 객체가 아니다`)
+    const rec = yv as Record<string, unknown>
+    const asOfDate = String(rec.asOfDate ?? '')
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(asOfDate))
+      ufail(`years.${k}.asOfDate가 YYYY-MM-DD가 아니다 (${asOfDate || '없음'})`)
+    if (asOfDate.slice(0, 4) !== k) ufail(`years.${k}.asOfDate의 연도가 키와 다르다 (${asOfDate})`)
+    const members = parseUsEntries(rec.members, `years.${k}.members`)
+    const seen = new Set<string>()
+    for (const e of members) {
+      if (seen.has(e.ticker)) ufail(`years.${k}에 중복 티커 ${e.ticker}(${e.name})가 있다`)
+      seen.add(e.ticker)
+    }
+    const lateAdded = Number(rec.lateAdded)
+    const dateAddedKnown = Number(rec.dateAddedKnown)
+    if (!Number.isInteger(lateAdded) || lateAdded < 0) ufail(`years.${k}.lateAdded가 0 이상의 정수가 아니다`)
+    if (!Number.isInteger(dateAddedKnown) || dateAddedKnown < 0)
+      ufail(`years.${k}.dateAddedKnown이 0 이상의 정수가 아니다`)
+    if (dateAddedKnown > members.length) ufail(`years.${k}.dateAddedKnown이 구성종목 수보다 크다`)
+    if (lateAdded > dateAddedKnown) ufail(`years.${k}.lateAdded가 검사 가능 종목 수보다 크다 — 판정이 조작됐다`)
+    if (!Array.isArray(rec.lateAddedSample)) ufail(`years.${k}.lateAddedSample이 배열이 아니다`)
+    const lateAddedSample = rec.lateAddedSample.map(String)
+    years[k] = { asOfDate, members, lateAdded, lateAddedSample, dateAddedKnown }
+  }
+
+  const present = keys.map(Number).sort((a, b) => a - b)
+  const missSet = new Set(missingYears)
+  for (const y of present) if (missSet.has(y)) ufail(`${y}년이 missingYears에 있으면서 years에도 있다`)
+  for (let y = present[0]; y <= present[present.length - 1]; y++) {
+    if (years[String(y)]) continue
+    if (missSet.has(y)) continue
+    ufail(`${y}년이 빠졌는데 missingYears에도 없다 — 결측을 숨기지 마라`)
+  }
+
+  // ── 신뢰구간 판정표 검증 ────────────────────────────────────────────────
+  const rel = o.reliability
+  if (typeof rel !== 'object' || rel == null) ufail('reliability가 객체가 아니다')
+  const r = rel as Record<string, unknown>
+  if (!Array.isArray(r.sizeBand) || r.sizeBand.length !== 2) ufail('reliability.sizeBand가 [min,max]가 아니다')
+  const sizeBand: [number, number] = [Number(r.sizeBand[0]), Number(r.sizeBand[1])]
+  if (!Number.isFinite(sizeBand[0]) || !Number.isFinite(sizeBand[1]) || sizeBand[0] > sizeBand[1])
+    ufail(`reliability.sizeBand가 유효한 구간이 아니다 (${sizeBand.join(', ')})`)
+  const sizeBandBasis = String(r.sizeBandBasis ?? '')
+  if (!sizeBandBasis.trim()) ufail('reliability.sizeBandBasis가 비어 있다 — 밴드 숫자의 근거를 지우지 마라')
+  const lateAddedMax = Number(r.lateAddedMax)
+  if (!Number.isInteger(lateAddedMax) || lateAddedMax < 0) ufail('reliability.lateAddedMax가 0 이상의 정수가 아니다')
+  const changesFirstDate = String(r.changesFirstDate ?? '')
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(changesFirstDate))
+    ufail(`reliability.changesFirstDate가 YYYY-MM-DD가 아니다 (${changesFirstDate || '없음'})`)
+  const changeRows = Number(r.changeRows)
+  if (!Number.isInteger(changeRows) || changeRows <= 0)
+    ufail(`reliability.changeRows가 1 이상의 정수가 아니다 (${String(r.changeRows)}) — 변경행 0건은 되감기가 아니다`)
+  if (typeof r.years !== 'object' || r.years == null || Array.isArray(r.years))
+    ufail('reliability.years가 객체가 아니다')
+  const verdictRaw = r.years as Record<string, unknown>
+  const verdicts: Record<string, UsPitYearVerdict> = {}
+  for (const k of keys) {
+    const v = verdictRaw[k]
+    if (typeof v !== 'object' || v == null) ufail(`reliability.years.${k}가 없다 — 판정하지 않은 해를 넣지 마라`)
+    const vv = v as Record<string, unknown>
+    const size = Number(vv.size)
+    const lateAdded = Number(vv.lateAdded)
+    if (size !== years[k].members.length)
+      ufail(`reliability.years.${k}.size(${size})가 실제 구성종목 수(${years[k].members.length})와 다르다`)
+    if (lateAdded !== years[k].lateAdded)
+      ufail(`reliability.years.${k}.lateAdded(${lateAdded})가 실제 값(${years[k].lateAdded})과 다르다`)
+    const sizeOk = size >= sizeBand[0] && size <= sizeBand[1]
+    const lateOk = lateAdded <= lateAddedMax
+    if (vv.sizeOk !== sizeOk) ufail(`reliability.years.${k}.sizeOk가 밴드 계산과 다르다`)
+    if (vv.lateAddedOk !== lateOk) ufail(`reliability.years.${k}.lateAddedOk가 임계 계산과 다르다`)
+    if (vv.ok !== (sizeOk && lateOk)) ufail(`reliability.years.${k}.ok가 두 게이트의 논리곱과 다르다`)
+    verdicts[k] = { size, sizeOk, lateAdded, lateAddedOk: lateOk, ok: sizeOk && lateOk }
+  }
+
+  const reliableFrom = Number(o.reliableFrom)
+  if (!Number.isInteger(reliableFrom)) ufail(`reliableFrom이 정수가 아니다 (${String(o.reliableFrom)})`)
+  const trusted = present.filter((y) => y >= reliableFrom)
+  if (trusted.length === 0) ufail(`reliableFrom(${reliableFrom}) 이상인 연도가 하나도 없다 — 쓸 수 있는 구간이 없다`)
+  for (const y of trusted)
+    if (!verdicts[String(y)].ok)
+      ufail(`${y}년이 reliableFrom(${reliableFrom}) 이상인데 게이트를 통과하지 못했다 — 신뢰구간을 늘려 적지 마라`)
+  // 경계 바로 아래 해가 통과했다면 경계를 더 내렸어야 한다 — 판정은 데이터가 하고
+  // 사람이 손으로 올리거나 내리지 못하게 한다.
+  const below = reliableFrom - 1
+  if (years[String(below)] && verdicts[String(below)].ok)
+    ufail(`${below}년이 게이트를 통과했는데 reliableFrom이 ${reliableFrom}이다 — 경계는 게이트가 정한다`)
+
+  return {
+    source,
+    sourceUrl,
+    license,
+    index,
+    asOf,
+    basis,
+    rankSource: 'none',
+    reliableFrom,
+    reliability: { sizeBand, sizeBandBasis, lateAddedMax, changesFirstDate, changeRows, years: verdicts },
+    missingYears,
+    years,
+  }
+}
+
+/**
+ * 게이트를 돌려 `reliableFrom`을 **데이터가 정하게** 한다.
+ *
+ * 최신 연도부터 과거로 내려가며 두 게이트를 모두 통과하는 동안만 신뢰구간을 넓힌다.
+ * 한 해라도 걸리면 거기서 멈춘다 — **중간에 뚫린 해를 건너뛰고 더 과거까지 신뢰한다고
+ * 말하지 않는다.** 되감기 오류는 과거로 갈수록 누적되므로, 한 번 깨진 뒤의 통과는
+ * 우연일 수 있다.
+ */
+export function judgeUsPitReliability(
+  years: Record<string, UsPitYearRecord>,
+  sizeBand: [number, number],
+  lateAddedMax: number,
+): { reliableFrom: number; verdicts: Record<string, UsPitYearVerdict> } {
+  const keys = Object.keys(years)
+    .map(Number)
+    .sort((a, b) => a - b)
+  if (keys.length === 0) throw new Error('판정할 연도가 없다')
+  const verdicts: Record<string, UsPitYearVerdict> = {}
+  for (const y of keys) {
+    const size = years[String(y)].members.length
+    const lateAdded = years[String(y)].lateAdded
+    const sizeOk = size >= sizeBand[0] && size <= sizeBand[1]
+    const lateAddedOk = lateAdded <= lateAddedMax
+    verdicts[String(y)] = { size, sizeOk, lateAdded, lateAddedOk, ok: sizeOk && lateAddedOk }
+  }
+  const newest = keys[keys.length - 1]
+  if (!verdicts[String(newest)].ok)
+    throw new Error(
+      `가장 최근 연도(${newest})부터 게이트를 통과하지 못했다 — 되감기 이전에 ` +
+        `**현재 목록 파싱**이 이미 틀렸을 가능성이 높다(구성종목 ${verdicts[String(newest)].size}종목 · ` +
+        `허용 ${sizeBand.join('~')} · 늦은편입 위반 ${verdicts[String(newest)].lateAdded}건).`,
+    )
+  let reliableFrom = newest
+  for (let i = keys.length - 1; i >= 0; i--) {
+    if (!verdicts[String(keys[i])].ok) break
+    reliableFrom = keys[i]
+  }
+  return { reliableFrom, verdicts }
+}
+
+/** 수집 결과를 스키마 객체로 조립한다(쓰는 쪽 단일 경로). 조립 즉시 파서로 자기검증한다. */
+export function buildUsPitRealUniverse(input: {
+  index: UsIndexKey
+  asOf: string
+  years: Record<number, UsPitYearRecord>
+  missingYears: number[]
+  changesFirstDate: string
+  changeRows: number
+  sizeBand?: [number, number]
+  lateAddedMax?: number
+}): UsPitRealUniverse {
+  const meta = US_INDEX_META[input.index]
+  const sizeBand = input.sizeBand ?? US_INDEX_SIZE_BAND[input.index]
+  const lateAddedMax = input.lateAddedMax ?? US_LATE_ADDED_MAX
+  const years: Record<string, UsPitYearRecord> = {}
+  for (const y of Object.keys(input.years)
+    .map(Number)
+    .sort((a, b) => a - b))
+    years[String(y)] = input.years[y]
+  const { reliableFrom, verdicts } = judgeUsPitReliability(years, sizeBand, lateAddedMax)
+  return parseUsPitRealUniverse({
+    source: US_PIT_REAL_SOURCE,
+    sourceUrl: meta.url,
+    license: US_PIT_REAL_LICENSE,
+    index: input.index,
+    asOf: input.asOf,
+    basis: meta.basis,
+    rankSource: 'none',
+    reliableFrom,
+    reliability: {
+      sizeBand,
+      sizeBandBasis: US_SIZE_BAND_BASIS,
+      lateAddedMax,
+      changesFirstDate: input.changesFirstDate,
+      changeRows: input.changeRows,
+      years: verdicts,
+    },
+    missingYears: [...input.missingYears].sort((a, b) => a - b),
+    years,
+  })
+}
+
+/** 파일에 들어 있는 **모든** 연도(신뢰 못 하는 구간 포함 · 오름차순). 진단 전용. */
+export function usRealAllYears(u: UsPitRealUniverse): number[] {
+  return Object.keys(u.years)
+    .map(Number)
+    .sort((a, b) => a - b)
+}
+
+/** **신뢰구간 안의** 연도만(오름차순). 백테스트가 쓰는 기본 접근자다. */
+export function usRealYears(u: UsPitRealUniverse): number[] {
+  return usRealAllYears(u).filter((y) => y >= u.reliableFrom)
+}
+
+/**
+ * 그 해 구성종목(그 시점 티커). **신뢰구간 밖이면 던진다** — 조용히 쓰지 못하게 한다.
+ * 진단 목적이면 `allowUnreliable: true`를 명시해야 한다.
+ */
+export function usRealCodes(u: UsPitRealUniverse, year: number, allowUnreliable = false): string[] {
+  if (year < u.reliableFrom && !allowUnreliable)
+    throw new Error(
+      `${year}년은 되감기 신뢰구간 밖이다(reliableFrom=${u.reliableFrom}) — ` +
+        `변경 이력표가 그 시점까지 완전하지 않다는 뜻이므로 백테스트에 쓰지 않는다. ` +
+        `진단 목적이면 allowUnreliable을 명시하라.`,
+    )
+  return (u.years[String(year)]?.members ?? []).map((e) => e.ticker)
+}
+
+/** 티커 → 그 티커에 붙었던 회사명들(등장 순서 · 중복 제거). 재사용/개명 탐지의 원재료. */
+export function usRealNameHistory(u: UsPitRealUniverse): Record<string, string[]> {
+  const out: Record<string, string[]> = {}
+  for (const y of usRealAllYears(u))
+    for (const e of u.years[String(y)].members) {
+      const arr = (out[e.ticker] ??= [])
+      if (!arr.includes(e.name)) arr.push(e.name)
+    }
+  return out
+}
+
+/**
+ * **티커 재사용 탐지** — 같은 티커에 회사명이 둘 이상 붙은 경우를 모은다.
+ *
+ * 이 상태는 둘 중 하나다: ① 회사는 그대로인데 **사명만** 바뀌었다(Facebook→Meta) —
+ * 시계열을 이어 쓰는 것이 맞다. ② 회사가 사라지고 **다른 회사가 티커를 물려받았다**
+ * (LU=Lucent→Lufax, SUNW=Sun→Sunworks) — 이어 쓰면 백테스트가 조용히 오염된다.
+ * 자동으로는 구분할 수 없다. 그래서 **사람이 분류할 때까지 조회를 거부**한다
+ * (`resolveUsRealTicker`). 차단의 대가는 매핑률 하락뿐이고, 오염은 결과를 거짓말시킨다.
+ */
+export function usRealNameConflicts(u: UsPitRealUniverse): Record<string, string[]> {
+  const hist = usRealNameHistory(u)
+  const out: Record<string, string[]> = {}
+  for (const [t, names] of Object.entries(hist)) if (names.length > 1) out[t] = names
+  return out
+}
+
+/** 아직 `US_TICKER_RENAMES`(개명)에도 `US_BLOCKED_TICKERS`(재사용)에도 없는 충돌 티커. */
+export function usRealUnclassifiedConflicts(u: UsPitRealUniverse): string[] {
+  return Object.keys(usRealNameConflicts(u))
+    .filter((t) => !(t in US_TICKER_RENAMES) && !US_BLOCKED_TICKERS.has(t))
+    .sort()
+}
+
+/**
+ * 그 시점 티커 → `histories` 키. 기존 `resolveUsTicker` 규약을 그대로 잇고 **한 겹 더** 막는다.
+ *   ① 재사용 확정 티커(`US_BLOCKED_TICKERS`) → undefined
+ *   ② **미분류 사명 충돌** → undefined (재사용일 수 있으므로 정직한 매핑 실패로 계수)
+ *   ③ 그 외는 `resolveUsTicker`와 동일(그 시점 티커 → 없으면 개명 폴백)
+ */
+export function resolveUsRealTicker(
+  u: UsPitRealUniverse,
+  code: string,
+  has: (sym: string) => boolean,
+  unclassified: Set<string> = new Set(usRealUnclassifiedConflicts(u)),
+): string | undefined {
+  if (unclassified.has(code)) return undefined
+  return resolveUsTicker(code, has)
+}
+
+/** 신뢰구간 전 연도 합집합 — 시세를 한 번만 받기 위한 **조회용** 목록(차단·미분류 제외·정렬). */
+export function usRealFetchUnion(u: UsPitRealUniverse): string[] {
+  const unclassified = new Set(usRealUnclassifiedConflicts(u))
+  const set = new Set<string>()
+  for (const y of usRealYears(u))
+    for (const code of usRealCodes(u, y)) {
+      if (unclassified.has(code)) continue
+      const t = usFetchTicker(code)
+      if (t) set.add(t)
+    }
+  return [...set].sort()
+}
+
+/**
+ * `[from, to]` 구간을 전부 덮는지 확인하고 덮는 연도만 돌려준다.
+ * 구멍이 있으면 **던진다** — 조용히 짧은 구간으로 돌면 다른 표와 비교가 성립하지 않는다.
+ */
+export function usRealSpan(u: UsPitRealUniverse, from: number, to: number): number[] {
+  if (from < u.reliableFrom)
+    throw new Error(
+      `요청 구간 시작(${from})이 되감기 신뢰구간(${u.reliableFrom}~) 밖이다 — ` +
+        `그 시점 변경 이력이 불완전하므로 목록이 틀린다.`,
+    )
+  const have = new Set(usRealYears(u))
+  const missing: number[] = []
+  const out: number[] = []
+  for (let y = from; y <= to; y++) {
+    if (have.has(y)) out.push(y)
+    else missing.push(y)
+  }
+  if (missing.length > 0)
+    throw new Error(
+      `실측 유니버스에 ${from}~${to} 중 ${missing.join(', ')}년이 없다 — ` +
+        `${US_PIT_REAL_PATH}를 GHA(us-pit-collect)로 다시 수집하라(복원 불가 연도: ${u.missingYears.join(', ') || '없음'}).`,
+    )
+  return out
+}
+
+/** 화면·로그용 한 줄 출처 표기(규칙 3 — 실데이터 라벨 + 한계 병기). */
+export function usRealSourceNote(u: UsPitRealUniverse): string {
+  const ys = usRealYears(u)
+  const span = ys.length ? `${ys[0]}~${ys[ys.length - 1]}` : '(없음)'
+  const all = usRealAllYears(u)
+  const dropped = all.filter((y) => y < u.reliableFrom)
+  const drop = dropped.length ? ` · 신뢰구간 밖이라 버린 해 ${dropped[0]}~${dropped[dropped.length - 1]}` : ''
+  const miss = u.missingYears.length ? ` · 복원 불가 연도 ${u.missingYears.join(', ')}` : ''
+  return (
+    `유니버스: ${u.source} ${US_INDEX_META[u.index].page} 실측 구성종목 ${span} · 수집일 ${u.asOf}${drop}${miss} — ` +
+    `${u.basis} 되감기 신뢰 판정: 구성종목 수 ${u.reliability.sizeBand.join('~')} · 늦은편입 위반 ≤${u.reliability.lateAddedMax} ` +
+    `(변경행 ${u.reliability.changeRows}건 · 가장 이른 행 ${u.reliability.changesFirstDate})`
+  )
+}
+
+/** 실측 유니버스에서 파생된 실행 재료 — 화면·러너가 **같은 함수**로 만든다. */
+export interface DerivedUsRealUniverse {
+  years: number[]
+  union: string[]
+  codesFor: (year: number) => string[]
+  label: string
+  sourceNote: string
+}
+
+/**
+ * 파싱된 실측 유니버스 → 실행 재료. 구간에 구멍이 있으면 **던진다**(usRealSpan).
+ * `from`을 생략하면 신뢰구간의 첫 해부터다.
+ */
+export function deriveUsRealUniverse(u: UsPitRealUniverse, from?: number, to?: number): DerivedUsRealUniverse {
+  const covered = usRealYears(u)
+  if (covered.length === 0)
+    throw new Error(`실측 유니버스에 신뢰 가능한 연도가 없다 — ${US_PIT_REAL_PATH}를 다시 수집하라.`)
+  const years = usRealSpan(u, from ?? covered[0], to ?? covered[covered.length - 1])
+  const union = usRealFetchUnion(u)
+  if (union.length === 0) throw new Error('실측 유니버스에서 조회 가능한 티커를 하나도 뽑지 못했다.')
+  return {
+    years,
+    union,
+    codesFor: (year: number) => usRealCodes(u, year),
+    label: `${US_INDEX_META[u.index].page} 실측 구성종목 · ${years[0]}~${years[years.length - 1]} · 고유 ${union.length}종목(순위 없음)`,
+    sourceNote: usRealSourceNote(u),
+  }
+}
+
+/** 로드 실패 시 화면·로그에 그대로 보여줄 안내 — "폴백은 없다"를 문장으로 못 박는다. */
+export const US_PIT_REAL_LOAD_FAIL =
+  `미장 실측 유니버스(${US_PIT_REAL_PATH})를 읽지 못했습니다 — 백테스트를 실행할 수 없습니다. ` +
+  `[추정] 목록(US_PIT20·US_PIT80)으로 대신 돌리지 않습니다(국장 33차에서 [추정] 목록발 알파가 ` +
+  `+21.9%p → +2.6%p로 무너졌고, 조용한 폴백은 그 사고를 눈에 안 띄게 되풀이합니다). ` +
+  `GHA 워크플로(us-pit-collect)를 돌려 파일을 생성·커밋하세요.`
+
+/** fetch 응답 최소 계약 — 테스트가 가짜 fetch를 끼울 수 있게 좁혀 둔다. */
+export interface UsUniverseResponse {
+  ok: boolean
+  status: number
+  json: () => Promise<unknown>
+}
+
+/**
+ * 실측 유니버스 파일을 읽어 파싱한다. **어떤 실패도 삼키지 않는다** —
+ * 네트워크·HTTP·JSON·스키마 위반 전부 던진다. 부르는 쪽이 그 메시지를 화면에 띄운다.
+ */
+export async function loadUsPitRealUniverse(
+  baseUrl: string,
+  fetchImpl: (url: string) => Promise<UsUniverseResponse>,
+): Promise<UsPitRealUniverse> {
+  const url = `${baseUrl}${US_PIT_REAL_ASSET_PATH}`
+  let res: UsUniverseResponse
+  try {
+    res = await fetchImpl(url)
+  } catch (e) {
+    throw new Error(`${US_PIT_REAL_LOAD_FAIL} (네트워크 오류: ${String(e)})`)
+  }
+  if (!res.ok) throw new Error(`${US_PIT_REAL_LOAD_FAIL} (HTTP ${res.status} · ${url})`)
+  let raw: unknown
+  try {
+    raw = await res.json()
+  } catch (e) {
+    throw new Error(`${US_PIT_REAL_LOAD_FAIL} (JSON 파싱 실패: ${String(e)})`)
+  }
+  return parseUsPitRealUniverse(raw)
+}
