@@ -57,6 +57,9 @@ jobs:
             # `uspit:`를 `us:`보다 **위에** 둔다 — case는 위에서부터 매칭이라 순서가 뒤바뀌면
             # `us:*`가 `uspit:collect`를 삼켜 us-lab이 MODE=pit:collect로 돈다(조용한 오작동).
             uspit:*) SCRIPT="us-pit-collect.mjs"; RUN_MODE="${RAW#uspit:}";;
+            # `ussrc:`도 `us:`보다 **위**에 둔다 — 아래 두면 `us:*`가 `ussrc:free`를 삼켜
+            # us-lab이 MODE=src:free로 도는 조용한 오작동이 난다(uspit에서 겪은 그 함정).
+            ussrc:*) SCRIPT="us-source-probe.mjs"; RUN_MODE="${RAW#ussrc:}";;
             us:*) SCRIPT="us-lab.mjs"; RUN_MODE="${RAW#us:}";;
           esac
           [ -n "${{ inputs.grid }}" ] && export PIT_GRID="${{ inputs.grid }}"
