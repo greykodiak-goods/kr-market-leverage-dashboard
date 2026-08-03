@@ -22,18 +22,19 @@ import type { EquityRow } from './EquityChart'
 import { normalizePriceSource, type PriceSource } from './priceSource'
 
 /** 굽는 쪽이 지금 쓰는 산출물 스키마 버전(4 = 시세 소스 표기 추가 · 야후 배제 2단계). */
-export const PRECOMPUTE_SCHEMA = 4
+export const PRECOMPUTE_SCHEMA = 5
 
 /**
  * 화면이 **읽을 수 있는** 스키마 버전들. 모르는 버전이면 없는 셈 친다(우아한 강등).
  *
- * 1 → 2 → 3 → 4는 전부 **필드 추가만** 했으므로 옛 산출물도 그대로 읽는다. 다만 schema 1 파일에는
+ * 1 → 2 → 3 → 4 → 5는 전부 **필드 추가만** 했으므로 옛 산출물도 그대로 읽는다. 다만 schema 1 파일에는
  * 신규 지표(변동성·샤프·소르티노·최장 낙폭 기간·손익비·PF)가, schema 1·2 파일에는 참고 벽(walls)이,
- * schema 1~3 파일에는 시세 소스 표기가 없으므로 그 자리는 `undefined`로 남아 화면에서 '—'이거나
- * 상수로 강등된다 — 없는 값을 0으로 채우지 않는다(규칙 3).
- * (시세 소스가 없는 옛 산출물은 **야후로 구운 것**이다 — 그때는 야후밖에 없었다.)
+ * schema 1~3 파일에는 시세 소스 표기가, schema 1~4 파일에는 **비교 기준**이 없으므로 그 자리는
+ * `undefined`로 남아 화면에서 '—'이거나 상수로 강등된다 — 없는 값을 0으로 채우지 않는다(규칙 3).
+ * (시세 소스가 없는 옛 산출물은 **야후로 구운 것**이고, 비교 기준이 없는 산출물은 **총수익 벤치**로
+ *  구운 것이다 — 둘 다 추측이 아니라 사실이다.)
  */
-export const SUPPORTED_PRECOMPUTE_SCHEMAS: readonly number[] = [1, 2, 3, 4]
+export const SUPPORTED_PRECOMPUTE_SCHEMAS: readonly number[] = [1, 2, 3, 4, 5]
 
 /**
  * 참고 벽 — 같은 구간 단순보유를 **다시 재서** 나란히 놓는 값(34차 규약).
@@ -109,7 +110,16 @@ export interface PrecomputedFile {
   priceSource?: PriceSource
   priceSourceNote?: string
   priceSourceLimits?: string[]
+  /**
+   * 알파를 잴 때 벤치·벽을 어떤 기준으로 받았나(schema 5~).
+   * 없으면 **'total'**이다 — 배당 비대칭을 제거하기 전(2026-08-03 40차 이전)에 구운 산출물은
+   * 전부 총수익 벤치로 잰 것이 **사실**이다. 그 시절 알파는 전략에 불리하게 찍혀 있다.
+   */
+  compareBasis?: CompareBasis
 }
+
+/** 벤치·벽의 배당 반영 여부. 전략(KRX 정본)이 가격수익이면 벤치도 가격수익이어야 공정하다. */
+export type CompareBasis = 'total' | 'price'
 
 export interface PrecomputedIndex {
   asOf: string
@@ -128,6 +138,13 @@ export interface PrecomputedIndex {
    * 화면은 지금 고른 소스와 이 값이 다르면 "다른 소스로 구운 수치"라고 알린다(규칙 3).
    */
   priceSource: PriceSource
+  /**
+   * 벤치·벽을 어떤 기준으로 재서 구운 산출물인가. **없으면 'total'로 읽는다** —
+   * 40차(2026-08-03) 이전 산출물은 전부 총수익 벤치였고, 그때의 알파는 전략에
+   * **불리한 쪽으로** 약 2%p 편향돼 있다. 현재 기본값을 따라가면 옛 수치에 새 라벨이
+   * 붙어 거짓이 되므로, `priceSource`와 같은 방식으로 옛 값을 고정한다.
+   */
+  compareBasis: CompareBasis
   priceSourceNote: string
   priceSourceLimits: string[]
 }
@@ -159,6 +176,9 @@ export function toPrecomputedIndex(raw: unknown): PrecomputedIndex | null {
     // 구운 것이 **사실**이다. 현재 기본값(2026-08-03부터 'krx')을 따라가면 옛 수치에 새 소스
     // 라벨이 붙어 거짓이 된다. 그래서 normalizePriceSource(=현재 기본값)를 쓰지 않는다.
     priceSource: f.priceSource == null ? 'yahoo' : normalizePriceSource(f.priceSource),
+    // 없으면 **'total' 고정**(위 priceSource와 같은 이유). 모르는 값도 'total'로 좁힌다 —
+    // 'price'라고 잘못 읽으면 "공정하게 잰 수치"라는 라벨이 옛 산출물에 붙는다.
+    compareBasis: f.compareBasis === 'price' ? 'price' : 'total',
     priceSourceNote: typeof f.priceSourceNote === 'string' ? f.priceSourceNote : '',
     priceSourceLimits: Array.isArray(f.priceSourceLimits)
       ? f.priceSourceLimits.filter((l): l is string => typeof l === 'string')

@@ -95,23 +95,14 @@ const OUT_PATH = join(root, 'public', 'data', 'presets-precomputed.json')
  *   같은 표에서 비교하면 안 되는 값이라, 소스 표기가 없으면 그 표가 곧 거짓이 된다(규칙 3).
  * 전부 필드 추가만이라 화면(precomputed.ts)은 schema 1·2·3 산출물도 계속 읽는다(없는 값은 '—'·상수 강등).
  *
- * ── 2026-08-03 **비교 기준(compareBasis)은 schema를 올리지 못한 채** 추가됐다 ─────────────
- * 벤치(KODEX 200)·참고 벽(QQQ)을 전략과 **같은 수익 기준**으로 받았는지 산출물이 스스로 말하도록
- * `compareBasis` 필드를 넣었다. 원래 지시는 **schema 5로 올리는 것**이었는데 올리지 못했다:
- *   ⛔ 화면 리더 `src/features/backtest/precomputed.ts`의 `SUPPORTED_PRECOMPUTE_SCHEMAS`가
- *      `[1, 2, 3, 4]`라서, 5로 구우면 `toPrecomputedIndex()`가 산출물을 **통째로 거부**한다
- *      (화면에서 사전계산 프리셋이 사라진다 — `tests/perfstats.test.ts`가 실제로 이를 잡았다).
- *      그 파일은 이 작업의 **파일 경계 밖**(수정 금지)이라 같이 고칠 수 없었다.
- * **버전을 올리지 않아도 의미는 깨지지 않는다** — 신·구 판별은 필드의 유무가 하기 때문이다:
- *   · 필드가 **있으면** 그 값이 사실이다(이 러너는 항상 명시적으로 굽는다).
- *   · 필드가 **없으면 `'total'`이 사실이다** — 2026-08-03 이전 산출물은 전략이 KRX 가격수익이어도
- *     벤치·벽만 야후 총수익으로 구웠다. 조용히 새 기본값('price')으로 읽으면 옛 수치의 의미가 바뀐다.
- *     (`priceSource`가 없으면 'yahoo'로 읽는 것과 **정확히 같은 패턴**이다.)
- * 후속(총괄 몫, 이 PR 밖): ① `SUPPORTED_PRECOMPUTE_SCHEMAS`에 `5` 추가 → ② 리더에
- *   `compareBasis?: ReturnBasis` + **없으면 `'total'`** 폴백 → ③ 여기 `PRECOMPUTE_SCHEMA = 5`.
- *   세 개는 **같은 PR에서** 움직여야 한다(하나만 가면 화면이 죽거나 표기가 사라진다).
+ * ── 5 (2026-08-03): **비교 기준(compareBasis)** 추가 — 배당 비대칭 제거(40차) ────────────
+ *   전략은 KRX 가격수익인데 벤치·벽만 야후 총수익이라 알파가 전략에 **불리하게** 찍혀 있었다.
+ *   그 편향을 제거하면서, 이 산출물이 어느 기준으로 구워졌는지를 필드로 남긴다.
+ *   **schema 1~4 산출물에는 이 필드가 없고, 그것들은 전부 총수익 벤치로 구운 것이 사실이다** —
+ *   리더(`src/features/backtest/precomputed.ts`)가 없으면 `'total'`로 고정해 읽는다
+ *   (`priceSource`가 없으면 `'yahoo'`로 읽는 것과 같은 규약).
  */
-export const PRECOMPUTE_SCHEMA = 4
+export const PRECOMPUTE_SCHEMA = 5
 
 /**
  * 시세 소스 선택 — `PRICE_SOURCE=krx|yahoo`(기본 yahoo).

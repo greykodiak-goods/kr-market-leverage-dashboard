@@ -315,13 +315,15 @@ function fakeResult(over: Partial<PitChainResult> = {}): PitChainResult {
 }
 
 {
-  // 3 = 참고 벽(walls) 추가(34차) · 4 = 시세 소스 표기 추가(야후 배제 2단계).
+  // 3 = 참고 벽(walls) 추가(34차) · 4 = 시세 소스 표기 추가(야후 배제 2단계)
+  // · 5 = 비교 기준(compareBasis) 추가(40차 배당 비대칭 제거).
   // 필드 추가만이라 옛 산출물도 계속 읽힌다.
-  eq('굽는 쪽 스키마는 4', PRECOMPUTE_SCHEMA, 4)
+  eq('굽는 쪽 스키마는 5', PRECOMPUTE_SCHEMA, 5)
   check('화면은 1도 읽는다', SUPPORTED_PRECOMPUTE_SCHEMAS.includes(1))
   check('화면은 2도 읽는다', SUPPORTED_PRECOMPUTE_SCHEMAS.includes(2))
   check('화면은 3도 읽는다', SUPPORTED_PRECOMPUTE_SCHEMAS.includes(3))
   check('화면은 4도 읽는다', SUPPORTED_PRECOMPUTE_SCHEMAS.includes(4))
+  check('화면은 5도 읽는다', SUPPORTED_PRECOMPUTE_SCHEMAS.includes(5))
 
   const row = summarizePreset({ id: 'x-1', label: '테스트', kind: 'momentum' }, fakeResult(), 10_000_000)
   for (const k of ['volAnnPct', 'sharpe', 'sortino', 'maxDdDays', 'maxDdRecovered', 'payoffRatio', 'profitFactor'])
@@ -339,14 +341,16 @@ function fakeResult(over: Partial<PitChainResult> = {}): PitChainResult {
 
   // ---- 화면 로더 왕복: 현행 스키마 ----
   const payload = buildPayload([row, combo], '2026-08-01', '2026-08-02T00:00:00.000Z', DEFAULT_COST)
-  eq('payload 스키마 4', payload.schema, 4)
+  eq('payload 스키마 5', payload.schema, 5)
   check('note에 무위험 0% 가정 명시', payload.note.includes('무위험수익률 0%'))
   // 시세 소스를 안 넘기면 **야후 전제**로 굽는다 — 옛 호출부와 수치·의미가 갈리지 않는다.
   eq('기본 시세 소스는 야후', payload.priceSource, 'yahoo')
   const idx2 = toPrecomputedIndex(JSON.parse(JSON.stringify(payload)))
   check('현행 스키마 파일을 읽는다', idx2 != null)
-  eq('읽은 스키마 기록', idx2?.schema, 4)
+  eq('읽은 스키마 기록', idx2?.schema, 5)
   eq('읽은 시세 소스', idx2?.priceSource, 'yahoo')
+  // 야후 전제로 구우면 벤치도 총수익이라 기준이 일치한다 — 비교 기준도 total이어야 한다.
+  eq('읽은 비교 기준', idx2?.compareBasis, 'total')
   close('왕복 후 샤프 유지', idx2?.byId['x-1'].sharpe as number, row.sharpe as number, 1e-12)
   eq('왕복 후 결합 PF는 null 유지', idx2?.byId['c-1'].profitFactor, null)
 
@@ -354,6 +358,7 @@ function fakeResult(over: Partial<PitChainResult> = {}): PitChainResult {
   const legacy = JSON.parse(JSON.stringify(payload))
   legacy.schema = 1
   delete legacy.priceSource // schema 1~3에는 시세 소스 표기 자체가 없다
+  delete legacy.compareBasis // schema 1~4에는 비교 기준 표기 자체가 없다
   for (const p of legacy.presets)
     for (const k of ['volAnnPct', 'sharpe', 'sortino', 'maxDdDays', 'maxDdRecovered', 'maxDdStart', 'maxDdEnd', 'payoffRatio', 'profitFactor'])
       delete p[k]
@@ -364,6 +369,9 @@ function fakeResult(over: Partial<PitChainResult> = {}): PitChainResult {
   eq('옛 파일에 신규 지표는 없음(0으로 채우지 않는다)', idx1?.byId['x-1'].sharpe, undefined)
   // 시세 소스 표기가 없던 시절의 산출물은 **야후로 구운 것**이다(추측이 아니라 사실).
   eq('옛 파일은 야후로 읽는다', idx1?.priceSource, 'yahoo')
+  // 40차 이전 산출물은 전부 총수익 벤치로 구운 것이 **사실**이다. 현재 기본값을 따라가면
+  // 옛 수치에 '공정하게 잰 값'이라는 라벨이 붙어 거짓이 된다.
+  eq('옛 파일은 총수익 벤치로 읽는다', idx1?.compareBasis, 'total')
   eq('신규 지표 없음은 화면에서 —', fmtRatio(idx1?.byId['x-1'].sharpe), '—')
 
   // 모르는 스키마는 여전히 없는 셈 친다(우아한 강등)
