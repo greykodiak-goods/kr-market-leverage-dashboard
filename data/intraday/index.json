@@ -12,560 +12,729 @@
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "000660.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "402340.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "373220.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "005380.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "207940.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "009150.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "105560.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "032830.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "055550.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "028260.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "000270.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "329180.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "012450.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "068270.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "012330.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "034020.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "086790.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "034730.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "035420.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "006400.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "000810.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "009540.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "042660.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "066570.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "005490.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "316140.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "010120.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "015760.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "267260.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "138040.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "069500.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "096770.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "011200.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "360750.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "010130.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "033780.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "010140.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "298040.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "051910.KS": {
    "bars": 4286,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "196170.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "086520.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "247540.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "277810.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "036930.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "058470.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "028300.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "240810.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "214450.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "298380.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "000250.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "039030.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "319660.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "141080.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "087010.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "145020.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "214370.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "214150.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "440110.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "222800.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "403870.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "108490.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "095340.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "257720.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "319400.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "347850.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "084370.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "263750.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "095610.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "226950.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "310210.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "178320.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "237690.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "357780.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "080220.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "068760.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "058610.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "005290.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "031980.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   },
   "067310.KQ": {
    "bars": 4307,
    "days": 60,
    "first": "2026-05-04",
    "last": "2026-07-30",
-   "thin": 0
+   "thin": 0,
+   "truncated": 60,
+   "usableFrom": null
   }
+ },
+ "defect": {
+  "kind": "session-truncated",
+  "truncatedSymbols": 80,
+  "totalSymbols": 80,
+  "truncatedDays": 4800,
+  "through": "2026-07-30",
+  "usableFrom": null,
+  "reason": "막봉이 15:15 이전에 끝나 15:20~15:30 종가 단일가 구간이 없다. 그 날들의 \"종가\"는 실제 종가가 아니다(야후 누적분의 성질). 증분 수집으로는 고쳐지지 않는다 — 파일을 비우고 키움에서 전체 재수집해야 하며, 키움 소급 한도 밖 구간은 복구되지 않는다."
  }
 }
