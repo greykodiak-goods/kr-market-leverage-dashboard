@@ -32,7 +32,11 @@ export NODE_OPTIONS="--max-old-space-size=256"
 export KIWOOM_TOKEN_CACHE="$DIR/.kiwoom-token-cache.json"
 
 cd "$REPO"
-git pull --ff-only origin main
+# --autostash 필수: 배포 워크플로의 `chmod +x`가 파일 모드를 바꿔 놓으면 ff-only가 매번 막히고,
+# set -e 때문에 크론이 **수집을 시작하기도 전에** 조용히 죽는다(2026-08-03 첫 16:15 실행이 그랬다).
+# 파일 모드는 git 인덱스를 755로 고쳐 근본 원인을 없앴지만, 다른 잔여물(npm이 만진 lock 등)에도
+# 같은 사고가 나므로 방어를 남긴다. --rebase는 EC2가 남긴 미푸시 데이터 커밋을 origin 위에 얹는다.
+git pull --rebase --autostash origin main
 npm install --no-audit --no-fund --loglevel=error
 
 DOPPLER=(doppler run --project investing-ops --config prd --)
