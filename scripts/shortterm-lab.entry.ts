@@ -45,12 +45,30 @@
 //   이 계열은 **백테스트가 가장 크게 거짓말하는 자리**다. 아래 경고는 결과 표를 찍는
 //   함수(`shortRankTable`)가 **강제로 함께 출력**한다 — 표만 떼어 읽을 수 없게 했다.
 //
+// ── 시세 소스 (2026-08-03 전환 · 대표 지시 "야후 아예 보지 말고 시세 편향 없애줘") ──
+//   국내 유니버스 시세는 **KRX 일별 정본이 기본**이다(`PRICE_SOURCE=krx`, 생략 시 기본값).
+//   36차 수치는 전부 야후 총수익 보정본으로 잰 것이라 **재측정 대상**이다 — 같은 러너를
+//   `PRICE_SOURCE=yahoo`로 돌리면 36차를 그대로 재현할 수 있게 야후 경로를 남겨 두었다.
+//
+//   무엇이 달라지는가(규칙 3 — 소스가 바뀌면 수치의 의미가 바뀐다):
+//     · 야후 = **총수익**(adjclose 배당 재투자 반영) · 상장 생존 종목만 → 가격 생존편향
+//     · KRX  = **가격수익**(배당 미반영) · 상폐 종목 포함 → 생존편향 해소, 배당수익 부재
+//     · 벤치(KODEX 200)·참고선(QQQ·환율)은 KRX Open API가 주지 않아 **계속 야후**다
+//       → 전략(배당 없음) vs 벤치(배당 있음)이라 **알파가 전략에 불리하게** 편향된다.
+//         이 편향은 `MIXED_SOURCE_NOTE`로 모든 실행 머리말에 함께 찍는다.
+//     · 상한가 판정은 KRX 쪽이 **더 정확하다** — 야후 총수익 보정본은 배당락일 등락률이
+//       실제 호가 움직임과 달라 오분류가 섞이는데, KRX는 원주가 기반이라 그 왜곡이 없다.
+//       실증으로 두 소스의 **상한가 검출 건수**를 매 실행 표로 찍는다(`limitUpCensusTable`).
+//     · ⚠️ **거래량 스케일은 두 소스의 규약이 다르다** — `volumeHandlingNote()` 참조.
+//       ④ 장대양봉(20일 평균 대비 3배)과 거래대금 정렬이 이 차이에 직접 걸린다.
+//
 // ── 실행 ─────────────────────────────────────────────────────────────────────
-//   MODE=all node scripts/shortterm-lab.mjs      (GHA: short:all)
+//   MODE=all node scripts/shortterm-lab.mjs                 (KRX 정본 · 기본)
+//   PRICE_SOURCE=yahoo MODE=all node scripts/shortterm-lab.mjs   (36차 재현)
 //   MODE=close|limitup|gap|bigcandle|rebound     (같은 14변형의 부분집합 — 새 변형 아님)
 //
-// ⚠️ 컨테이너에서 Yahoo는 403이라 실데이터 실행은 여기서 하지 않았다.
-//    로직은 합성 시세 테스트로만 검증된 상태다 — 수치 산출은 [미검증-실데이터].
+// ⚠️ 컨테이너에서 Yahoo는 403이지만 **KRX 정본은 리포에 커밋돼 있어 로컬 실행이 된다.**
+//    다만 벤치(KODEX 200)는 야후라, 컨테이너 실행에서는 알파가 산출되지 않는다(경고를 찍는다).
 
 import type { CostSettings } from '../src/features/backtest/conditionScreen'
 import type { DailyBar } from '../src/features/backtest/types'
@@ -94,6 +112,17 @@ import {
   krxPitUnion,
   krxPitYears,
 } from '../src/features/backtest/krxPitUniverse'
+import {
+  MIXED_SOURCE_NOTE,
+  loadKrPrices,
+  normalizePriceSource,
+  type PriceSource,
+  type PriceSourceMeta,
+} from '../src/features/backtest/priceSource'
+import type { KrxDailyIndex } from '../src/features/backtest/krxDailyPrices'
+// KRX 정본을 파일에서 읽는 노드용 의존성. `preset-precompute.entry.ts`는
+// PRESET_PRECOMPUTE_RUN 게이트가 있어 import만으로는 main()이 돌지 않는다.
+import { nodeKrxDeps } from './preset-precompute.entry'
 
 // ============================================================================
 // 상수 — 34차(krxcal)와 **같은 값**이어야 표가 나란히 읽힌다
@@ -151,14 +180,44 @@ export function limitUpThresholdPct(date: string): number {
 export const LIMITUP_HIGH_EPS = 1e-7
 
 // ============================================================================
-// 데이터 로더
+// 데이터 로더 — 소스는 어댑터 하나(`loadKrPrices`)가 고른다
 // ============================================================================
 //
-// ⚠️ `scripts/idea-lab.entry.ts`의 로더는 **export되어 있지 않고**, 그 파일은 이번
-//    회차에 다른 워커가 잡고 있어 수정할 수 없다. 그래서 같은 규약(총수익 보정 ·
-//    .KQ→.KS 폴백 · 직전 환율 이월)을 여기에 복제한다. 정본 합류는 별도 작업이다.
+// 2026-08-03 전환 전에는 여기서 야후를 직접 불렀다. 지금은 **화면·사전계산과 같은
+// 어댑터**를 탄다 — 부르는 쪽이 소스를 알 필요가 없어야 두 수치가 갈리지 않는다.
+// 야후 경로의 규약(.KQ/.KS 둘 다 조회 → 긴 이력 채택 → 200봉 미만 제외)은
+// `loadKrDual`이 그대로 갖고 있어 **한 자리도 바뀌지 않는다**
+// (`tests/shorttermlab-price.test.ts`가 가짜 fetch로 이를 집행한다).
+//
+// ⚠️ **조용한 야후 폴백은 없다.** `krx`를 골랐는데 정본이 없으면 어댑터가 던진다.
+//    총수익(야후)과 가격수익(KRX)이 섞인 표는 그 자체가 거짓이기 때문이다.
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/** CJS 번들에서 import.meta.url이 없으므로 런처(shortterm-lab.mjs)가 REPO_ROOT를 넘긴다. */
+const root = process.env.REPO_ROOT ?? process.cwd()
+
+/**
+ * 시세 소스 선택 — `PRICE_SOURCE=krx|yahoo`. **기본값은 `krx`**(2026-08-03 전환).
+ * 모르는 값이 들어오면 조용히 야후로 새지 않고 기본값(krx)으로 좁힌다.
+ * 36차 수치를 재현하려면 **명시적으로** `PRICE_SOURCE=yahoo`를 준다.
+ */
+export function shortPriceSourceFromEnv(env: Record<string, string | undefined>): PriceSource {
+  return normalizePriceSource((env.PRICE_SOURCE ?? '').trim().toLowerCase())
+}
+
+/**
+ * KRX 정본의 수집 시작일 — **머리말에 찍을 기본 문구용 힌트일 뿐**이다.
+ * 실제 값은 로드 후 `index.from`으로 다시 찍고, 둘이 다르면 경고한다(하드코딩 신뢰 금지).
+ */
+export const KRX_DAILY_START_HINT = '2010-01-04'
+
+/** 모든 MODE 머리말에 찍는 시세 소스 한 줄(규칙 3 — 어느 시세로 구운 표인지 표가 스스로 말한다). */
+export function priceSourceHeadline(source: PriceSource, from: string = KRX_DAILY_START_HINT): string {
+  return source === 'krx'
+    ? `시세 소스: krx (KRX 일별 정본 · 가격수익 · 상폐 포함 · ${from}~)`
+    : '시세 소스: yahoo (Yahoo 일봉 · 총수익(배당 재투자) 보정 · 상장 생존 종목만 · 가격 생존편향 있음)'
+}
 
 async function fetchDaily(symbol: string, range = SHORT_RANGE): Promise<DailyBar[]> {
   const qs = range.startsWith('since:')
@@ -191,33 +250,214 @@ async function fetchDaily(symbol: string, range = SHORT_RANGE): Promise<DailyBar
   return out
 }
 
-/** 코스닥 출신 종목 폴백 로드 — .KQ 우선, 실패/짧으면 .KS */
-async function fetchKrDual(code: string, range: string): Promise<DailyBar[] | null> {
-  let best: DailyBar[] | null = null
-  for (const suffix of ['.KQ', '.KS']) {
-    try {
-      const bars = await fetchDaily(`${code}${suffix}`, range)
-      if (!best || bars.length > best.length) best = bars
-      if (bars.length >= 200) break
-    } catch {
-      /* 다음 접미사 시도 */
-    }
-    await sleep(120)
-  }
-  return best && best.length >= 200 ? best : null
+/** 로더 주입점 — 테스트가 가짜 fetch·가짜 리포 루트를 끼우는 자리(네트워크 없이 규약 검증). */
+export interface ShortLoadDeps {
+  /** 야후 심볼 하나의 일봉. 기본은 실제 fetch. */
+  fetchDaily?: (symbol: string) => Promise<DailyBar[]>
+  /** 접미사 시도 사이 대기(유량 제한 완화). 기본 120ms. */
+  betweenAttempts?: () => Promise<void>
+  /** KRX 정본을 읽을 리포 루트. 기본은 REPO_ROOT. */
+  krxRoot?: string
 }
 
-async function loadCodeHistories(codes: string[], range = SHORT_RANGE) {
+export interface ShortPriceLoad {
+  /** **코드 키**(6자리) — 연쇄(`buildYearly`)와 유니버스가 코드로 돈다. */
+  histories: Record<string, DailyBar[]>
+  /** 시세를 못 얻은 코드(야후: 상폐·가짜응답 / KRX: 수집 범위 밖) */
+  failed: string[]
+  meta: PriceSourceMeta
+  /** KRX 경로에서만 채워진다 — 달력·수집 구간 경고에 쓴다. */
+  krxIndex?: KrxDailyIndex
+}
+
+/**
+ * 국내 유니버스 시세를 **소스와 무관하게 같은 모양**으로 돌려준다.
+ *
+ * 어댑터는 야후 경로에서 **심볼 키**(`005930.KS`)로 돌려주지만 이 러너의 연쇄·유니버스는
+ * **코드 키**로 돈다. 그래서 `symOf`로 되돌린다 — 이 한 줄이 빠지면 야후 경로에서
+ * 유니버스 매핑률이 통째로 0이 되어 "조용히 아무것도 안 도는" 실행이 된다.
+ */
+export async function loadShortHistories(
+  codes: readonly string[],
+  source: PriceSource,
+  deps: ShortLoadDeps = {},
+): Promise<ShortPriceLoad> {
+  const load = await loadKrPrices(codes, source, {
+    yahoo: {
+      // 동시성 1 = 기존 순차 로딩 그대로(유량 제한 안쪽). 채택 규약은 loadKrDual이 갖는다.
+      fetchDaily: deps.fetchDaily ?? ((sym: string) => fetchDaily(sym)),
+      betweenAttempts: deps.betweenAttempts ?? (() => sleep(120)),
+      concurrency: 1,
+    },
+    krx: nodeKrxDeps(deps.krxRoot ?? root),
+  })
   const histories: Record<string, DailyBar[]> = {}
-  const failed: string[] = []
-  for (const code of codes) {
-    const bars = await fetchKrDual(code, range)
-    if (bars) histories[code] = bars
-    else failed.push(code)
-    await sleep(100)
+  for (const [code, sym] of Object.entries(load.symOf)) {
+    const bars = load.histories[sym]
+    if (bars && bars.length > 0) histories[code] = bars
   }
-  const bench = await fetchDaily(BENCH, range)
-  return { histories, failed, bench }
+  return { histories, failed: [...load.failed], meta: load.meta, krxIndex: load.krxIndex }
+}
+
+// ---------------------------------------------------------------- 거래량 취급
+//
+// 이 러너의 ④ 장대양봉(20일 평균 대비 3배)과 후보 정렬(전일 거래대금 = 종가 × 거래량)이
+// 거래량에 직접 걸린다. 두 소스의 규약이 다르므로 **확인한 것과 못 한 것을 나눠 남긴다.**
+
+/**
+ * 거래량 취급 차이를 출력에 남긴다. **추측으로 메우지 않는다**(규칙 4).
+ *
+ * KRX(코드로 확인함): `krxDailyPrices.ts`의 `krxDailyBars()`는 수정계수 `k`를 **가격에만**
+ *   곱하고 거래량은 파일의 원값을 그대로 넣는다(`v: (r as number[])[5] ?? 0`).
+ *   → 분할·병합일을 사이에 둔 구간에서 **거래량 스케일이 끊긴다.**
+ * 야후([미검증]): v8 `indicators.quote[0].volume`의 분할 보정 여부를 공식 문서로 확정하지
+ *   못했고, 컨테이너에서 403이라 실응답으로도 확정하지 못했다.
+ */
+/**
+ * 어댑터가 한계 목록에 실어 보내는 "수정주가 반영 N건"에서 N만 뽑는다(**진단 표시 전용**).
+ * 문구가 바뀌면 `null`을 돌려주고 출력은 `[미검증]`으로 남는다 — 못 찾은 것을 0으로
+ * 메우지 않는다(0건과 "못 셌다"는 다른 사실이다).
+ */
+export function splitCountFromLimits(limits: readonly string[]): number | null {
+  for (const l of limits) {
+    const m = /수정주가 반영\s+(\d+)\s*건/.exec(l)
+    if (m) return Number(m[1])
+  }
+  return null
+}
+
+export function volumeHandlingNote(source: PriceSource, index?: KrxDailyIndex, appliedSplits?: number | null): void {
+  log('')
+  log('### 거래량 취급 — ④ 장대양봉·거래대금 정렬에 직결')
+  if (source === 'krx') {
+    log(`· KRX 정본 거래량 수집 여부: **${index ? (index.volume ? '수집됨(volume=true)' : '미수집(volume=false)') : '[미검증] index 없음'}**`)
+    log('· **코드로 확인함**: `krxDailyBars()`는 수정계수를 **가격(OHLC)에만** 곱하고 거래량은')
+    log('  파일의 **원값 그대로** 둔다. 즉 KRX 경로의 거래량은 **분할 미보정 원거래량**이다.')
+    log('· 그래서 분할·병합일을 사이에 둔 구간에서 거래량 스케일이 끊긴다:')
+    log('  - ④ 장대양봉의 "직전 20일 평균 대비 3배"가 분할 직후 며칠 동안 **거짓 급증**으로 잡힐 수 있다')
+    log('    (50:1 분할이면 거래량이 기계적으로 50배가 된다).')
+    log('  - 거래대금 정렬 키(수정종가 × 원거래량)는 분할 **이전** 구간에서 실제 거래대금의')
+    log('    1/ratio로 축소된다 — 정렬 용도라 순위는 대체로 보존되지만 같은 값이 아니다.')
+    log(
+      appliedSplits != null
+        ? `· 이번 실행에서 가격에 반영된 분할형 이벤트 **${appliedSplits}건**이 위 왜곡의 후보 구간이다.`
+        : '· ⚠️ [미검증] 반영된 분할형 이벤트 건수를 한계 목록에서 찾지 못했다 — 0건으로 메우지 않는다.',
+    )
+    log('· ⚠️ [미검증] 이 왜곡이 실제로 ④ 계열 신호를 몇 건 만들었는지는 **측정하지 않았다** —')
+    log('  측정하려면 종목별 이벤트 인덱스를 신호 시점과 대조해야 하고, 그것은 이번 전환의 범위 밖이다.')
+    log('  ④ 계열 수치를 읽을 때는 이 오염 가능성을 감안하라(추측으로 보정하지 않았다).')
+  } else {
+    log('· 야후 경로의 거래량은 v8 `indicators.quote[0].volume`을 **그대로** 쓴다(가격만 총수익 보정).')
+    log('· ⚠️ **[미검증]** 야후가 그 거래량을 분할 보정해서 주는지 원값으로 주는지 공식 문서로')
+    log('  확정하지 못했고, 컨테이너에서 403이라 실응답으로도 확정하지 못했다. 추측으로 메우지 않는다.')
+    log('  → 분할 종목의 ④ 장대양봉·거래대금 정렬은 이 미확정 위에 서 있다.')
+  }
+}
+
+// ------------------------------------------------------------- 상한가 검출 실증
+//
+// 소스 전환의 실증이다. 야후(총수익 보정)는 배당락일 등락률이 실제 호가와 달라 상한가
+// 판정에 오분류가 섞이고, KRX(원주가 기반)는 그 왜곡이 없다. 그 차이가 **몇 건인지**를
+// 두 소스에서 각각 찍어 나란히 놓는다 — 문장이 아니라 숫자로 남긴다.
+
+export interface LimitUpCensus {
+  /** 상한가 마감(전일 대비 제도별 임계 이상 + 고가=종가) 검출 건수 */
+  total: number
+  /** 구제도(±15%) 구간 검출 건수 */
+  old: number
+  /** 신제도(±30%) 구간 검출 건수 */
+  neo: number
+  /** 한 건이라도 검출된 종목 수 */
+  symbols: number
+  /** 판정 대상 봉 수(각 종목 첫 봉은 전일이 없어 제외) */
+  bars: number
+  /** 실제로 훑은 시세 구간 */
+  from: string
+  to: string
+  /**
+   * **가격 보정이 판정을 흔든 건수** — 보정 종가 기준 판정과 원주가(`rawClose`) 기준 판정이
+   * 갈린 봉 수. 원주가가 없는 소스(야후)에서는 `null`이다.
+   *
+   * 왜 재나: "수정주가라 상한가 판정이 흔들린다"는 말은 정성적이라 검증이 안 된다. 이 숫자는
+   * **그 흔들림의 실제 크기**다. KRX 경로에서는 분할일에만 계수가 바뀌므로 작게 나오는 것이
+   * 정상이고, 야후 총수익 보정은 **배당락일마다** 계수가 바뀌므로 같은 방식으로 재면 훨씬 크다
+   * (야후는 원주가를 주지 않아 이 러너에서 직접 재지 못한다 — [미검증]).
+   */
+  adjFlipped: number | null
+}
+
+/**
+ * 로드된 전 종목에서 상한가 마감을 전수 집계한다. 신호 로직(`isLimitUpClose`)을 그대로 쓴다.
+ *
+ * `adjFlipped`는 원주가 기준 판정과의 차이를 함께 센다. 고가=종가(굳힘) 조건은 h·c에 **같은**
+ * 계수가 곱해져 보정과 무관하므로, 갈리는 자리는 전일 대비 상승률 하나뿐이다.
+ */
+export function limitUpCensus(histories: Record<string, DailyBar[]>): LimitUpCensus {
+  let total = 0
+  let old = 0
+  let neo = 0
+  let symbols = 0
+  let bars = 0
+  let from = ''
+  let to = ''
+  let adjFlipped = 0
+  let sawRaw = false
+  for (const series of Object.values(histories)) {
+    if (!series || series.length < 2) continue
+    if (!from || series[0].date < from) from = series[0].date
+    if (series[series.length - 1].date > to) to = series[series.length - 1].date
+    bars += series.length - 1
+    let hit = 0
+    for (let s = 1; s < series.length; s++) {
+      const b = series[s]
+      const adj = isLimitUpClose(series, s)
+      if (adj) {
+        hit++
+        if (b.date < LIMITUP_REGIME_DATE) old++
+        else neo++
+      }
+      const rc = b.rawClose
+      const rp = series[s - 1].rawClose
+      if (rc != null && rp != null && rp > 0 && rc > 0) {
+        sawRaw = true
+        // 원주가 기준 판정 — 굳힘 조건(고가 ≤ 종가)은 계수 불변이라 보정본 값을 그대로 쓴다.
+        const rawUp = (rc / rp - 1) * 100 >= limitUpThresholdPct(b.date) && b.h <= b.c * (1 + LIMITUP_HIGH_EPS)
+        if (rawUp !== adj) adjFlipped++
+      }
+    }
+    if (hit > 0) symbols++
+    total += hit
+  }
+  return { total, old, neo, symbols, bars, from, to, adjFlipped: sawRaw ? adjFlipped : null }
+}
+
+/** 상한가 검출 표 — 소스 전환의 실증. 두 소스 실행 결과를 나란히 놓고 읽는다. */
+export function limitUpCensusTable(source: PriceSource, c: LimitUpCensus): void {
+  const rate = c.bars > 0 ? ((c.total / c.bars) * 10000).toFixed(2) : '—'
+  log('')
+  log('### 상한가 검출 건수 — 시세 소스 전환의 실증')
+  log('| 소스 | 전체 | 구제도(~2015-06-14 · ±15%) | 신제도(2015-06-15~ · ±30%) | 검출 종목 | 판정 봉 | 만분율 |')
+  log('|---|---|---|---|---|---|---|')
+  log(`| **${source}** | ${c.total} | ${c.old} | ${c.neo} | ${c.symbols} | ${c.bars} | ${rate}‱ |`)
+  log('')
+  log(`훑은 시세 구간 ${c.from || '—'} ~ ${c.to || '—'}.`)
+  log(
+    c.adjFlipped == null
+      ? '· **가격 보정이 판정을 흔든 건수: [미검증]** — 이 소스는 원주가(rawClose)를 주지 않아 직접 재지 못한다.'
+      : `· **가격 보정이 판정을 흔든 건수: ${c.adjFlipped}건** (보정 종가 판정 vs 원주가 판정이 갈린 봉).`,
+  )
+  if (source === 'krx') {
+    log('· KRX는 **원주가 기반**이라 전일 대비 등락률이 실제 호가 움직임과 일치한다 —')
+    log('  야후 총수익 보정본에서 배당락일에 생기던 상한가 **오분류가 사라진다**.')
+    log('· 다만 액면분할일에는 수정계수가 걸려 등락률이 바뀌므로, 그 하루의 판정은 두 소스 모두 근사다.')
+    log('  위 "흔든 건수"가 그 크기다 — KRX는 **분할일에만** 계수가 바뀌므로 작다. 야후 총수익 보정은')
+    log('  **배당락일마다** 계수가 바뀌므로 같은 방식으로 재면 더 크지만, 야후는 원주가를 주지 않아')
+    log('  이 러너에서 직접 재지 못한다(**[미검증]** — 추측으로 숫자를 만들지 않는다).')
+  } else {
+    log('· 야후는 **총수익 보정**(adjclose 계수) 값이라 배당락일 등락률이 실제 호가와 다르다 —')
+    log('  그만큼의 오분류가 이 숫자에 섞여 있다. 같은 러너를 `PRICE_SOURCE=krx`로 돌린 숫자와 비교하라.')
+  }
+  log('※ 이 표는 **로드된 시세 전수**를 훑은 것이지 매매 건수가 아니다(슬롯·중복진입 제약 전).')
 }
 
 /** QQQ 원화 환산 보유 곡선(참고 벽). 실패하면 null — 벽 행만 빠지고 모드는 계속 돈다. */
@@ -901,8 +1141,11 @@ const numOrDash = (v: number | null, digits = 2) => (v == null ? '—' : v.toFix
 //
 // 이 블록을 표와 분리하지 마라. 이 계열의 백테스트 숫자는 경고 없이는 거짓이다.
 
-/** 전 계열 공통 경고. 결과가 나오는 모든 표 앞뒤에 붙는다. */
-export function fillRealismWarning(): void {
+/**
+ * 전 계열 공통 경고. 결과가 나오는 모든 표 앞뒤에 붙는다.
+ * `source`는 마지막 항목(가격 보정 상태)만 바꾼다 — 소스마다 상한가·갭 판정의 왜곡이 다르다.
+ */
+export function fillRealismWarning(source: PriceSource = 'krx'): void {
   log('')
   log('## ⚠️ 체결 현실성 경고 — 아래 숫자를 그대로 믿지 마라')
   log('')
@@ -921,8 +1164,15 @@ export function fillRealismWarning(): void {
   log('· **갭 매매**: 판단(시가)과 체결(시가)이 일봉에서 **같은 점**이 된다. 실제로는 시가를')
   log('  보고 주문을 내는 사이 가격이 이미 움직여 있다. 이 한 칸은 절단 불변성 테스트로')
   log('  **잡히지 않는** 낙관이며, 갭 계열 숫자는 그만큼 후하다.')
-  log('· 가격은 **총수익 보정(adjclose 계수)** 값이라 배당락일의 등락률·갭이 실제 호가')
-  log('  움직임과 다르다. 상한가·갭 판정에 그만큼의 오분류가 섞인다.')
+  if (source === 'krx') {
+    log('· 가격은 **KRX 원주가 기반 수정주가(배당 미반영 · 가격수익)**다. 배당락일 등락률이')
+    log('  실제 호가 움직임과 일치해 상한가·갭 판정은 야후 총수익 보정본보다 정확하다.')
+    log('  대신 **배당수익이 전략 성적에서 빠지는데 벤치(야후 KODEX 200)에는 들어 있어**,')
+    log('  알파는 그 배당만큼 **전략에 불리한 쪽으로** 편향된다 — 이 표의 알파는 하한선이다.')
+  } else {
+    log('· 가격은 **총수익 보정(adjclose 계수)** 값이라 배당락일의 등락률·갭이 실제 호가')
+    log('  움직임과 다르다. 상한가·갭 판정에 그만큼의 오분류가 섞인다.')
+  }
 }
 
 /** 계열별 경고 — 계열 표마다 강제로 붙는다. */
@@ -964,9 +1214,14 @@ const overWall = (row: StratRow, wall: CalWall | null) => {
  * 전체 순위표(칼마 내림차순). **경고를 강제로 함께 출력한다** — 이 함수를 거치지 않고
  * 결과를 찍는 경로를 만들지 마라.
  */
-export function shortRankTable(title: string, vs: ShortVariant[], wall: CalWall | null): ShortVariant[] {
+export function shortRankTable(
+  title: string,
+  vs: ShortVariant[],
+  wall: CalWall | null,
+  source: PriceSource = 'krx',
+): ShortVariant[] {
   const sorted = shortCalmarSort(vs)
-  fillRealismWarning()
+  fillRealismWarning(source)
   log('')
   log(`### ${title}`)
   log(
@@ -1033,7 +1288,7 @@ export function costSensitivityTable(vs: ShortVariant[]): ShortVariant[] {
 }
 
 /** 계열별 표 — 계열 경고를 강제로 붙인다. */
-export function familyTables(vs: ShortVariant[], wall: CalWall | null): void {
+export function familyTables(vs: ShortVariant[], wall: CalWall | null, source: PriceSource = 'krx'): void {
   const fams: ShortFamily[] = ['close', 'limitup', 'gap', 'bigcandle', 'rebound']
   for (const fam of fams) {
     const rows = vs.filter((v) => v.plan.family === fam)
@@ -1052,12 +1307,12 @@ export function familyTables(vs: ShortVariant[], wall: CalWall | null): void {
       )
     }
     familyWarning(fam)
-    if (fam === 'limitup') limitUpRegimeNote()
+    if (fam === 'limitup') limitUpRegimeNote(source)
   }
 }
 
 /** 상한가 제도 경계 — 코드와 출력 양쪽에 남긴다(지시서 요구). */
-export function limitUpRegimeNote(): void {
+export function limitUpRegimeNote(source: PriceSource = 'krx'): void {
   log('')
   log('#### 상한가 제도 경계 처리')
   log(`· 가격제한폭은 **${LIMITUP_REGIME_DATE}부터 ±30%**로 확대됐다(그 전 ±15%).`)
@@ -1065,8 +1320,13 @@ export function limitUpRegimeNote(): void {
   log('  (호가단위 절사 때문에 정확히 15.00%·30.00%가 안 나온다) **+ 당일 고가 = 종가**(상한가 굳힘).')
   log('· 한 임계로 전 구간을 판정하면 2010~2015 상한가가 통째로 사라지거나(29.5%), 2015 이후의')
   log('  단순 급등이 상한가로 잡힌다(14.5%). 그러면 이 실험 자체가 무의미해진다.')
-  log('· ⚠️ 가격이 **총수익 보정** 값이라 배당락일에는 전일 대비 상승률이 실제 호가 등락률과')
-  log('  달라진다 — 그만큼의 오분류가 상한가 판정에 섞인다(임계가 높아 빈도는 낮다).')
+  if (source === 'krx') {
+    log('· ✅ 이번 실행은 **KRX 원주가 기반**이라 전일 대비 상승률이 실제 호가 등락률과 일치한다 —')
+    log('  야후 총수익 보정본에서 배당락일에 생기던 오분류가 없다. 액면분할일만은 두 소스 모두 근사다.')
+  } else {
+    log('· ⚠️ 가격이 **총수익 보정** 값이라 배당락일에는 전일 대비 상승률이 실제 호가 등락률과')
+    log('  달라진다 — 그만큼의 오분류가 상한가 판정에 섞인다(임계가 높아 빈도는 낮다).')
+  }
 }
 
 // ============================================================================
@@ -1151,8 +1411,20 @@ export function shortMultipleTestingNote(n: number, passed: number, over: number
 // 실행
 // ============================================================================
 
-function preamble(planCount: number, modeKey: string): void {
+export function preamble(planCount: number, modeKey: string, source: PriceSource): void {
   log(`# MODE=short:${modeKey} — 국내 단기매매 기법 KRX 실측 검증 (36차)`)
+  log('')
+  // 규칙 3 — **머리말 첫 줄이 소스를 말한다.** 표만 떼어 가도 어느 시세로 구운 것인지 남는다.
+  log(priceSourceHeadline(source))
+  log(`⚠️ ${MIXED_SOURCE_NOTE}`)
+  if (source === 'krx') {
+    log('⚠️ **36차 수치와 직접 비교하지 마라.** 36차는 야후 총수익 보정본으로 잰 값이고 이번은')
+    log('   KRX 가격수익이다 — 배당만큼 절대 CAGR이 낮게 나오는 것이 정상이다. 36차를 그대로')
+    log('   재현하려면 `PRICE_SOURCE=yahoo`로 다시 돌려라.')
+  } else {
+    log('⚠️ **야후 경로다.** 대표 지시(2026-08-03 "야후 아예 보지 말고")의 기본값은 KRX 정본이며,')
+    log('   이 실행은 36차 재현·대조 목적으로만 쓴다. 상폐 종목이 빠져 성적이 후하게 나온다.')
+  }
   log('')
   log('대표 지시(2026-08-03): "종가매수, 상한가 따라잡기 등 유명한 단기 거래 기술들도 다 체크해봐."')
   log('')
@@ -1195,7 +1467,8 @@ async function run(modeKey: string, families: ShortFamily[] | null): Promise<voi
   const plans = families ? all.filter((p) => families.includes(p.family)) : all
   if (plans.length === 0) throw new Error(`MODE=${modeKey}에 해당하는 변형이 없다.`)
 
-  preamble(plans.length, modeKey)
+  const source = shortPriceSourceFromEnv(process.env)
+  preamble(plans.length, modeKey, source)
 
   // ---- 유니버스 ---------------------------------------------------------------
   const uni = loadKrxPitFile()
@@ -1216,19 +1489,94 @@ async function run(modeKey: string, families: ShortFamily[] | null): Promise<voi
   log('유니버스를 둘로 늘리면 변형 수가 28이 되어 다중검정이 그만큼 나빠진다.')
 
   const codes = [...new Set<string>(krxPitUnion(uni, 40, years))].sort()
+  // 정상 0건(유니버스가 비었다)과 실패 0건(로드가 다 죽었다)을 **여기서 갈라 둔다** — 뒤에서
+  // 뭉뚱그리면 "0종목으로 조용히 돈 실행"이 성공 종료코드로 나간다(규칙 4).
+  if (codes.length === 0) throw new Error('유니버스 코드가 0개다 — KRX 실측 랭킹 파일을 확인하라(정상 0건).')
   log('')
-  log(`시세 로드 대상 ${codes.length}종목 (실측 40+40 합집합)`)
-  const { histories, failed, bench } = await loadCodeHistories(codes)
+  log(`시세 로드 대상 ${codes.length}종목 (실측 40+40 합집합) · 소스 **${source}**`)
+  const load = await loadShortHistories(codes, source)
+  const histories = load.histories
+  const failed = load.failed
+  const okCount = Object.keys(histories).length
   const names = krxPitNames(uni)
-  log(`시세 로드 ${Object.keys(histories).length}/${codes.length} · 실패(상폐·데이터 부족) ${failed.length}`)
+  log(
+    source === 'yahoo'
+      ? `시세 로드 ${okCount}/${codes.length} · .KQ/.KS 긴 이력 채택 · 200봉 미만 제외 · 실패(상폐·데이터 부족) ${failed.length}`
+      : `시세 로드 ${okCount}/${codes.length} · KRX 일별 정본(수정주가 적용) · 수집 범위 밖 ${failed.length}`,
+  )
+  log(`  ${load.meta.note}`)
+  for (const l of load.meta.limits) log(`  ⚠️ ${l}`)
+  log(`  ⚠️ ${MIXED_SOURCE_NOTE}`)
+  // 전량 실패는 **비정상 종료**다. 항목별 실패를 세어 두지 않으면 "다 실패했는데 종료코드 0"이 된다.
+  if (okCount === 0)
+    throw new Error(
+      `시세를 하나도 받지 못했다(${codes.length}종목 전량 실패 · 소스 ${source}) — ` +
+        (source === 'yahoo'
+          ? 'Yahoo 응답(컨테이너에서는 403)을 확인하라.'
+          : 'public/data/krx-daily/ 정본을 확인하라. 야후로 조용히 대신 돌리지 않는다.'),
+    )
+  if (okCount < codes.length / 2)
+    log(`⚠️ 로드 성공률이 절반 미만이다(${okCount}/${codes.length}) — 유니버스가 크게 줄어든 채로 도는 실행이다.`)
   if (failed.length) {
     const shown = failed.slice(0, 30).map((cd) => `${cd}(${names[cd] ?? '?'})`)
     log(`매핑 실패: ${shown.join(', ')}${failed.length > 30 ? ` … 외 ${failed.length - 30}개` : ''}`)
-    log('  ↑ 랭킹은 실측이라 선택편향이 없지만, 상폐 종목의 **가격**이 없어 유니버스에서 빠진다.')
-    log('    이것이 잔존 **가격 생존편향**이며 아래 성적을 그만큼 후하게 만든다.')
+    log('  ↑ 랭킹은 실측이라 선택편향이 없지만, 그 종목의 **가격**이 없어 유니버스에서 빠진다.')
+    if (source === 'yahoo')
+      log('    상폐 종목이 통째로 빠지는 **가격 생존편향**이며 아래 성적을 그만큼 후하게 만든다.')
+    else log('    KRX 정본은 상폐 종목을 포함하므로 이 실패는 **수집 범위 밖**(구간·시장)이 사유다.')
+  }
+
+  // ---- 구간 경고 — 조용히 짧게 돌지 않는다 ------------------------------------
+  const warmFrom = SHORT_RANGE.startsWith('since:') ? SHORT_RANGE.slice('since:'.length) : SHORT_RANGE
+  const idx = load.krxIndex
+  if (source === 'krx' && idx) {
+    if (idx.from !== KRX_DAILY_START_HINT)
+      log(`⚠️ 머리말의 시작일 힌트(${KRX_DAILY_START_HINT})와 실제 정본 시작일(${idx.from})이 다르다 — 실제 값을 따르라.`)
+    if (warmFrom < idx.from) {
+      log('')
+      log(`⚠️ **구간 경고**: 이 러너는 워밍업을 위해 ${warmFrom}부터 요청하지만 KRX 정본은 **${idx.from}부터**다.`)
+      log(`   실제 시세 구간은 **${idx.from} ~ ${idx.to}**이며, ${warmFrom}~${idx.from} 구간의 봉은 **없다.**`)
+      log(`   그래서 첫 해(${years[0]})의 20일 평균거래량·연속하락 판정은 워밍업이 덜 찬 상태로 시작한다`)
+      log(`   (④ 장대양봉은 첫 ${SHORT_VOL_WINDOW}봉 동안 신호가 아예 생기지 않는다).`)
+    }
+    const idxYear = Number(idx.from.slice(0, 4))
+    if (years[0] < idxYear)
+      log(
+        `⚠️ **구간 경고**: 실행 시작 연도 ${years[0]}가 KRX 정본 시작 연도 ${idxYear}보다 이르다 — ` +
+          `실제로 도는 구간은 ${idx.from}부터다(그 이전 해는 봉이 없어 현금으로 지나간다).`,
+      )
+  }
+
+  // ---- 벤치(KODEX 200) — 계속 야후다. 실패해도 조용히 넘기지 않는다 ------------
+  let bench: DailyBar[] = []
+  try {
+    bench = await fetchDaily(BENCH)
+  } catch (e) {
+    bench = []
+    log('')
+    log(`❌ 벤치(${BENCH} KODEX 200) 로드 실패 — ${String(e)}`)
   }
   const benchEq = benchCurve(bench)
-  log(`벤치 ${BENCH} 데이터 시작 ${bench[0]?.date ?? '—'} — 알파는 이 날짜 이후 겹치는 구간에서만 계산한다.`)
+  const benchMissing = benchEq.length < 2
+  if (benchMissing) {
+    log('❌ **알파를 산출할 수 없다.** 벤치가 없으면 `alphaA/alphaB`가 null이 되어 판정은 전부')
+    log('   `❌(알파)`로 찍힌다 — 이것은 "전략이 졌다"는 뜻이 **아니라 재지 못했다**는 뜻이다.')
+    log('   (컨테이너에서 Yahoo는 403이다. 알파가 필요한 실행은 GitHub Actions에서 돌려라.)')
+  } else {
+    log(`벤치 ${BENCH} 데이터 시작 ${bench[0]?.date ?? '—'} — 알파는 이 날짜 이후 겹치는 구간에서만 계산한다.`)
+    log('⚠️ 벤치는 **야후 총수익**(배당 포함)이다. 국내 유니버스가 KRX 가격수익이면 알파는 배당만큼')
+    log('   **전략에 불리하게** 편향된다 — 이 표의 알파는 하한선으로 읽어라(규칙 3·규칙 5).')
+  }
+
+  // ---- 거래량 취급 · 상한가 검출 실증 ------------------------------------------
+  const appliedSplits = splitCountFromLimits(load.meta.limits)
+  volumeHandlingNote(source, idx, appliedSplits)
+  if (source === 'krx' && idx && !idx.volume)
+    throw new Error(
+      'KRX 정본에 거래량이 없다(index.volume=false) — 이 러너의 ④ 장대양봉과 후보 정렬(거래대금)이 ' +
+        '전부 0이 되어 조용히 다른 실험이 된다. `--with-volume`으로 다시 수집하라.',
+    )
+  limitUpCensusTable(source, limitUpCensus(histories))
 
   const yearly = buildYearly(histories, years, (y) => krxPitCodes(uni, y, 40))
   log(`연도별 매핑률: ${yearly.map((v) => `${v.y} ${v.mapped}`).join(' · ')}`)
@@ -1266,14 +1614,21 @@ async function run(modeKey: string, families: ShortFamily[] | null): Promise<voi
   wallTable(walls)
 
   // ---- 표 ---------------------------------------------------------------------
-  const sorted = shortRankTable(`전체 순위 (칼마 내림차순 · ${variants.length}변형 · 실제 비용)`, variants, qw)
+  const sorted = shortRankTable(
+    `전체 순위 (칼마 내림차순 · ${variants.length}변형 · 실제 비용 · 시세 ${source})`,
+    variants,
+    qw,
+    source,
+  )
   const killed = costSensitivityTable(variants)
-  familyTables(variants, qw)
+  familyTables(variants, qw, source)
 
   const passed = sorted.filter((v) => shortPass(v.row, v.row.closed))
   const over = passed.filter((v) => overWall(v.row, qw))
   log('')
   log(`### 판정 통과 변형 (전·후반 알파 양수 + 매매수 ≥ ${SHORT_MIN_TRADES})`)
+  if (benchMissing)
+    log('❌ **이번 실행은 벤치를 못 받아 알파가 전부 null이다 — 아래 "없음"은 판정 결과가 아니라 미측정이다.**')
   if (passed.length === 0) {
     log('**없음.** 어떤 변형도 전·후반 알파를 모두 양수로 만들지 못했거나 표본이 소실됐다.')
   } else {
@@ -1302,24 +1657,43 @@ async function run(modeKey: string, families: ShortFamily[] | null): Promise<voi
   log('## 이 실험의 구조적 한계')
   log(`· **일봉으로 단기매매를 재는 것 자체가 근사다.** 진입·청산이 하루 안에서 끝나는 계열은`)
   log('  분봉 실체결과 차이가 가장 크다. 이 표는 "분봉으로 다시 재기 전의 1차 스크리닝"이다.')
-  log(`· **랭킹은 실측이지만 가격은 생존 종목만이다.** 이번 실행 매핑 실패 ${failed.length}종목 —`)
-  log('  그 시절 상위였다가 상장폐지된 종목은 시세가 없어 빠진다. 단기 기법은 특히 **급등락**')
-  log('  종목에 붙는데, 그 종목들이 나중에 사라진 쪽에 몰려 있어 편향이 더 크다.')
+  if (source === 'yahoo') {
+    log(`· **랭킹은 실측이지만 가격은 생존 종목만이다.** 이번 실행 매핑 실패 ${failed.length}종목 —`)
+    log('  그 시절 상위였다가 상장폐지된 종목은 시세가 없어 빠진다. 단기 기법은 특히 **급등락**')
+    log('  종목에 붙는데, 그 종목들이 나중에 사라진 쪽에 몰려 있어 편향이 더 크다.')
+  } else {
+    log(`· **가격 생존편향은 KRX 정본 전환으로 사실상 해소됐다**(상폐 종목 포함). 이번 매핑 실패`)
+    log(`  ${failed.length}종목은 상폐가 아니라 **수집 범위 밖**이 사유다. 대신 **배당이 빠져 있어**`)
+    log('  절대 CAGR은 총수익 기준보다 낮고, 벤치는 야후 총수익이라 알파가 전략에 불리하게 편향된다.')
+  }
   log(`· **${KRXPIT_FROM}년 이전이 없다.** KRX Open API 데이터가 2010년부터라 2008 금융위기 전반부가`)
   log('  표에 없다. 여기 MDD는 "겪지 않은 위기"만큼 작다.')
-  log('· **상한가 판정은 근사다.** 총수익 보정 가격이라 배당락일 등락률이 실제와 다르고,')
-  log('  거래정지·단일가 매매 구간은 일봉만으로 구분되지 않는다.')
-  log('· **거래대금은 근사다** — 총수익 보정 종가 × 거래량이라 실제 거래대금과 수준이 다르다')
-  log('  (정렬 용도라 순위는 대체로 보존되지만, 같은 값이 아니다).')
+  if (source === 'yahoo') {
+    log('· **상한가 판정은 근사다.** 총수익 보정 가격이라 배당락일 등락률이 실제와 다르고,')
+    log('  거래정지·단일가 매매 구간은 일봉만으로 구분되지 않는다.')
+    log('· **거래대금은 근사다** — 총수익 보정 종가 × 거래량이라 실제 거래대금과 수준이 다르다')
+    log('  (정렬 용도라 순위는 대체로 보존되지만, 같은 값이 아니다).')
+  } else {
+    log('· **상한가 판정은 원주가 기준이라 배당락 오분류가 없다.** 다만 거래정지·단일가 매매 구간은')
+    log('  일봉만으로 구분되지 않고, 액면분할일 하루는 수정계수 때문에 등락률이 실제와 다르다.')
+    log('· **거래대금은 근사다** — 수정종가 × **원거래량**이라 분할 이전 구간이 1/ratio로 축소된다')
+    log('  (거래량 취급 절 참조). 정렬 용도라 순위는 대체로 보존되지만, 같은 값이 아니다.')
+  }
   log('· 연 단위 유니버스 교체라 매년 1월 초 재편입 + 12월 말 정산 근사가 들어간다.')
   log('· **QQQ 벽은 참고이지 벤치가 아니다.** 알파 판정 벤치는 규칙 5대로 KODEX 200이며,')
   log('  QQQ 원화 곡선에는 환헤지 없음·해외 세제 미반영 가정이 들어 있다.')
 
-  fillRealismWarning()
+  fillRealismWarning(source)
 
   log('')
-  log('⚠️ [미검증-실데이터] 이 러너는 컨테이너에서 Yahoo가 403이라 합성 데이터 테스트로만 검증됐다.')
-  log('   위 수치는 GitHub Actions(backtest.yml `short:all`) 실행 결과로 채워야 한다.')
+  log(priceSourceHeadline(source, idx?.from))
+  if (benchMissing) {
+    log('⚠️ [미검증] **이번 실행은 벤치(야후 KODEX 200)를 못 받아 알파가 산출되지 않았다.**')
+    log('   판정·통과 수치는 근거가 되지 못한다 — GitHub Actions(backtest.yml `short:all`)에서 다시 돌려라.')
+  }
+  if (source === 'yahoo') {
+    log('⚠️ 야후 경로 실행이다(36차 재현·대조용). 기본 소스는 KRX 정본이다 — 새 판정은 KRX 기준으로 낸다.')
+  }
   log('')
   log('---')
   log('⚠️ 이 수치는 시뮬레이션이며 **투자자문이 아니다.** 손실 경로는 MDD 열이 그 전략이 견뎌야 했던')
