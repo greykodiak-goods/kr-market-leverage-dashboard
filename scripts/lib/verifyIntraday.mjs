@@ -11,7 +11,7 @@
 // 어떤 검증도 "원천 소스 둘 다 같은 방식으로 틀린 경우"는 못 잡는다 — 그래서
 // 대조는 소스 내(키움 일봉)와 소스 간(Yahoo 일봉)을 둘 다 한다. 한계는 러너가 보고한다.
 
-import { KR_BARS_PER_DAY, kstDate } from './intraday.mjs'
+import { KR_BARS_PER_DAY, SESSION_CLOSE_MIN, kstDate } from './intraday.mjs'
 
 const FIVE_MIN = 300
 
@@ -43,7 +43,8 @@ export function kstMinOfDay(tsSec) {
  * ⚠️ **키움 5분봉의 마지막 봉 시각이 정확히 몇 분인지는 `[미검증]`이다** — 첫 실제 수집
  * 응답으로 확정한 뒤 이 상수를 조이고 주석의 [미검증]을 지운다(글로벌 규칙 4).
  */
-export const SESSION_CLOSE_MIN = 915
+// 정의는 intraday.mjs 하나뿐이다 — 두 곳에 두면 조용히 갈라진다.
+export { SESSION_CLOSE_MIN }
 
 /**
  * ① 구조 무결성 검사.

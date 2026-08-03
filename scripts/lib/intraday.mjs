@@ -14,6 +14,54 @@
 export const KR_BARS_PER_DAY = 78
 
 /**
+ * 하루가 "장 마감까지 닿았다"고 인정하는 마지막 봉의 최소 시작시각(KST 자정 기준 분).
+ * 15:15 = 915분.
+ *
+ * 왜 개수가 아니라 시각인가 (2026-08-03 실측으로 밝혀진 사고):
+ *   저장소에 남아 있는 야후 누적분은 하루 72봉을 09:00~**14:55**로 주고 끝난다.
+ *   개수 게이트(78×0.8=62.4)는 통과하지만 **15:00~15:30이 통째로 없다.**
+ *   한국장 공식 종가는 15:20~15:30 종가 단일가에서 정해지므로, 이 데이터를 일봉으로
+ *   집계하면 "종가"가 실제 종가가 아니라 15:00 직전 가격이 된다.
+ *   80종목 4,800 종목일 전수 조사: **96.7%가 14:55에 끝난다.** KRX 일별 정본 종가와
+ *   대조하면 88.5%가 0.1% 허용치를 벗어나고 평균 절대편차 0.712%다.
+ *
+ * ⚠️ 키움 5분봉의 실제 막봉 시각은 아직 `[미검증]`이다(15:20·15:25·15:30 중 무엇인지).
+ *    첫 실제 수집 응답으로 확정한 뒤 이 상수를 조인다(글로벌 규칙 4).
+ *
+ * `scripts/lib/verifyIntraday.mjs`가 이 값을 재수출한다 — 정의는 여기 하나뿐이다.
+ */
+export const SESSION_CLOSE_MIN = 915
+
+/** epoch초 → KST 자정 기준 경과 분 */
+export function kstMinuteOfDay(tsSec) {
+  return Math.floor(((tsSec + 9 * 3600) % 86400) / 60)
+}
+
+/**
+ * **5분봉을 신호·체결에 쓰기 전에 반드시 통과할 게이트.**
+ *
+ * 저장소에는 종가가 없는 구간(야후 누적분)이 남아 있다. 그 구간을 그대로 쓰면
+ * "종가 기준 신호"가 15:00 직전 가격으로 계산되고, 백테스트는 통과한 채 조용히 틀린다.
+ * **결함은 index.json에 적어 뒀지만, 적어 두는 것만으로는 아무도 안 본다** —
+ * 그래서 봉을 소비하는 쪽이 이 함수를 부르게 만든다.
+ *
+ * @param {object} cov `coverage()` 결과
+ * @param {string} usedFor 무엇에 쓰려는지(오류 메시지에 그대로 들어간다)
+ * @returns {string} 이 날짜부터 써도 되는 시작일
+ * @throws 쓸 수 있는 구간이 없으면 던진다 — 조용히 빈 구간으로 돌지 않는다(규칙 4).
+ */
+export function assertIntradayUsable(cov, usedFor = '장중 전략') {
+  if (!cov || !cov.days) throw new Error(`5분봉이 비어 있다 — ${usedFor}을(를) 실행할 수 없다.`)
+  if (!cov.usableFrom)
+    throw new Error(
+      `5분봉 ${cov.days}일이 **전부 마감 구간 결측**이다(막봉이 15:15 이전에 끝난다) — ` +
+        `${usedFor}에 쓸 수 없다. 그 날들의 "종가"는 실제 종가가 아니라 15:00 직전 가격이다. ` +
+        '키움으로 재수집한 구간이 쌓인 뒤에 다시 시도하라(증분 수집으로는 과거 구간이 고쳐지지 않는다).',
+    )
+  return cov.usableFrom
+}
+
+/**
  * 감시목록 폴백 시드 — 네이버 시총 랭킹 조회가 죽었을 때만 쓴다.
  * [추정 스냅샷 2026-07 기준, 정본은 실행 시점 랭킹] 순위 정확성보다
  * "유동성 있는 대형주 표본"이면 충분하다.
@@ -80,15 +128,39 @@ export function kstDate(tsSec) {
  * 백테스트를 돌리기 전에 "이 데이터로 판정해도 되나"를 보는 용도다.
  */
 export function coverage(bars) {
-  if (!bars.length) return { days: 0, bars: 0, firstDate: null, lastDate: null, thinDays: [], avgBarsPerDay: 0 }
+  if (!bars.length)
+    return {
+      days: 0,
+      bars: 0,
+      firstDate: null,
+      lastDate: null,
+      thinDays: [],
+      avgBarsPerDay: 0,
+      truncatedDays: 0,
+      truncatedThrough: null,
+      usableFrom: null,
+    }
   const byDay = new Map()
   for (const b of bars) {
     const d = kstDate(b.ts)
-    byDay.set(d, (byDay.get(d) ?? 0) + 1)
+    const cur = byDay.get(d) ?? { n: 0, lastMin: -1, lastTs: -Infinity }
+    cur.n++
+    // 막봉은 "가장 늦은 봉"이지 "배열 마지막 봉"이 아니다 — 역순 데이터에서도 맞게 잡는다.
+    if (b.ts > cur.lastTs) {
+      cur.lastTs = b.ts
+      cur.lastMin = kstMinuteOfDay(b.ts)
+    }
+    byDay.set(d, cur)
   }
   const days = [...byDay.keys()].sort()
   // 봉이 정상 개수의 80% 미만인 날 = 구멍(장 단축·수집 실패)
-  const thinDays = days.filter((d) => byDay.get(d) < KR_BARS_PER_DAY * 0.8)
+  const thinDays = days.filter((d) => byDay.get(d).n < KR_BARS_PER_DAY * 0.8)
+  // 마감 구간이 없는 날 — 개수는 충분해도 **종가가 실제 종가가 아니다**(SESSION_CLOSE_MIN 주석).
+  const truncated = days.filter((d) => byDay.get(d).lastMin < SESSION_CLOSE_MIN)
+  const truncatedThrough = truncated.length ? truncated[truncated.length - 1] : null
+  // 소비자가 날짜로 배제할 수 있게 **"여기부터 써도 된다"**를 숫자가 아니라 날짜로 준다.
+  // 마지막 절단일 **다음** 정상일이 시작점이다(절단일이 중간에 섞여 있으면 그 뒤부터).
+  const usableFrom = truncatedThrough ? (days.find((d) => d > truncatedThrough) ?? null) : (days[0] ?? null)
   return {
     days: days.length,
     bars: bars.length,
@@ -96,6 +168,57 @@ export function coverage(bars) {
     lastDate: days[days.length - 1],
     thinDays,
     avgBarsPerDay: bars.length / days.length,
+    /** 마감 구간이 없는 날 수 — 0이 아니면 그 구간의 종가는 신뢰할 수 없다 */
+    truncatedDays: truncated.length,
+    /** 마지막 절단일(없으면 null) */
+    truncatedThrough,
+    /** 이 날짜부터 종가가 유효하다(없으면 null = 쓸 수 있는 구간이 없다) */
+    usableFrom,
+  }
+}
+
+/**
+ * 저장소 전체의 절단 요약 — 심볼별 coverage를 모아 "언제부터 쓸 수 있나"를 하나로 만든다.
+ * 소비자는 이 값 하나만 보고 날짜로 걸러내면 된다.
+ *
+ * `usableFrom`은 **가장 늦은** 심볼 기준이다(가장 보수적). 한 종목이라도 절단돼 있으면
+ * 그 구간을 쓰는 순간 종목 간 비교가 깨지기 때문이다.
+ */
+export function truncationSummary(coverageBySymbol) {
+  const entries = Object.entries(coverageBySymbol ?? {})
+  let truncatedSymbols = 0
+  let truncatedDays = 0
+  let through = null
+  let usableFrom = null
+  // 한 종목이라도 **쓸 수 있는 구간이 아예 없으면** 전체도 없다. 최댓값만 취하면
+  // 그 종목이 조용히 빠진 채 "나머지는 쓸 수 있다"가 되고, 종목 간 비교가 깨진 표가 나온다.
+  let anyUnusable = false
+  for (const [, cov] of entries) {
+    if (!cov) continue
+    if (cov.truncatedDays > 0) {
+      truncatedSymbols++
+      truncatedDays += cov.truncatedDays
+      if (cov.truncatedThrough && (!through || cov.truncatedThrough > through)) through = cov.truncatedThrough
+    }
+    if (!cov.usableFrom) anyUnusable = true
+    else if (!usableFrom || cov.usableFrom > usableFrom) usableFrom = cov.usableFrom
+  }
+  if (truncatedSymbols === 0) return null
+  if (anyUnusable) usableFrom = null
+  return {
+    kind: 'session-truncated',
+    truncatedSymbols,
+    totalSymbols: entries.length,
+    truncatedDays,
+    /** 이 날짜까지가 오염 구간이다 */
+    through,
+    /** 이 날짜부터 종가가 유효하다 */
+    usableFrom,
+    reason:
+      `막봉이 ${Math.floor(SESSION_CLOSE_MIN / 60)}:${String(SESSION_CLOSE_MIN % 60).padStart(2, '0')} 이전에 끝나 ` +
+      '15:20~15:30 종가 단일가 구간이 없다. 그 날들의 "종가"는 실제 종가가 아니다(야후 누적분의 성질). ' +
+      '증분 수집으로는 고쳐지지 않는다 — 파일을 비우고 키움에서 전체 재수집해야 하며, ' +
+      '키움 소급 한도 밖 구간은 복구되지 않는다.',
   }
 }
 

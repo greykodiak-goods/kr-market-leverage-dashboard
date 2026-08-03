@@ -8,6 +8,7 @@
 import { check, close, eq, finish, section } from './harness'
 // @ts-expect-error — .mjs 라이브러리(타입 선언 없음). esbuild가 번들한다.
 import {
+  assertIntradayUsable,
   buildWatchlist,
   coverage,
   dailyCutoffTs,
@@ -18,6 +19,7 @@ import {
   packBars,
   rankingToSymbols,
   SEED_SYMBOLS,
+  truncationSummary,
   toDailyBars,
   unpackBars,
 } from '../scripts/lib/intraday.mjs'
@@ -125,6 +127,50 @@ section('4) 커버리지 — 구멍을 잡아내는가')
   eq('3 거래일', ct.days, 3)
   eq('구멍 1일 검출', ct.thinDays.length, 1)
   eq('구멍 날짜', ct.thinDays[0], '2026-07-30')
+
+  // 정상 2일에는 절단이 없다(09:00~15:25 = 78봉, 막봉 15:25 ≥ 15:15)
+  eq('정상일은 절단 아님', cf.truncatedDays, 0)
+  eq('정상일은 첫날부터 쓸 수 있다', cf.usableFrom, '2026-07-28')
+}
+
+// 2026-08-03 사고: 야후 누적분은 하루 72봉을 09:00~14:55로 주고 끝난다.
+// 개수 게이트(62.4)는 통과하지만 15:20~15:30 종가 단일가가 없어 "종가"가 실제 종가가 아니다.
+// coverage가 이걸 날짜로 내놔야 소비자가 배제할 수 있다.
+section('4-1) 커버리지 — 마감 절단을 날짜로 내놓는가')
+{
+  const mk = (day: number, n: number) =>
+    Array.from({ length: n }, (_, i) => ({ ts: D0 + day * 86400 + i * FIVE_MIN, o: 1, h: 1, l: 1, c: 1, v: 1 }))
+
+  // 1일차 절단(72봉 = 09:00~14:55) + 2일차 정상(78봉)
+  const mixed = [...mk(0, 72), ...mk(1, KR_BARS_PER_DAY)]
+  const cm = coverage(mixed)
+  eq('절단일은 thin이 아니다(개수는 충분)', cm.thinDays.length, 0)
+  eq('절단 1일 검출', cm.truncatedDays, 1)
+  eq('마지막 절단일', cm.truncatedThrough, '2026-07-28')
+  eq('그 다음 날부터 쓸 수 있다', cm.usableFrom, '2026-07-29')
+
+  // 전부 절단이면 **쓸 수 있는 구간이 없다** — 0이 아니라 null로 구분한다.
+  const allTrunc = coverage([...mk(0, 72), ...mk(1, 72)])
+  eq('전부 절단', allTrunc.truncatedDays, 2)
+  eq('쓸 수 있는 시작일 없음', allTrunc.usableFrom, null)
+
+  // 게이트 — 봉을 소비하는 쪽이 조용히 빈 구간으로 돌지 않게 던진다(규칙 4)
+  eq('정상이면 시작일을 돌려준다', assertIntradayUsable(cm, '테스트'), '2026-07-29')
+  let threw = ''
+  try {
+    assertIntradayUsable(allTrunc, '장중 전략')
+  } catch (e) {
+    threw = (e as Error).message
+  }
+  check('전부 절단이면 던진다', threw.includes('마감 구간 결측'), threw)
+  check('던질 때 용도를 밝힌다', threw.includes('장중 전략'), threw)
+
+  // 저장소 전체 요약 — 소비자가 이 블록 하나만 보면 된다
+  const sum = truncationSummary({ 'A.KS': cm, 'B.KS': allTrunc })
+  check('요약이 만들어진다', sum != null)
+  eq('절단 종목 2개', sum?.truncatedSymbols, 2)
+  eq('가장 보수적인 시작일(= 없음)', sum?.usableFrom, null)
+  eq('결함 없으면 null', truncationSummary({ 'A.KS': coverage(mk(0, KR_BARS_PER_DAY)) }), null)
 }
 
 // -------------------------------------------------- 5) 5분봉 → 일봉 집계

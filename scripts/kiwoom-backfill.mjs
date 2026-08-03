@@ -46,6 +46,7 @@ import {
   dailyCutoffTs,
   kstDate,
   mergeBars,
+  truncationSummary,
   orderIndexSymbols,
   packBars,
   rankingToSymbols,
@@ -385,7 +386,7 @@ function writeIndex() {
       const p = prevSymbols[sym]
       if (p && Number.isFinite(p.bars)) {
         // 이번 회차에 안 건드린 종목은 직전 요약을 그대로 승계 (대용량 파일 재파싱 회피)
-        symbols[sym] = { ...(nameBySym.get(sym) ? { name: nameBySym.get(sym) } : p.name ? { name: p.name } : {}), bars: p.bars, days: p.days, first: p.first, last: p.last, thin: p.thin }
+        symbols[sym] = { ...(nameBySym.get(sym) ? { name: nameBySym.get(sym) } : p.name ? { name: p.name } : {}), bars: p.bars, days: p.days, first: p.first, last: p.last, thin: p.thin, ...(p.truncated != null ? { truncated: p.truncated, usableFrom: p.usableFrom ?? null } : {}) }
         continue
       }
       cov = loadStore(sym)?.coverage ?? null
@@ -399,8 +400,25 @@ function writeIndex() {
       first: cov.firstDate,
       last: cov.lastDate,
       thin: (cov.thinDays ?? []).length,
+      // 마감 구간이 없는 날 수와 "이 날짜부터 종가가 유효하다" — 소비자가 날짜로 걸러낸다.
+      // 개수(thin)만으로는 잡히지 않는 결함이라 별도 필드로 둔다(2026-08-03 사고).
+      truncated: cov.truncatedDays ?? 0,
+      usableFrom: cov.usableFrom ?? null,
     }
   }
+
+  // 저장소 전체 절단 요약 — 소비자가 이 블록 하나만 보고 오염 구간을 배제할 수 있다.
+  const defect = truncationSummary(
+    Object.fromEntries(
+      Object.entries(symbols).map(([sym, v]) => [
+        sym,
+        { truncatedDays: v.truncated ?? 0, truncatedThrough: null, usableFrom: v.usableFrom ?? null },
+      ]),
+    ),
+  )
+  // truncationSummary는 through를 심볼별 truncatedThrough에서 얻는데 인덱스 요약에는 그 값이
+  // 없다 — usableFrom 직전 거래일이 곧 오염 구간의 끝이므로 그것으로 대신한다(보수적).
+  if (defect && !defect.through) defect.through = defect.usableFrom ? `< ${defect.usableFrom}` : null
 
   const watchlistNote = RANKING_RUN ? watchSource : (prev?.watchlist ?? watchSource)
   writeFileSync(
@@ -417,6 +435,8 @@ function writeIndex() {
         barsPerDay: 78,
         updatedAt: new Date().toISOString(),
         symbolCount: Object.keys(symbols).length,
+        // 오염 구간 고지 — 없으면 필드 자체가 없다(있는 척하지 않는다).
+        ...(defect ? { defect } : {}),
         symbols,
       },
       null,

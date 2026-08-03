@@ -115,6 +115,11 @@ export function planSymbolIngest({ symbol, file, summary, batchSize = INGEST_BAR
           first: summary?.first ?? cov?.firstDate ?? '',
           last: summary?.last ?? cov?.lastDate ?? '',
           thin: summary?.thin ?? (Array.isArray(cov?.thinDays) ? cov.thinDays.length : 0),
+          // 마감 절단(2026-08-03 발견) — coverage 안에도 들어 있지만 **1급 필드로 올린다.**
+          // 소비자가 coverage를 안 펼쳐 보면 결함을 모른 채 종가를 쓰게 되고, 그게 이 사고의
+          // 재발 경로다. usableFrom === null 이면 "쓸 수 있는 구간이 없다"는 뜻이다.
+          truncated: summary?.truncated ?? cov?.truncatedDays ?? 0,
+          usableFrom: summary?.usableFrom ?? cov?.usableFrom ?? null,
           coverage: cov ?? undefined,
           tz: file?.tz ?? undefined,
         }
