@@ -44,6 +44,12 @@
 //                 조건식 격자 12 × 2유니버스 + xsmom 분위 정합 5 + 구조 오버레이 6 = 35변형.
 //                 판정은 칼마 순위 + 전·후반 알파 양수 + 매매수. **참고 벽 = QQQ 원화 보유**이며
 //                 그 벽을 넘는 변형이 있는지가 헤드라인이다(없으면 없다고 크게 쓴다).
+// MODE=krxscreen — 35차. 34차가 손대지 않은 **비모멘텀 6계열**(lowvol·hi52·strev·volrank ·
+//                 rsirev · volbrk)을 같은 실측 유니버스·같은 판정 프레임으로 다시 세운다.
+//                 이 계열들의 기각은 전부 [추정] 목록 위에서 내려진 것이라 33차와 함께 무효다.
+//                 랭킹 4계열은 10+10과 40+40 양쪽에 태워 28차의 유보("20종목이라 분위가 묽다")를
+//                 직접 검증한다 — 40+40에서 상위8 = 10% 분위로 **랭킹 분위가 처음 제대로 선다.**
+//                 새 지표를 만들지 않는다(28차 랭킹 훅·25차 시뮬레이터 재사용) · 총 20변형 고정.
 //
 // ── 발굴 깔때기 1~2관문 — 미검증 랭킹 4계열 일괄 스크리너 ────────────────────
 // MODE=screen   — lowvol · hi52 · strev · volrank 네 계열을 **한 번에** 1~2관문에 태운다.
@@ -5559,8 +5565,13 @@ export function krxcalGridSpec(g: GridCand): (symbols: string[]) => StrategySpec
 /** 한 변형의 요약 — 곡선은 이미 버렸고 스칼라만 남는다(OOM 교훈). */
 export interface CalVariant {
   label: string
-  /** 계열 — 표에서 어느 축의 탐색인지 드러낸다 */
-  group: '조건식' | 'xsmom' | '오버레이'
+  /**
+   * 계열 — 표에서 어느 축의 탐색인지 드러낸다.
+   * 앞 셋은 34차(krxcal)의 축이고, 뒤 셋은 35차(krxscreen)가 쓰는 축이다. 두 모드가
+   * **같은 판정 함수**(`calmarSort`·`calFailReasons`·`calRankTable`)를 공유하므로
+   * 이 유니온 하나로 묶어 둔다 — 판정 코드가 갈라지면 두 회차 표를 나란히 못 읽는다.
+   */
+  group: '조건식' | 'xsmom' | '오버레이' | '랭킹' | 'rsirev' | 'volbrk'
   row: StratRow
   /**
    * 판정에 쓰는 청산완료 매매 수. 합성 행(결합·오버레이)은 매매 원장이 한쪽 슬리브에
@@ -5648,10 +5659,29 @@ export function calRankTable(title: string, vs: CalVariant[], wall: CalWall | nu
 }
 
 /**
+ * "벽을 못 넘었다"일 때 찍는 해석 문단의 기본값 — 34차(krxcal)의 탐색 공간을 가리킨다.
+ * 다른 모드가 이 함수를 재사용할 때는 **자기 탐색 공간을 넘겨야** 한다. 안 그러면
+ * 비모멘텀 계열을 돌려 놓고 "조건식 격자·xsmom 분위를 돌렸다"고 쓰는 거짓 문단이 된다
+ * (35차 스모크에서 실제로 그렇게 찍혔다). 기본값을 그대로 두면 34차 출력은 바이트 동일하다.
+ */
+export const CAL_SPACE_NOTE_KRXCAL = [
+  '이것은 실패한 실험이 아니라 **결과**다. 이 탐색 공간(조건식 격자·xsmom 분위·구조',
+  '오버레이)에서는, KRX 실측 유니버스 위에서 원화로 나스닥100을 그냥 들고 있는 것보다',
+  '나은 조합을 찾지 못했다는 뜻이다. 프리셋을 "가장 덜 나쁜 칸"으로 채우는 것은',
+  '33차가 무너진 것과 **같은 종류의 사후선택**이다 — 벽을 못 넘었으면 못 넘은 것이다.',
+]
+
+/**
  * 헤드라인 — QQQ 벽을 넘은 변형이 있는가. **없으면 없다고 크게 쓴다**(그것도 답이다).
  * 넘은 변형 수를 돌려준다.
  */
-export function calHeadline(uniKey: string, sorted: CalVariant[], wall: CalWall | null, minTrades = KRXCAL_MIN_TRADES): number {
+export function calHeadline(
+  uniKey: string,
+  sorted: CalVariant[],
+  wall: CalWall | null,
+  minTrades = KRXCAL_MIN_TRADES,
+  spaceNote: string[] = CAL_SPACE_NOTE_KRXCAL,
+): number {
   log('')
   log(`### 헤드라인 — ${uniKey}: ${wall ? `${wall.label} 벽(칼마 ${wall.calmar?.toFixed(3) ?? '—'})` : '참고 벽'}을 넘은 변형`)
   if (!wall || wall.calmar == null) {
@@ -5667,10 +5697,7 @@ export function calHeadline(uniKey: string, sorted: CalVariant[], wall: CalWall 
     log(`## ❌ **없다.** ${uniKey} 유니버스의 전 변형 중 ${wall.label} 보유의 칼마를 넘으면서`)
     log('## 판정(전·후반 알파 양수 + 매매수)까지 통과한 것은 **하나도 없다.**')
     log('')
-    log('이것은 실패한 실험이 아니라 **결과**다. 이 탐색 공간(조건식 격자·xsmom 분위·구조')
-    log('오버레이)에서는, KRX 실측 유니버스 위에서 원화로 나스닥100을 그냥 들고 있는 것보다')
-    log('나은 조합을 찾지 못했다는 뜻이다. 프리셋을 "가장 덜 나쁜 칸"으로 채우는 것은')
-    log('33차가 무너진 것과 **같은 종류의 사후선택**이다 — 벽을 못 넘었으면 못 넘은 것이다.')
+    for (const line of spaceNote) log(line)
     return 0
   }
   log('')
@@ -6019,6 +6046,493 @@ async function krxcal() {
 }
 
 // ============================================================================
+// MODE=krxscreen — 비모멘텀 지표 계열 6종을 KRX 실측 유니버스로 재검증 (35차)
+// ============================================================================
+//
+// 2026-08-03 대표 지시: "모멘텀 말고 다른 지표 계열도 실측으로 다시 돌려봐."
+//
+// ── 왜 다시 돌리는가 ───────────────────────────────────────────────────────
+//   랭킹 4계열(lowvol·hi52·strev·volrank)은 28차(MODE=screen)에서, 변동성 돌파와
+//   RSI 평균회귀는 25·26차에서 각각 기각됐다. **그 판정은 전부 [추정] 유니버스
+//   (PIT1010) 위에서 내려진 것**이다. 33차(krxpit)가 그 목록 자체를 사후선택 편향으로
+//   판명했으므로, 그 위에서 나온 **기각도 통과도 같이 무효다.** 34차(krxcal)는 추세
+//   격자·xsmom·오버레이만 실측으로 다시 세웠고 이 6계열은 손대지 않은 채 남아 있다.
+//   이 모드가 그 빈칸을 채운다.
+//
+// ── 특히 40+40이 이 회차의 핵심이다 ────────────────────────────────────────
+//   28차의 유보는 "유니버스가 20종목뿐이라 상위5 = 상위 25% 분위. 학계의 상위 10%
+//   분위보다 신호가 훨씬 묽다 — 알파가 없어도 그 이상현상이 죽은 게 아니라 분위가
+//   안 갈린 것일 수 있다"였다. 실측 40+40(=80종목)에서는 상위8 = 10% 분위, 상위16 =
+//   20% 분위가 되어 **랭킹 분위가 처음으로 제대로 선다.** 그래서 각 계열을 좁은
+//   유니버스와 넓은 유니버스 양쪽에 태운다.
+//
+// ── 새로 만든 지표가 하나도 없다 ───────────────────────────────────────────
+//   랭킹 함수(`lowVolRank`·`hi52Rank`·`shortRevRank`·`volRankRank`)와 게이트 임계는
+//   `SCREEN_FAMILIES`에서 **그대로 꺼내 쓴다**(28차 설정 그대로 — 이 모드에서 새로
+//   정의하지 않는다. `screenGateVariant`가 그 재사용을 강제한다). 시뮬레이터도
+//   `simulateRankYear`·`simulateRsiRevYear`·`simulateVolBrkYear` 기존 3개 그대로이며,
+//   바뀌는 자리는 `buildYearly(histories, years, codesFor)`의 **유니버스 주입 한 곳**뿐이다
+//   (33·34차와 같은 자리). 새 지표 경로가 없으므로 절단 불변성 케이스도 새로 필요하지
+//   않다 — 기존 집행자(`tests/idealab.test.ts`·`tests/screen.test.ts`)의 사정거리 안에
+//   그대로 남는다. `tests/krxscreen.test.ts`는 "정말로 같은 훅을 부르는가"를 본다.
+//
+// ── 판정 프레임은 34차와 같다 ──────────────────────────────────────────────
+//   칼마(CAGR÷|MDD|) 내림차순 · 전·후반(2018 분할) 둘 다 KODEX 200 대비 알파 양수 ·
+//   매매수 ≥ 20 · **QQQ 원화 보유 벽**을 같은 구간에서 다시 재서 병기. 헤드라인은
+//   "판정 통과 n개 / QQQ 벽 초과 n개"다. 판정 함수는 34차 것을 그대로 부른다
+//   (`calmarSort`·`calFailReasons`·`calRankTable`·`calHeadline`·`calPassSummary`) —
+//   판정 코드가 갈라지면 34차 표와 나란히 읽을 수 없다.
+//
+// ── 변형 20개 고정 (지시로 못 박은 상한 · 임의 확장 금지) ──────────────────
+//   랭킹 4계열 × [10+10 N=5 · 10+10 N=5+게이트 · 40+40 N=16+게이트 · 40+40 N=8+게이트] = 16
+//   rsirev 2(10+10) + volbrk 2(10+10) = 4  →  **총 20**
+//   변형을 늘릴수록 위양성이 늘어난다는 것이 24~28차에서 반복 확인된 사실이다.
+
+/**
+ * 전·후반 길이 표기 — `17`이면 `8~9`, `6`이면 `3`. 실제로 돈 해의 수에서 만든다(상수 아님).
+ * 짝수 구간에서 "3~3년"으로 찍히던 것을 한 숫자로 정리한다.
+ */
+export function halfSpanLabel(spanYears: number): string {
+  const a = Math.floor(spanYears / 2)
+  const b = spanYears - a
+  return a === b ? `${a}` : `${a}~${b}`
+}
+
+/** 10+10(=20종목) 랭킹 슬롯 — 28차와 같은 N=5(그때 "상위5 = 25% 분위라 묽다"는 유보가 붙었던 자리). */
+export const KRXSCREEN_NARROW_SLOTS = 5
+/** 40+40(=80종목) 랭킹 슬롯 — 16 = 상위 20% 분위 · 8 = 상위 10% 분위(27·34차와 같은 분위 규약). */
+export const KRXSCREEN_WIDE_SLOTS = [16, 8] as const
+/** 표본 소실 판정선 — 28차(screen)·34차(krxcal)와 **같은 값**을 쓴다. 회차마다 다르면 비교가 깨진다. */
+export const KRXSCREEN_MIN_TRADES = SCREEN_MIN_TRADES
+
+/**
+ * rsirev 2변형 — 25차에서 "(민감도)"가 아닌 두 개, 즉 **본안**과 **추세필터 A/B**다.
+ * 임계값 민감도(RSI2<5 · <15)는 같은 축을 더 써는 것이라 이번 상한(20)에 넣지 않았다.
+ */
+export const KRXSCREEN_RSIREV: { label: string; opts: RsiRevOpts }[] = [
+  { label: 'RSI2<10 · 200일선 위 (25차 본안)', opts: RSIREV_DEFAULT },
+  { label: 'RSI2<10 · 추세필터 없음 (25차 A/B)', opts: { ...RSIREV_DEFAULT, trendMa: 0 } },
+]
+
+/** volbrk k — 25차와 같은 두 값. */
+export const KRXSCREEN_VOLBRK_K = [0.5, 0.7] as const
+/**
+ * volbrk 청산 방식은 **당일 종가**로 고정한다(원저 래리 윌리엄스의 데이트레이드형).
+ * 25차는 k×청산 4조합이었지만 이번 상한은 계열당 2변형이라 청산 축을 열지 않았다 —
+ * 익일 시가 청산 절반은 이번 회차에서 **재검증되지 않았다**(출력에 그대로 적는다).
+ */
+export const KRXSCREEN_VOLBRK_EXIT: VolBrkOpts['exit'] = 'close'
+
+/**
+ * 계열의 게이트를 `SCREEN_FAMILIES`에서 꺼낸다 — 이 모드가 임계를 **다시 쓰지 않게** 하는 장치다.
+ * (hi52 0.9 · volrank 1.5배 · strev 하락한정 · lowvol 절대모멘텀 — 전부 28차 설정 그대로.)
+ * 계열당 게이트 변형이 정확히 1개라는 28차 규약이 깨지면 던진다(조용히 다른 임계를 쓰지 않는다).
+ */
+export function screenGateVariant(fam: ScreenFamily): ScreenVariant {
+  const gated = fam.variants.filter((v) => v.keep)
+  if (gated.length !== 1)
+    throw new Error(`${fam.key}: 게이트 변형이 ${gated.length}개다(1개여야 한다) — 28차 설정이 바뀌었다`)
+  return gated[0]
+}
+
+/** 게이트 변형 라벨에서 "상위 N + " 접두를 떼어 게이트 설명만 남긴다(라벨을 새로 쓰지 않는다). */
+export function screenGateLabel(fam: ScreenFamily): string {
+  return screenGateVariant(fam).label.replace(/^상위\s*\d+\s*\+\s*/, '')
+}
+
+/** 한 변형의 정의. 실행부는 이 셋 중 어떤 필드가 찼는지로 시뮬레이터를 고른다. */
+export interface KrxScreenDef {
+  label: string
+  group: CalVariant['group']
+  /** 이 변형이 도는 유니버스 폭(각 시장 상위 N) */
+  top: 10 | 40
+  slots: number
+  /** 랭킹 계열이면 채워진다 — `SCREEN_FAMILIES`의 함수 참조 그대로 */
+  rank?: RankFn
+  keep?: (row: RankRow) => boolean
+  /** rsirev면 채워진다 */
+  rsi?: RsiRevOpts
+  /** volbrk면 채워진다 */
+  volbrkK?: number
+}
+
+/**
+ * 한 유니버스 폭의 변형 목록. **순서를 고정**해 실행마다 표가 흔들리지 않게 한다.
+ * 10+10 = 랭킹 8 + rsirev 2 + volbrk 2 = 12 · 40+40 = 랭킹 8 → 합 20.
+ */
+export function krxscreenDefs(top: 10 | 40): KrxScreenDef[] {
+  const out: KrxScreenDef[] = []
+  for (const fam of SCREEN_FAMILIES) {
+    const gate = screenGateVariant(fam)
+    const gLabel = screenGateLabel(fam)
+    if (top === 10) {
+      out.push({
+        label: `${fam.key} 상위${KRXSCREEN_NARROW_SLOTS}`,
+        group: '랭킹',
+        top,
+        slots: KRXSCREEN_NARROW_SLOTS,
+        rank: fam.rank,
+      })
+      out.push({
+        label: `${fam.key} 상위${gate.slots} + ${gLabel}`,
+        group: '랭킹',
+        top,
+        slots: gate.slots,
+        rank: fam.rank,
+        keep: gate.keep,
+      })
+    } else {
+      for (const slots of KRXSCREEN_WIDE_SLOTS)
+        out.push({ label: `${fam.key} 상위${slots} + ${gLabel}`, group: '랭킹', top, slots, rank: fam.rank, keep: gate.keep })
+    }
+  }
+  // rsirev·volbrk는 **랭킹 분위 전략이 아니라 신호 임계 전략**이다(슬롯 고정). 유니버스를
+  // 넓혀도 "분위가 갈리는가"라는 이번 회차의 질문에 답하지 않고 후보만 늘어난다 — 그래서
+  // 지시대로 10+10에만 태운다(근거는 출력에도 한 줄 남긴다).
+  if (top === 10) {
+    for (const v of KRXSCREEN_RSIREV)
+      out.push({ label: `rsirev ${v.label}`, group: 'rsirev', top, slots: v.opts.slots, rsi: v.opts })
+    for (const k of KRXSCREEN_VOLBRK_K)
+      out.push({
+        label: `volbrk k=${k.toFixed(1)} · 당일 종가 청산`,
+        group: 'volbrk',
+        top,
+        slots: MAX_POSITIONS,
+        volbrkK: k,
+      })
+  }
+  return out
+}
+
+/** 20변형 전체 목록(두 폭을 이어 붙인 것). 다중검정 분모가 곧 이 배열의 길이다. */
+export const krxscreenAllDefs = (): KrxScreenDef[] => [...krxscreenDefs(10), ...krxscreenDefs(40)]
+
+/**
+ * 변형 하나 실행. **새 시뮬레이터가 없다** — 기존 세 훅 중 하나를 그대로 부른다.
+ * 곡선은 이 함수 안에서만 살아 있고 밖으로 나가는 것은 `CalVariant` 스칼라뿐이다(OOM 교훈).
+ */
+export function runKrxScreenDef(
+  def: KrxScreenDef,
+  yearly: YearSlice[],
+  benchEq: { date: string; equity: number }[],
+  cost: CostSettings = COST,
+): { variant: CalVariant; span: [string, string] | null } {
+  const chain = runCustomChain(
+    yearly,
+    (v) => {
+      if (def.rsi) return simulateRsiRevYear(v.hist, `${v.y}-01-01`, v.syms, cost, def.rsi)
+      if (def.volbrkK != null)
+        return simulateVolBrkYear(v.hist, `${v.y}-01-01`, v.syms, cost, {
+          k: def.volbrkK,
+          exit: KRXSCREEN_VOLBRK_EXIT,
+          slots: def.slots,
+        })
+      if (!def.rank) throw new Error(`${def.label}: 랭킹 함수가 없다 — 변형 정의가 깨졌다`)
+      return simulateRankYear(v.hist, `${v.y}-01-01`, v.syms, cost, { slots: def.slots, rank: def.rank, keep: def.keep })
+    },
+    cost,
+    def.slots,
+  )
+  return {
+    variant: {
+      label: def.label,
+      group: def.group,
+      row: summarizeStrat(def.label, chain, benchEq, KRXPIT_HALF),
+      trades: chain.closed,
+      synth: false,
+    },
+    span: chain.equity.length >= 2 ? spanOf(chain.equity) : null,
+  }
+}
+
+/** 한 유니버스 폭 전체 실행. 곡선은 전부 이 함수 안에서 수명이 끝난다. */
+export function krxscreenUniverse(cfg: {
+  top: 10 | 40
+  yearly: YearSlice[]
+  benchEq: { date: string; equity: number }[]
+  cost?: CostSettings
+}): { variants: CalVariant[]; span: [string, string] | null } {
+  const variants: CalVariant[] = []
+  let span: [string, string] | null = null
+  for (const def of krxscreenDefs(cfg.top)) {
+    const r = runKrxScreenDef(def, cfg.yearly, cfg.benchEq, cfg.cost ?? COST)
+    if (!span) span = r.span
+    variants.push(r.variant)
+  }
+  return { variants, span }
+}
+
+/**
+ * 35차의 탐색 공간 문단 — `calHeadline`이 "벽을 못 넘었다"일 때 찍는다.
+ * 34차 기본 문단(조건식 격자·xsmom 분위·오버레이)을 그대로 두면 **돌리지도 않은 것을
+ * 돌렸다고 쓰는 셈**이라 여기서 갈아 끼운다(규칙 3).
+ */
+export const CAL_SPACE_NOTE_KRXSCREEN = [
+  '이것은 실패한 실험이 아니라 **결과**다. 이 탐색 공간(비모멘텀 6계열 — 저변동성·52주',
+  '신고가 근접도·단기 반전·거래량 급증 랭킹 + RSI 평균회귀 + 변동성 돌파)에서는, KRX 실측',
+  '유니버스 위에서 원화로 나스닥100을 그냥 들고 있는 것보다 나은 조합을 찾지 못했다는 뜻이다.',
+  '28차·25차의 기각이 [추정] 목록 탓이었는지를 물었고 **목록을 실측으로 바꿔도 결론이',
+  '뒤집히지 않았다**는 답을 받은 것이다 — 가장 덜 나쁜 칸을 승격시키는 것은 33차가 무너진',
+  '것과 같은 종류의 사후선택이므로 하지 않는다.',
+]
+
+/** 헤드라인 표 — 지시대로 "판정 통과 n개 / QQQ 벽 초과 n개"를 한 표에 모은다. */
+export function krxscreenHeadlineTable(rows: { key: string; n: number; pass: number; over: number }[]) {
+  log('')
+  log('## 헤드라인 — 판정 통과 / QQQ 벽 초과')
+  log(`| 유니버스 | 변형 수 | 판정 통과(전·후반 알파 양수 + 매매 ≥ ${KRXSCREEN_MIN_TRADES}) | QQQ 원화 보유 벽 초과 |`)
+  log('|---|---|---|---|')
+  for (const r of rows) log(`| ${r.key} | ${r.n} | ${r.pass} | ${r.over} |`)
+  const n = rows.reduce((s, r) => s + r.n, 0)
+  const pass = rows.reduce((s, r) => s + r.pass, 0)
+  const over = rows.reduce((s, r) => s + r.over, 0)
+  log(`| **합계** | **${n}** | **${pass}** | **${over}** |`)
+  log('')
+  log('"벽 초과"는 **판정까지 통과한 것만** 센다(칼마만 높고 알파가 한쪽 음수인 칸은 세지 않는다).')
+}
+
+/**
+ * 35차 다중검정 경고 — 이번 20변형이 **누적 탐색 위에 쌓인다**는 것을 못 박는다.
+ * `spanYears`는 상수가 아니라 **실제로 돈 해의 수**다(실측 파일이 짧으면 그 수가 줄어드는데,
+ * 상수를 찍으면 표본이 실제보다 큰 것처럼 읽힌다).
+ */
+function krxscreenMultipleTestingNote(n: number, passed: number, overWall: number, spanYears: number) {
+  const half = halfSpanLabel(spanYears)
+  log('')
+  log('## 다중검정 경고 (이 표를 유의성 근거로 쓰지 마라)')
+  log(`이번 회차는 같은 ${spanYears}년 데이터에 변형 **${n}개**를 돌렸다(상한을 지시로 고정 — 임의 확장 없음).`)
+  log(`그중 ${passed}개가 판정(전·후반 알파 양수 + 매매수 ≥ ${KRXSCREEN_MIN_TRADES})을, ${overWall}개가 QQQ 원화 보유 벽까지 넘었다.`)
+  log(
+    `순수 우연이라도 한 변형이 두 구간 모두 알파 양수일 확률을 ≈25%로 보면, ${n}개 중 ${passed}개 이상이 ` +
+      `그럴 확률은 약 ${(binomTail(n, passed, 0.25) * 100).toFixed(0)}%다.`,
+  )
+  log('⚠️ **이 값은 이번 회차만 센 것이라 낙관적이다.** 세 가지가 겹친다.')
+  log(`   ① 표본이 ${spanYears}년(전·후반 각 ${half}년)뿐이라 한 해의 큰 수익이 두 구간 판정을 다 흔든다.`)
+  log('   ② **독립 실험이 아니다 — 누적이다.** 이 리포가 같은 시장·상당 부분 겹치는 구간에 돌린 순서는')
+  log('      23차 조건식 격자(400조합 포함) → 25차 비이평 계열(xsmom·volbrk·rsirev) → 26차 결합·미장 →')
+  log('      27차 미장 상위80 → 28차 랭킹 4계열 12변형 → 30~32차 오버레이·자산분산 →')
+  log('      33차 실측 재검증 → 34차 실측 칼마 격자 35변형 → **이번 35차 20변형**이다.')
+  log('      누적 탐색 횟수 기준의 p값은 위 숫자보다 훨씬 크다.')
+  log('   ③ 이번 6계열은 **한 번 기각된 계열을 다시 올린 것**이다. 기각 근거가 [추정] 목록이었으니')
+  log('      재검증은 정당하지만, "두 번째 기회"를 준 계열이 통과하면 그 자체가 선택 경로에 들어간다.')
+  log('여기서 "통과"가 나와도 그것은 발견이 아니라 **후보**다 — 채택은 구간 분할 일관성·이웃')
+  log('파라미터 방향까지 본 뒤 별도 근거로 한다(34차와 같은 규약).')
+}
+
+async function krxscreen() {
+  log('# MODE=krxscreen — 비모멘텀 지표 계열 6종 KRX 실측 재검증 (35차)')
+  log('')
+  log('대표 지시(2026-08-03): "모멘텀 말고 다른 지표 계열도 실측으로 다시 돌려봐."')
+  log('')
+  log('랭킹 4계열(lowvol·hi52·strev·volrank)은 28차에서, 변동성 돌파·RSI 평균회귀는 25·26차에서')
+  log('기각됐다. **그 판정은 전부 [추정] 유니버스(PIT1010) 위에서 내려진 것**이고, 33차가 그 목록을')
+  log('사후선택 편향으로 판명했으므로 기각도 통과도 같이 무효다. 34차는 추세 격자·xsmom·오버레이만')
+  log('실측으로 다시 세웠다 — 이 6계열이 남은 빈칸이며, 이 모드가 그것을 채운다.')
+  log('')
+  log('**새로 만든 지표가 하나도 없다.** 랭킹 함수·게이트 임계는 28차(MODE=screen)의 것을 그대로')
+  log('꺼내 쓰고, 시뮬레이터도 기존 3개(simulateRankYear · simulateRsiRevYear · simulateVolBrkYear)')
+  log('그대로다. 바뀌는 자리는 **유니버스 주입 한 곳**뿐이다(33·34차와 같은 자리).')
+  log('')
+
+  const uni = loadKrxPitFile()
+  log(`⚠️ ${krxPitSourceNote(uni)}`)
+  const covered = krxPitYears(uni).filter((y) => y >= KRXPIT_FROM && y <= KRXPIT_TO)
+  if (covered.length < 5) {
+    throw new Error(
+      `실측 랭킹이 ${KRXPIT_FROM}~${KRXPIT_TO} 중 ${covered.length}년뿐이다 — EC2 MODE=pityear를 다시 실행하라.`,
+    )
+  }
+  const years = krxPitSpan(uni, covered[0], covered[covered.length - 1])
+  log(
+    `구간 ${years[0]}~${years[years.length - 1]} (${years.length}년) · 전·후반 분할 ${KRXPIT_HALF} · ` +
+      `벤치 ${BENCH}(KODEX 200) · 비용 수수료 ${COST.feePct}% · 거래세 ${COST.taxPct}% · 슬리피지 ${COST.slippagePct}%`,
+  )
+  log('**[추정] 목록(PIT1010)은 이 모드에 등장하지 않는다** — 33차가 그 비교를 이미 끝냈다.')
+
+  // ---- 계열 정의 (28차 문장을 그대로 재사용 — 코드와 보고서가 같은 정의를 쓴다) ----
+  log('')
+  log('## 계열 정의')
+  log('| 계열 | 정의 | 근거 |')
+  log('|---|---|---|')
+  for (const fam of SCREEN_FAMILIES) log(`| ${fam.key} — ${fam.name} | ${fam.def} | ${fam.basis} |`)
+  log(
+    `| rsirev — 단기 평균회귀 | RSI(2) < 10이고 종가가 200일선 위면 **다음 거래일 시가** 매수 · ` +
+      `RSI(2) > 60 또는 5거래일 경과 시 다음 거래일 시가 청산 | 단기 과매도 되돌림(추세 필터는 A/B로 뗀다) |`,
+  )
+  log(
+    '| volbrk — 변동성 돌파 | 돌파가 = **당일 시가 + k×(전일 고가−전일 저가)**, 당일 고가가 닿으면 매수 · ' +
+      '당일 종가 청산 | 래리 윌리엄스 변동성 돌파(전일 레인지만 쓴다) |',
+  )
+
+  // ---- 변형 매트릭스 -----------------------------------------------------------
+  const defs10 = krxscreenDefs(10)
+  const defs40 = krxscreenDefs(40)
+  log('')
+  log(`## 변형 매트릭스 — 총 **${defs10.length + defs40.length}개** (지시로 고정한 상한 · 임의 확장 없음)`)
+  log('| # | 변형 | 계열 | 유니버스 |')
+  log('|---|---|---|---|')
+  for (const [i, d] of [...defs10, ...defs40].entries())
+    log(`| ${i + 1} | ${d.label} | ${d.group} | 실측 ${d.top}+${d.top} |`)
+  log('')
+  log('· 랭킹 4계열은 **좁은 유니버스와 넓은 유니버스 양쪽**에 태운다. 28차의 유보("20종목뿐이라')
+  log('  상위5 = 25% 분위라 신호가 묽다")를 이번에 직접 검증하는 자리다 — 실측 40+40(=80종목)에서는')
+  log(`  상위${KRXSCREEN_WIDE_SLOTS[1]} = 10% 분위 · 상위${KRXSCREEN_WIDE_SLOTS[0]} = 20% 분위로 **랭킹 분위가 처음 제대로 선다.**`)
+  log('· rsirev·volbrk는 40+40에 태우지 않았다. 이 둘은 랭킹 분위 전략이 아니라 **신호 임계 전략**')
+  log(`  (슬롯 ${MAX_POSITIONS} 고정)이라 유니버스를 넓혀도 "분위가 갈리는가"라는 이번 질문에 답하지 않고`)
+  log('  후보 수와 계산량만 늘어난다. 얻는 정보가 적어 지시대로 10+10에만 태웠다.')
+  log(`· volbrk 청산은 **당일 종가**로 고정했다(원저 데이트레이드형). 25차의 "익일 시가 청산" 절반은`)
+  log('  이번 회차에서 **재검증되지 않았다** — 이 계열을 완전히 정리하려면 그 축이 따로 남아 있다.')
+  log('· rsirev는 25차 4변형 중 **본안**과 **추세필터 A/B** 둘만 올렸다. 임계값 민감도(RSI2<5 · <15)는')
+  log('  같은 축을 더 써는 것이라 상한 안에 넣지 않았다.')
+
+  // ---- 시세 (실측 40+40 합집합 한 번만) ----------------------------------------
+  const codes = [...new Set<string>(krxPitUnion(uni, 40, years))].sort()
+  log('')
+  log(`시세 로드 대상 ${codes.length}종목 (실측 40+40 합집합) — 한 번만 받아 두 유니버스가 나눠 쓴다.`)
+  const { histories, failed, bench } = await loadCodeHistories(codes)
+  const names = krxPitNames(uni)
+  log(`시세 로드 ${Object.keys(histories).length}/${codes.length} · 실패(상폐·데이터 부족) ${failed.length}`)
+  if (failed.length) {
+    const shown = failed.slice(0, 30).map((cd) => `${cd}(${names[cd] ?? '?'})`)
+    log(`매핑 실패: ${shown.join(', ')}${failed.length > 30 ? ` … 외 ${failed.length - 30}개` : ''}`)
+    log('  ↑ 랭킹은 실측이라 선택편향이 없지만, 상폐 종목의 **가격**이 없어 유니버스에서 빠진다.')
+    log('    이것이 잔존 **가격 생존편향**이며 아래 성적을 그만큼 후하게 만든다.')
+  }
+  const benchEq = benchCurve(bench)
+  log(`벤치 ${BENCH} 데이터 시작 ${bench[0]?.date ?? '—'} — 알파는 이 날짜 이후 겹치는 구간에서만 계산한다.`)
+
+  const qqq = await loadQqqKrwCurve(KRXPIT_RANGE)
+
+  // ---- 두 유니버스 실행 --------------------------------------------------------
+  const UNIS = [
+    { key: '실측 10+10', top: 10 as const },
+    { key: '실측 40+40', top: 40 as const },
+  ]
+
+  let total = 0
+  let totalPass = 0
+  let totalOver = 0
+  const head: { key: string; n: number; pass: number; over: number }[] = []
+  const perUniPass: { key: string; pass: CalVariant[] }[] = []
+
+  for (const U of UNIS) {
+    const yearly = buildYearly(histories, years, (y) => krxPitCodes(uni, y, U.top))
+    const defs = krxscreenDefs(U.top)
+    log('')
+    log(`# ${U.key} — ${defs.length}변형`)
+    log(`연도별 매핑률: ${yearly.map((v) => `${v.y} ${v.mapped}`).join(' · ')}`)
+    if (yearly.every((v) => v.syms.length < 5)) {
+      log(`❌ ${U.key}: 시세 로드 실패로 실행할 해가 없다 — 이 유니버스는 건너뛴다`)
+      continue
+    }
+
+    const { variants, span } = krxscreenUniverse({ top: U.top, yearly, benchEq })
+    total += variants.length
+
+    // 벽은 **이 유니버스의 실행 구간으로 다시 잰다** — 구간이 다른 칼마를 나란히 놓지 않는다.
+    const [FROM, TO] = span ?? [`${years[0]}-01-01`, `${years[years.length - 1]}-12-31`]
+    const walls: CalWall[] = []
+    const qw = qqq ? wallOf('QQQ 원화 보유', qqq.curve, FROM, TO) : null
+    if (qw) walls.push(qw)
+    const kw = wallOf(`${BENCH} KODEX 200 보유`, benchEq, FROM, TO)
+    if (kw) walls.push(kw)
+    log('')
+    log(`전략 실행 구간 **${FROM} ~ ${TO}** — 벽도 이 구간으로 잘라 다시 쟀다(옮겨 적은 값이 아니다).`)
+    if (qqq) log(`QQQ 환산 규약: ${qqq.note ?? '—'}`)
+    wallTable(walls)
+
+    const sorted = calRankTable(
+      `${U.key} 전체 순위 (칼마 내림차순 · ${variants.length}변형)`,
+      variants,
+      qw,
+      KRXSCREEN_MIN_TRADES,
+    )
+    const over = calHeadline(U.key, sorted, qw, KRXSCREEN_MIN_TRADES, CAL_SPACE_NOTE_KRXSCREEN)
+    const pass = calPassSummary(U.key, sorted, KRXSCREEN_MIN_TRADES)
+    totalPass += pass.length
+    totalOver += over
+    head.push({ key: U.key, n: variants.length, pass: pass.length, over })
+    perUniPass.push({ key: U.key, pass })
+
+    const top3 = sorted.slice(0, 3)
+    if (top3.length)
+      perYearTable(top3.map((v) => v.row), `연도별 수익 분해 — ${U.key} 칼마 상위 ${top3.length} (거짓 매끈함 방지)`)
+    log('※ 연도별 표는 "칼마가 특정 해 하나로 만들어진 것인지"를 보는 자리다. 한 해가 나머지를')
+    log('  전부 만들었다면 그 칼마는 구조가 아니라 그 해의 사건이다.')
+
+    // 계열별 요약 — 넓은 유니버스에서 분위가 갈리는지를 계열 단위로 읽는 자리
+    log('')
+    log(`### ${U.key} 계열별 최고 칼마 (분위가 갈리는지 계열 단위로 보기)`)
+    log('| 계열 | 최고 변형 | 칼마 | 전반 알파 | 후반 알파 | 매매 | 판정 |')
+    log('|---|---|---|---|---|---|---|')
+    const groups = [...new Set(defs.map((d) => (d.group === '랭킹' ? d.label.split(' ')[0] : d.group)))]
+    for (const g of groups) {
+      const inG = sorted.filter((v) => (v.group === '랭킹' ? v.label.startsWith(`${g} `) : v.group === g))
+      const best = inG[0] // sorted가 이미 칼마 내림차순이라 첫 줄이 그 계열 1위다
+      if (!best) continue
+      const bad = calFailReasons(best, KRXSCREEN_MIN_TRADES)
+      log(
+        `| ${g} | ${best.label} | ${calmarOf(best.row.full)?.toFixed(3) ?? '—'} | ${pctOrDash(best.row.alphaA)} | ` +
+          `${pctOrDash(best.row.alphaB)} | ${best.trades} | ${bad.length === 0 ? '✅' : `❌(${bad.join('·')})`} |`,
+      )
+    }
+    log('※ "계열 1위"는 **결과를 다 보고 고른 것**이라 계열의 상한으로만 읽는다(28차와 같은 경고).')
+  }
+
+  // ---- 종합 -------------------------------------------------------------------
+  log('')
+  log('# 종합')
+  krxscreenHeadlineTable(head)
+  log('')
+  log('| 유니버스 | 판정 통과 변형 |')
+  log('|---|---|')
+  for (const p of perUniPass) log(`| ${p.key} | ${p.pass.map((v) => v.label).join(', ') || '**없음**'} |`)
+  log('')
+  if (totalOver === 0) {
+    log('## ❌ 결론 — QQQ 원화 보유의 칼마를 넘은 변형이 **두 유니버스 통틀어 하나도 없다.**')
+    log('')
+    log('이것은 실패한 실험이 아니라 **결과**다. 비모멘텀 6계열을 실측 유니버스 위에서 다시 돌렸고,')
+    log('넓은 유니버스에서 랭킹 분위를 제대로 세워도 원화로 나스닥100을 그냥 들고 있는 것을 못 넘었다.')
+    log('28차·25차의 기각이 [추정] 목록 때문이었는지를 물었고, **목록을 실측으로 바꿔도 결론이')
+    log('뒤집히지 않았다**는 답을 받은 것이다. 가장 덜 나쁜 칸을 프리셋으로 승격시키는 것은')
+    log('33차가 무너진 것과 같은 사후선택이므로 하지 않는다.')
+  } else {
+    log(`## QQQ 벽을 넘으면서 판정도 통과한 변형: 총 **${totalOver}개**`)
+    log('')
+    log('이 숫자는 **채택 목록이 아니다.** 아래 다중검정 경고를 통과한 뒤에야 후보가 된다 —')
+    log('28차·25차에서 한 번 기각됐던 계열이 실측 유니버스에서 되살아난 것이므로, 채택하려면')
+    log('구간 분할 일관성·이웃 파라미터 방향(고원인가 봉우리인가)을 별도로 요구한다.')
+  }
+  krxscreenMultipleTestingNote(total, totalPass, totalOver, years.length)
+
+  // ---- 한계 -------------------------------------------------------------------
+  log('')
+  log('## 이 실험의 구조적 한계')
+  log(`· **랭킹은 실측이지만 가격은 생존 종목만이다.** 이번 실행 매핑 실패 ${failed.length}종목 —`)
+  log('  그 시절 상위였다가 상장폐지된 종목은 Yahoo에 시세가 없어 유니버스에서 빠진다. 랭킹 편향은')
+  log('  제거됐지만 **가격 생존편향은 남아 있다**(특히 코스닥 쪽이 크다).')
+  log(`· **${KRXPIT_FROM}년 이전이 없다.** KRX Open API 데이터가 2010년부터라 2006~2009는 수집 자체가`)
+  log('  불가능하다. 2008 금융위기 전반부가 이 표에 없다 — 급락 구간에서 "싸 보이는" 종목을 계속')
+  log('  받아내다 크게 다치는 rsirev·strev의 전형적 실패 경로가 **표본에서 빠져 있다**는 뜻이다.')
+  log(`· **구간이 ${years.length}년으로 짧다.** 전·후반 각 ${halfSpanLabel(years.length)}년이라 한 해의 큰 수익·손실이 판정을 뒤집는다.`)
+  log('· 왕복 비용 약 0.38%가 그대로 얹힌다. strev(단기 반전)·volbrk(변동성 돌파)는 회전율이 가장 높은')
+  log('  계열이라 이 비용을 못 넘기면 이론 알파가 있어도 실전에서 사라진다.')
+  log('· **volbrk는 일봉 근사의 한계를 그대로 안고 있다.** 일봉에는 장중 경로가 없어 "고가가 돌파가에')
+  log('  닿았다"만 알 뿐 언제 닿았는지·그 가격에 체결됐는지(호가 잔량·상한가 잠김)는 알 수 없다.')
+  log('  이 계열은 분봉 재검증 전에는 채택 후보로도 올리지 않는다(25차와 같은 판단).')
+  log('· 거래대금은 **종가×거래량 근사**다(volrank·기준 랭킹 공통). 유동성·호가 잔량은 반영되지 않는다.')
+  log('· 연 단위 유니버스 교체라 매년 1월 초 전량 재편입 + 12월 말 정산 근사가 들어간다.')
+  log('· 12개월 창을 못 채우는 종목은 그 시점 후보에서 빠진다(신규 편입 종목은 1년 뒤부터 랭킹 대상).')
+  log('· **QQQ 벽은 참고이지 벤치가 아니다.** 알파 판정 벤치는 규칙 5대로 KODEX 200 그대로이며,')
+  log('  QQQ 원화 곡선에도 환헤지 없음·해외 세제 미반영 가정이 들어 있다(같은 조건의 비교가 아니다).')
+  log('· 스팩·우선주 제외는 **수집 시점**(pityear)에서 이미 적용된 규칙이다 — 여기서 다시 거르지 않는다.')
+  unverifiedNote()
+  disclaimer({ universe: false })
+  log('⚠️ 유니버스 랭킹은 KRX 실측이라 **선택편향이 없다.** 대신 위에 적은 가격 생존편향·구간 단축·')
+  log('   누적 다중검정 한계를 전부 달고 읽는다.')
+}
+
+// ============================================================================
 
 const MODES: Record<string, () => Promise<void>> = {
   seasonal,
@@ -6037,6 +6551,7 @@ const MODES: Record<string, () => Promise<void>> = {
   asset,
   krxpit,
   krxcal,
+  krxscreen,
 }
 
 // 런처(scripts/idea-lab.mjs)만 IDEA_LAB_RUN=1을 넘긴다. 테스트가 이 모듈을
