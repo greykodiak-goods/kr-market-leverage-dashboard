@@ -32,6 +32,13 @@
 //      하는데, 총수익÷MDD는 구간이 짧아진 것만으로 떨어져 분산의 효과와 섞이기 때문이다.
 //      그래서 **베이스도 같은 구간으로 다시 재서** 나란히 놓는다(전 구간 값은 참고 행으로만).
 //
+// ── 실측 유니버스 재검증 (2026-08-03 대표 지시 · KRX Open API 승인) ──────────
+// MODE=krxpit   — 승자 3종(기준선 · XSM 상위5+게이트 · 결합 50:50)을 **KRX 실측** 랭킹으로
+//                 처음 돌린다. 비교 A = 실측 10+10 vs [추정] 10+10(추정 오류 분리) ·
+//                 비교 B = 실측 40+40(유니버스 확대 효과 · 상위16 = 10% 분위 행 추가).
+//                 랭킹은 `public/data/krx-pit/universe.json`(EC2 MODE=pityear가 수집·커밋)에서
+//                 읽고 시세는 야후만 쓰므로 GHA에서 돈다. 파일이 없으면 명확히 실패한다.
+//
 // ── 발굴 깔때기 1~2관문 — 미검증 랭킹 4계열 일괄 스크리너 ────────────────────
 // MODE=screen   — lowvol · hi52 · strev · volrank 네 계열을 **한 번에** 1~2관문에 태운다.
 //   계열 단위 탐색 원칙: 이미 판정이 끝난 계열(추세돌파 ✅ · xsmom ✅ · 변동성돌파 ❌ ·
@@ -91,6 +98,17 @@ import {
   usPit80Codes,
   usPitCodes,
 } from '../src/features/backtest/usPitUniverse'
+import {
+  KRX_PIT_PATH,
+  krxPitCodes,
+  krxPitNames,
+  krxPitSourceNote,
+  krxPitSpan,
+  krxPitUnion,
+  krxPitYears,
+  parseKrxPitUniverse,
+  type KrxPitUniverse,
+} from '../src/features/backtest/krxPitUniverse'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -403,10 +421,24 @@ export interface YearSlice {
   mapped: string
 }
 
-/** 연도별 유니버스·시계열 준비. 그 해 6월 30일 이전에 상장돼 있던 종목만 편입한다. */
-export function buildYearly(histories: Record<string, DailyBar[]>, years: number[]): YearSlice[] {
+/** 연도별 [추정] 유니버스 코드(코스피 10 + 코스닥 10). `buildYearly`의 기본 소스다. */
+export const pit1010Codes = (y: number): string[] => [...(PIT1010[y]?.ks ?? []), ...(PIT1010[y]?.kq ?? [])]
+
+/**
+ * 연도별 유니버스·시계열 준비. 그 해 6월 30일 이전에 상장돼 있던 종목만 편입한다.
+ *
+ * `codesFor`는 **유니버스 소스만** 갈아끼우는 자리다(기본값 = 기존 [추정] 10+10).
+ * MODE=krxpit이 KRX 실측 목록을 여기에 주입하며, 편입 판정(6/30)·연말 절단·매핑률 표기는
+ * 주입과 무관하게 이 함수 하나가 결정한다 — 실측/추정 두 팔이 다른 규약을 타면
+ * 그 비교 자체가 성립하지 않기 때문이다(`tests/krxpit.test.ts`가 집행).
+ */
+export function buildYearly(
+  histories: Record<string, DailyBar[]>,
+  years: number[],
+  codesFor: (y: number) => string[] = pit1010Codes,
+): YearSlice[] {
   return years.map((y) => {
-    const codes = [...(PIT1010[y]?.ks ?? []), ...(PIT1010[y]?.kq ?? [])]
+    const codes = codesFor(y)
     const syms = codes.filter((cd) => histories[cd] && (histories[cd][0]?.date ?? '9999') <= `${y}-06-30`)
     const end = `${y}-12-31`
     const hist: Record<string, DailyBar[]> = {}
@@ -5108,6 +5140,302 @@ async function asset() {
 }
 
 // ============================================================================
+// MODE=krxpit — KRX **실측** 유니버스로 승자 3종 재검증 (2026-08-03 대표 지시)
+// ============================================================================
+//
+// 여태 이 리포의 연도별 유니버스는 전부 **[추정] 목록**(PIT1010)이었다. 목록이 틀리면
+// 결과도 틀린다 — 실제로 옛 추세 조합 2종은 KRX 실측 40+40에서 알파 −8.6/−7.5%p로 대패했다.
+// 그런데 정작 **승자 3종은 아직 실측 유니버스로 돌아 본 적이 없다.** 그것이 이 모드다.
+//
+//   ① 기준선 MA25×신고10→80선(버퍼0)   — 23차 격자 수익÷MDD 1위
+//   ② XSM 상위5 + 절대모멘텀 게이트      — 25차 승자
+//   ③ 결합 50:50 (①+②)                 — 26차 승자
+//
+// ── 두 비교가 서로 다른 질문에 답한다 ──────────────────────────────────────
+//   비교 A — **추정 오류 분리**: 실측 10+10 vs [추정] 10+10을 **같은 구간·같은 비용·같은
+//     연쇄**로 나란히 돌린다. 유니버스 폭이 같으므로 두 표의 차이는 오직 **목록이 틀렸던 만큼**,
+//     즉 "[추정] 목록이 만든 부풀림"이다. 이 값이 크면 이 리포의 지난 회차 수치 전부를
+//     그만큼 할인해서 읽어야 한다.
+//   비교 B — **유니버스 확대 효과**: 실측 40+40 전체. 여기서는 xsmom 상위5(=상위 6%)에
+//     **상위 16(=상위 10% 분위)**를 한 줄 더 붙인다 — 27차 미장(usxsmom80)에서 "유니버스를
+//     넓히면 상위 N이 학계 분위와 정합해진다"를 배운 그대로다. 상위5만 보면 유니버스가
+//     넓어진 효과와 분위가 좁아진 효과가 섞인다.
+//
+// ── 엔진은 손대지 않았다 ────────────────────────────────────────────────────
+//   갈아끼운 것은 `buildYearly`의 `codesFor` **하나뿐**이다. 편입 판정(그 해 6/30 이전 상장),
+//   연말 절단, 매핑률, 연쇄 이월·구간끝 청산비용 근사, 비용, 벤치(KODEX 200), 알파 계산은
+//   25·26차와 **같은 코드 경로**를 탄다. 그래서 이 표는 지난 표와 나란히 읽힌다.
+//   (`tests/krxpit.test.ts`가 주입 경로가 같은 규약을 타는지 합성 데이터로 집행한다.)
+//
+// ── 실행 장소 ──────────────────────────────────────────────────────────────
+//   랭킹 수집(KRX 조회)은 국내 IP가 필요해 EC2 전용이지만, **이 모드는 야후 시세만** 쓴다.
+//   랭킹은 리포에 커밋된 `public/data/krx-pit/universe.json`에서 읽으므로 GHA에서 돈다
+//   (backtest.yml MODE=idea:krxpit). 파일이 없으면 명확히 실패한다 — 조용히 [추정]으로
+//   되돌아가지 않는다(그게 가장 위험한 실패다).
+
+/** 실측 랭킹의 데이터 시작이 2010년이다(KRX Open API 한계) — 2006~2009는 존재하지 않는다. */
+export const KRXPIT_FROM = 2010
+export const KRXPIT_TO = 2026
+/** 전·후반 분할 연도. 구간이 2010~2026이라 중앙 근처가 2018이다. */
+export const KRXPIT_HALF = 2018
+/** 승자 ② — 26차 결합과 **같은** 파라미터(베이스 고정). */
+export const KRXPIT_XSMOM: WfCand = COMBO_XSMOM
+/** 40+40 = 80종목의 상위 10% 분위(27차 교훈). 비교 B에만 붙는 추가 행이다. */
+export const KRXPIT_DECILE_SLOTS = 16
+
+/** 시세 로드 시작. 2010년 첫 리밸런스의 12-1 모멘텀·MA80이 다 채워지려면 2년 앞이 필요하다. */
+const KRXPIT_RANGE = 'since:2008-01-01'
+
+/**
+ * `public/data/krx-pit/universe.json`을 읽어 검증한다.
+ * 없거나 깨졌으면 **던진다** — 무엇을 어디서 돌려야 하는지까지 메시지에 담는다.
+ */
+export function loadKrxPitFile(root = process.env.REPO_ROOT ?? process.cwd()): KrxPitUniverse {
+  const path = join(root, KRX_PIT_PATH)
+  let text: string
+  try {
+    text = readFileSync(path, 'utf8')
+  } catch {
+    throw new Error(
+      `실측 유니버스 파일이 없다 (${KRX_PIT_PATH}) — EC2에서 MODE=pityear를 먼저 실행해 ` +
+        'KRX 실측 랭킹을 수집·커밋하라. 이 모드는 [추정] 목록으로 대체 실행하지 않는다.',
+    )
+  }
+  return parseKrxPitUniverse(JSON.parse(text))
+}
+
+/** 코드 목록 시세를 한 번만 받는다(.KQ→.KS 폴백은 기존 `fetchKrDual` 규약 그대로). */
+async function loadCodeHistories(codes: string[], range = KRXPIT_RANGE) {
+  const histories: Record<string, DailyBar[]> = {}
+  const failed: string[] = []
+  for (const code of codes) {
+    const bars = await fetchKrDual(code, range)
+    if (bars) histories[code] = bars
+    else failed.push(code)
+    await sleep(100)
+  }
+  const bench = await fetchDaily(BENCH, range)
+  return { histories, failed, bench }
+}
+
+/**
+ * 승자 3종을 한 유니버스에서 실행해 요약 행만 돌려준다.
+ * 곡선은 이 함수 안에서만 살아 있다 — 밖으로 나가는 것은 `StratRow` 스칼라뿐이다(메모리).
+ * `extraSlots`는 비교 B의 분위 보정 행(상위16)용이며 비어 있으면 승자 3종 그대로다.
+ */
+export function runWinner3(
+  yearly: YearSlice[],
+  benchEq: { date: string; equity: number }[],
+  years: number[],
+  extraSlots: number[] = [],
+): StratRow[] {
+  const chainA = runSpecChain(yearly, baselineSpec, COST)
+  const chainB = runCustomChain(
+    yearly,
+    (v) => simulateXsMomYear(v.hist, `${v.y}-01-01`, v.syms, COST, KRXPIT_XSMOM),
+    COST,
+    KRXPIT_XSMOM.slots,
+  )
+  const rows: StratRow[] = [
+    summarizeStrat(`① ${BASELINE_LABEL}`, chainA, benchEq, KRXPIT_HALF),
+    summarizeStrat(`② XSM ${wfLabel(KRXPIT_XSMOM)}`, chainB, benchEq, KRXPIT_HALF),
+  ]
+  for (const slots of extraSlots) {
+    const chain = runCustomChain(
+      yearly,
+      (v) => simulateXsMomYear(v.hist, `${v.y}-01-01`, v.syms, COST, { slots, gate: true }),
+      COST,
+      slots,
+    )
+    rows.push(summarizeStrat(`②′ XSM ${wfLabel({ slots, gate: true })} [10% 분위]`, chain, benchEq, KRXPIT_HALF))
+  }
+  // ③은 ①·② **곡선의 합성**이라 매매 원장이 없다(매매수 0으로 찍히는 이유 — 표 아래 각주).
+  rows.push(
+    curveStrat('③ 결합 50:50 (①+②)', blendCurves(chainA.equity, chainB.equity, 0.5), benchEq, years, KRXPIT_HALF),
+  )
+  return rows
+}
+
+/** 같은 전략의 두 유니버스 성적 차이(실측 − 추정). 이 표가 "목록 오류가 만든 부풀림"이다. */
+export function universeDiffTable(real: StratRow[], est: StratRow[]) {
+  log('')
+  log('## 비교 A 판정 — [추정] 목록이 만든 부풀림 (실측 − 추정)')
+  log('음수는 **[추정] 목록이 성적을 부풀렸다**는 뜻이다. 유니버스 폭·구간·비용·연쇄가 모두 같으므로')
+  log('이 차이의 원인은 목록 내용뿐이다.')
+  log('| 전략 | 총수익 차 | CAGR 차 | 알파 차 | MDD 차 | 수익÷MDD 차 | 칼마 차 |')
+  log('|---|---|---|---|---|---|---|')
+  const d = (a: number | null, b: number | null) => (a == null || b == null ? '—' : `${f1(a - b)}%p`)
+  for (const [i, r] of real.entries()) {
+    const e = est[i]
+    if (!e) continue
+    const objR = r.full.obj
+    const objE = e.full.obj
+    const calR = calmarOf(r.full)
+    const calE = calmarOf(e.full)
+    log(
+      `| ${r.label} | ${f1(r.full.total - e.full.total)}%p | ${f1(r.full.cagr - e.full.cagr)}%p | ` +
+        `${d(r.alphaFull, e.alphaFull)} | ${f1(r.full.mdd - e.full.mdd)}%p | ` +
+        `${objR != null && objE != null ? (objR - objE).toFixed(2) : '—'} | ` +
+        `${calR != null && calE != null ? (calR - calE).toFixed(3) : '—'} |`,
+    )
+  }
+}
+
+/**
+ * 유니버스 **폭**만 달라진 두 실행의 차이(10+10 → 40+40). 같은 라벨끼리만 짝짓는다 —
+ * 40+40에만 있는 분위 보정 행(②′)은 짝이 없으므로 이 표에서 빠진다(억지로 비교하지 않는다).
+ */
+export function widthDiffTable(narrow: StratRow[], wide: StratRow[]) {
+  log('')
+  log('## B-2) 유니버스 폭에 따른 변화 (실측 10+10 → 실측 40+40)')
+  log('| 전략 | 10+10 CAGR | 40+40 CAGR | 차 | 10+10 알파 | 40+40 알파 | 차 |')
+  log('|---|---|---|---|---|---|---|')
+  for (const r of wide) {
+    const s = narrow.find((x) => x.label === r.label)
+    if (!s) continue
+    const da = r.alphaFull != null && s.alphaFull != null ? `${f1(r.alphaFull - s.alphaFull)}%p` : '—'
+    log(
+      `| ${r.label} | ${f1(s.full.cagr)}% | ${f1(r.full.cagr)}% | ${f1(r.full.cagr - s.full.cagr)}%p | ` +
+        `${pctOrDash(s.alphaFull)} | ${pctOrDash(r.alphaFull)} | ${da} |`,
+    )
+  }
+}
+
+async function krxpit() {
+  log('# MODE=krxpit — KRX 실측 유니버스로 승자 3종 재검증')
+  log('')
+  log('승자 3종(① 기준선 MA25×신고10→80선 · ② XSM 상위5+게이트 · ③ 결합 50:50)을')
+  log('**KRX 실측 랭킹**으로 처음 돌린다. 지난 회차 수치는 전부 [추정] 목록에서 나온 것이다.')
+  log('')
+
+  const uni = loadKrxPitFile()
+  log(`⚠️ ${krxPitSourceNote(uni)}`)
+  const covered = krxPitYears(uni).filter((y) => y >= KRXPIT_FROM && y <= KRXPIT_TO)
+  if (covered.length < 5) {
+    throw new Error(
+      `실측 랭킹이 ${KRXPIT_FROM}~${KRXPIT_TO} 중 ${covered.length}년뿐이다 — EC2 MODE=pityear를 다시 실행하라.`,
+    )
+  }
+  // 구간 안에 구멍이 있으면 여기서 던진다(짧은 구간으로 조용히 돌지 않는다).
+  const years = krxPitSpan(uni, covered[0], covered[covered.length - 1])
+  log(
+    `구간 ${years[0]}~${years[years.length - 1]} (${years.length}년) · 전·후반 분할 ${KRXPIT_HALF} · ` +
+      `벤치 ${BENCH}(KODEX 200) · 비용 수수료 ${COST.feePct}% · 거래세 ${COST.taxPct}% · 슬리피지 ${COST.slippagePct}%`,
+  )
+  log('[추정] 대조군 목록: PIT1010(같은 연도만 잘라 씀) — 각 해 연초 시총 상위 10+10 **[추정]** · KRX 실측 아님')
+
+  // ---- 시세는 한 번만 받는다: 실측 40+40 ∪ [추정] 10+10 ----------------------
+  const need = new Set<string>(krxPitUnion(uni, 40, years))
+  for (const y of years) for (const cd of pit1010Codes(y)) need.add(cd)
+  const codes = [...need].sort()
+  log('')
+  log(`시세 로드 대상 ${codes.length}종목 (실측 40+40 합집합 ∪ [추정] 10+10 합집합) — 한 번만 받아 모든 표가 나눠 쓴다.`)
+  const { histories, failed, bench } = await loadCodeHistories(codes)
+  const names = krxPitNames(uni)
+  log(`시세 로드 ${Object.keys(histories).length}/${codes.length} · 실패(상폐·데이터 부족) ${failed.length}`)
+  if (failed.length) {
+    const shown = failed.slice(0, 30).map((cd) => `${cd}(${names[cd] ?? '?'})`)
+    log(`매핑 실패: ${shown.join(', ')}${failed.length > 30 ? ` … 외 ${failed.length - 30}개` : ''}`)
+    log('  ↑ **이들이 빠지는 것이 곧 잔존 생존편향이다.** 랭킹은 실측이라 선택편향이 없지만,')
+    log('    상폐 종목의 가격이 없어 그 해 유니버스에서 빠진다 — 아래 매핑률로 크기를 드러낸다.')
+  }
+  const benchEq = benchCurve(bench)
+  log(`벤치 ${BENCH} 데이터 시작 ${bench[0]?.date ?? '—'} — 알파는 이 날짜 이후 겹치는 구간에서만 계산한다.`)
+
+  // ---- 비교 A — 추정 오류 분리 (10+10 vs 10+10) -----------------------------
+  const yearlyReal10 = buildYearly(histories, years, (y) => krxPitCodes(uni, y, 10))
+  const yearlyEst10 = buildYearly(histories, years, pit1010Codes)
+  if (yearlyReal10.every((v) => v.syms.length < 5)) {
+    log('❌ 시세 로드 실패로 실행할 해가 없다 — 중단')
+    return
+  }
+  log('')
+  log('# 비교 A — 추정 오류 분리 (실측 10+10 vs [추정] 10+10)')
+  log('유니버스 **폭이 같다**(각 시장 상위 10). 구간·비용·연쇄·벤치도 같다. 그래서 두 표의 차이는')
+  log('오직 "목록이 무엇이었나"에서 온다 — 그것이 곧 지난 회차 수치에 섞여 있던 추정 오류다.')
+  log(`실측 연도별 매핑률: ${yearlyReal10.map((v) => `${v.y} ${v.mapped}`).join(' · ')}`)
+  log(`[추정] 연도별 매핑률: ${yearlyEst10.map((v) => `${v.y} ${v.mapped}`).join(' · ')}`)
+
+  const rowsReal10 = runWinner3(yearlyReal10, benchEq, years)
+  const rowsEst10 = runWinner3(yearlyEst10, benchEq, years)
+
+  log('')
+  log('## A-1) 실측 10+10 (KRX Open API)')
+  stratTable(rowsReal10, KRXPIT_HALF, { calmar: true })
+  log('')
+  log('## A-2) [추정] 10+10 (PIT1010 · 같은 구간 재실행)')
+  log('※ 지난 회차 보고서의 숫자를 옮겨 적지 않았다 — 구간이 2010~이라 **여기서 다시 돌린 값**이다.')
+  stratTable(rowsEst10, KRXPIT_HALF, { calmar: true })
+  log('※ ③ 결합 행의 매매수가 0인 것은 매매가 없다는 뜻이 아니라, 결합이 ①·② **곡선의 합성**이라')
+  log('  매매 원장이 한쪽에 귀속되지 않기 때문이다. 매매수는 ①·② 행에서 읽는다.')
+  universeDiffTable(rowsReal10, rowsEst10)
+
+  // ---- 비교 B — 유니버스 확대 효과 (실측 40+40) -----------------------------
+  const yearlyReal40 = buildYearly(histories, years, (y) => krxPitCodes(uni, y, 40))
+  log('')
+  log('# 비교 B — 유니버스 확대 효과 (실측 40+40)')
+  log('같은 실측 랭킹을 각 시장 상위 40까지 넓힌다. 여기서 xsmom은 상위5(≈상위 6%)에 더해')
+  log(`**상위 ${KRXPIT_DECILE_SLOTS}(=80종목의 10% 분위)**를 한 줄 더 돌린다 — 27차 미장 실험에서`)
+  log('"유니버스를 넓히면 상위 N의 분위 위치가 달라진다"를 확인했기 때문이다. 상위5만 보면')
+  log('유니버스가 넓어진 효과와 분위가 좁아진 효과가 한 칸에 섞인다.')
+  log(`실측 40+40 연도별 매핑률: ${yearlyReal40.map((v) => `${v.y} ${v.mapped}`).join(' · ')}`)
+
+  const rowsReal40 = runWinner3(yearlyReal40, benchEq, years, [KRXPIT_DECILE_SLOTS])
+  log('')
+  log('## B-1) 실측 40+40')
+  stratTable(rowsReal40, KRXPIT_HALF, { calmar: true })
+
+  widthDiffTable(rowsReal10, rowsReal40)
+
+  // ---- 단순보유 · 연도별 분해 · 판정 -----------------------------------------
+  const qqqKrw = await loadQqqKrwCurve(KRXPIT_RANGE)
+  const holds: HoldRow[] = [{ label: `${BENCH} 보유 (KODEX 200 · 알파 판정 벤치)`, curve: benchEq, note: '총수익 보정' }]
+  if (qqqKrw) holds.push(qqqKrw)
+  holdTable('단순보유 비교 행', holds, `${years[0]}-01-01`, `${years[years.length - 1]}-12-31`)
+  log('')
+  log('⚠️ QQQ 행은 **참고**다. 알파(규칙 5) 판정 벤치는 KODEX 200을 유지한다.')
+
+  perYearTable(rowsReal10, '연도별 수익 분해 — 실측 10+10 (거짓 매끈함 방지)')
+  perYearTable(rowsEst10, '연도별 수익 분해 — [추정] 10+10')
+  perYearTable(rowsReal40, '연도별 수익 분해 — 실측 40+40')
+
+  log('')
+  log('# 판정')
+  log('')
+  log('## 실측 10+10 — 기준선(①) 대비')
+  const winA = verdictTable(rowsReal10)
+  log('')
+  log('## 실측 40+40 — 기준선(①) 대비')
+  const winB = verdictTable(rowsReal40)
+  const alphaBoth = (rows: StratRow[]) => rows.filter((r) => (r.alphaA ?? -1) > 0 && (r.alphaB ?? -1) > 0)
+  log('')
+  log('## 알파 판정 (규칙 5 — 전·후반 **모두** 양(+)이어야 한다)')
+  log('| 유니버스 | 전·후반 모두 알파 양(+) |')
+  log('|---|---|')
+  log(`| 실측 10+10 | ${alphaBoth(rowsReal10).map((r) => r.label).join(', ') || '없음'} |`)
+  log(`| 실측 40+40 | ${alphaBoth(rowsReal40).map((r) => r.label).join(', ') || '없음'} |`)
+  log(`| [추정] 10+10 | ${alphaBoth(rowsEst10).map((r) => r.label).join(', ') || '없음'} |`)
+  multipleTestingNote(rowsReal10.length - 1 + (rowsReal40.length - 1), winA + winB)
+
+  log('')
+  log('## 이 실험의 구조적 한계')
+  log('· **랭킹은 실측이지만 가격은 생존 종목만이다.** 그 시절 상위였다가 상장폐지된 종목은 Yahoo에')
+  log(`  시세가 없어 빠진다(이번 실행 매핑 실패 ${failed.length}종목). 성적은 그만큼 실제보다 후하다 —`)
+  log('  랭킹 편향은 제거됐지만 **가격 생존편향은 남아 있다.**')
+  log(`· **${KRXPIT_FROM}년 이전은 애초에 없다.** KRX Open API 데이터가 2010년부터라 2006~2009는 수집`)
+  log('  자체가 불가능하다. 닷컴 붕괴·2008 금융위기 전반부가 이 표에 없다는 뜻이며, 지난 회차의')
+  log('  2000~ 구간 수치와 직접 비교할 수 없다(그래서 [추정] 대조군도 같은 구간으로 다시 돌렸다).')
+  log('· **구간이 17년으로 짧다.** 전·후반 각 8~9년이라 한 구간의 큰 해 하나가 판정을 뒤집을 수 있다.')
+  log('· 연 단위 유니버스 교체라 매년 1월 초 전량 재편입 + 12월 말 정산 근사가 들어간다.')
+  log('· ③ 결합은 슬리브 **간** 이체 비용을 0으로 본 낙관적 상한이다(슬리브 내부 매매비용은 반영).')
+  log('· 스팩·우선주 제외는 **수집 시점**(pityear)에서 이미 적용된 규칙이다 — 여기서 다시 거르지 않는다.')
+  unverifiedNote()
+  disclaimer({ universe: false })
+  log('⚠️ 유니버스 랭킹은 KRX 실측이라 **선택편향이 없다**(지난 회차의 [추정] 목록과 다른 점).')
+  log('   대신 위에 적은 가격 생존편향·구간 단축 한계를 달고 읽는다.')
+}
+
+// ============================================================================
 
 const MODES: Record<string, () => Promise<void>> = {
   seasonal,
@@ -5124,6 +5452,7 @@ const MODES: Record<string, () => Promise<void>> = {
   combo,
   overlay,
   asset,
+  krxpit,
 }
 
 // 런처(scripts/idea-lab.mjs)만 IDEA_LAB_RUN=1을 넘긴다. 테스트가 이 모듈을

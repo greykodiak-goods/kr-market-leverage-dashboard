@@ -14,12 +14,13 @@
 //   - 판정은 알파(KODEX 200 단순보유 대비) — 규칙 5.
 //   - 일봉 총수익 보정: adjclose ÷ close 계수를 OHLC에 적용(규칙 3).
 
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { runStrategySpec, type ConditionResult, type CostSettings } from '../src/features/backtest/conditionScreen'
 import { SPEC_VERSION, avgVolume, priorHigh, rsi, sma, type Condition, type ConditionNode, type StrategySpec } from '../src/features/backtest/strategySpec'
 import type { DailyBar } from '../src/features/backtest/types'
 import { PIT_SOURCE_NOTE, PIT_UNION, PIT_YEARS, pitCodes } from '../src/features/backtest/pitUniverse'
+import { KRX_PIT_PATH, buildKrxPitUniverse, krxPitCodes } from '../src/features/backtest/krxPitUniverse'
 import { runPitChained } from '../src/features/backtest/pitChain'
 import { BENCH_SYMBOL, DEFAULT_COST, PRESET_PIT_MAXRATIO } from '../src/features/backtest/presets'
 import {
@@ -2584,6 +2585,45 @@ async function fetchKrxTopOpenApi(authKey: string, basDd: string, mktId: 'STK' |
     .map(({ code, name }) => ({ code, name }))
 }
 
+/**
+ * 수집한 연도별 실측 랭킹을 `public/data/krx-pit/universe.json`에 저장한다.
+ *
+ * 스키마·검증은 `src/features/backtest/krxPitUniverse.ts`가 단일 원본이다 — 여기서
+ * 객체를 손으로 조립하지 않고 `buildKrxPitUniverse`를 부른다(그 함수가 조립 즉시
+ * 파서로 자기검증하므로, 순위 빈틈·중복 코드가 있으면 **쓰기 전에** 던진다).
+ * 저장 실패는 백테스트를 중단시키지 않는다 — 로그·백테스트 출력은 그대로 남긴다.
+ */
+function saveKrxPitUniverse(
+  lists: Record<number, { ks: { code: string; name: string }[]; kq: { code: string; name: string }[] }>,
+  attempted: number[],
+) {
+  const path = join(root, KRX_PIT_PATH)
+  try {
+    const uni = buildKrxPitUniverse(lists, {
+      asOf: new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10), // KST
+      missingYears: attempted.filter((y) => !lists[y]),
+    })
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, `${JSON.stringify(uni, null, 2)}\n`, 'utf8')
+    const ys = Object.keys(uni.years)
+      .map(Number)
+      .sort((a, b) => a - b)
+    log('')
+    log(`💾 실측 랭킹 저장: ${KRX_PIT_PATH}`)
+    log(
+      `   연도 ${ys.length}개(${ys[0]}~${ys[ys.length - 1]}) · 연도당 코스피 ${uni.years[String(ys[0])].kospi.length} + ` +
+        `코스닥 ${uni.years[String(ys[0])].kosdaq.length} · 수집 불가 연도 ${uni.missingYears.join(', ') || '없음'}`,
+    )
+    log(`   고유 종목(10+10 기준) ${new Set(ys.flatMap((y) => krxPitCodes(uni, y, 10))).size}개 · (40+40 기준) ${
+      new Set(ys.flatMap((y) => krxPitCodes(uni, y, 40))).size
+    }개`)
+    log('   → 이 파일을 리포에 커밋하면 GHA(MODE=idea:krxpit)가 KRX 접속 없이 실측 유니버스로 재검증한다.')
+  } catch (e) {
+    log(`⚠️ 실측 랭킹 저장 실패 — ${(e as Error).message}`)
+    log('   (백테스트는 계속 진행한다. 저장 실패는 수집 결과의 스키마 위반이거나 쓰기 권한 문제다.)')
+  }
+}
+
 async function pityear() {
   const years: number[] = []
   for (let y = 2006; y <= 2026; y++) years.push(y)
@@ -2618,6 +2658,13 @@ async function pityear() {
   if (okYears.length < 15)
     throw new Error(`랭킹 수집 ${okYears.length}/${years.length}년뿐 — KRX 엔드포인트 진단 로그 확인 (해외 IP 차단이면 EC2 실행으로 전환)`)
   if (okYears.length < years.length) log(`⚠️ 일부 연도 누락: ${years.filter((y) => !lists[y]).join(', ')} — 있는 연도만 연쇄`)
+
+  // ---- 실측 랭킹을 파일로 저장 (2026-08-03) --------------------------------
+  // 여태 이 랭킹은 **로그로만** 나가고 사라졌다. 그래서 실측 유니버스로 하는 재검증은
+  // 매번 KRX를 다시 긁어야 했고(국내 IP 필요 = EC2 전용), Yahoo만 쓰는 재검증조차
+  // GHA에서 돌릴 수 없었다. 랭킹을 리포에 남기면 **수집(EC2)과 검증(GHA)이 분리**된다.
+  // 작은 파일이다 — 연도 × 80종목의 코드·이름·순위뿐이고 시세는 들어가지 않는다.
+  saveKrxPitUniverse(lists, years)
 
   // 전체 연도 합집합 시세 로드 (.KS/.KQ 자동 판별 — 이전상장 대응)
   const union = new Set<string>()

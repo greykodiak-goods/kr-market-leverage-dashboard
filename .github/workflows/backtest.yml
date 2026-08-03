@@ -5,6 +5,9 @@
 #     slots·tune·usprobe·idea:seasonal/monthpat/pairprem 등. 사업 서버 무접촉·메모리 여유.
 #   - EC2(awning-ops deploy-investing.yml): 국내 IP·키움 키가 필요한 것만 — pityear(KRX)·
 #     probe:flow·backfill:flow(키움 수급)·모의투자 데몬.
+#   - 랭킹 수집과 재검증은 **분리돼 있다**: EC2 MODE=pityear가 KRX 실측 랭킹을
+#     public/data/krx-pit/universe.json에 저장·커밋하고, 여기서 MODE=idea:krxpit이 그 파일을
+#     읽어 야후 시세로 승자 3종을 재검증한다(KRX 접속 불필요 · 워크플로 수정 불요).
 # 시크릿 불필요(Yahoo 공개 엔드포인트). 데이터 커밋 없음(읽기 전용 실행) —
 # **예외: MODE=presets** 만 산출물(public/data/presets-precomputed.json)을 이 리포에 커밋한다.
 
