@@ -215,7 +215,7 @@ async function main(): Promise<void> {
   }
 
   // ============================================================================
-  section('③ 프리셋 정의 — 34차 판정 통과 2종')
+  section('③ 프리셋 정의 — 40차에서 판정 탈락한 2종(기록·재현용으로만 남김)')
   // ============================================================================
 
   {
@@ -225,7 +225,11 @@ async function main(): Promise<void> {
       check(`${p.id}: 게이트 on`, p.kind === 'momentum' && p.mom.gate === true)
       check(`${p.id}: id가 krx- 접두(실측 기반 표시)`, p.id.startsWith('krx-'))
       check(`${p.id}: 라벨에 KRX 실측 표기`, p.label.includes('KRX 실측'))
-      check(`${p.id}: 라벨에 34차 표기`, p.label.includes('34차'))
+      // 40차(2026-08-03) 탈락. **라벨이 목록에서 유일하게 보이는 텍스트**라 여기서 먼저 말해야 한다 —
+      // note는 프리셋을 고른 뒤에야 보이므로 고르기 전에 막지 못한다.
+      check(`${p.id}: 라벨이 탈락 표기로 시작`, p.label.startsWith('❌ [탈락]'))
+      check(`${p.id}: 라벨에 탈락 사유(전반 알파 음수)`, p.label.includes('전반 알파 음수'))
+      check(`${p.id}: 라벨에 재측정 회차(40차) 표기`, p.label.includes('40차'))
     }
     const slots = PRESETS.map((p) => (p.kind === 'momentum' ? p.mom.slots : 0)).sort()
     eq('슬롯은 3·5', slots.join(','), '3,5')

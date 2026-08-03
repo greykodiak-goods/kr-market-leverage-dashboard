@@ -32,6 +32,7 @@ import {
   MOM_SLOT_CHOICES,
   PRESETS,
   PRESET_BANNER,
+  PRESET_FAILED_NOTE,
   normalizeGoldW,
 } from '../src/features/backtest/presets'
 import { augmentPresetLabel, mddChip, tenYearChip } from '../src/features/backtest/precomputed'
@@ -271,9 +272,16 @@ section('④ presets.ts 불변식 — 화면과 사전계산이 같은 배열을
   }
 
   // ── note 필수 병기(규칙 3·4) ──────────────────────────────────────────────
-  // 34차의 결론은 "판정은 통과했지만 벽은 못 넘었다"이다. 그 사실이 note에서 빠지면
-  // 가장 덜 나쁜 칸을 성공처럼 제시하는 것이 되고, 그것이 33차가 무너진 경로다.
+  // 40차(2026-08-03) 이후 두 프리셋의 결론은 "판정에서 **탈락**했다"이다.
+  // 34차의 "판정은 통과했지만 벽은 못 넘었다"에서 한 단계 더 내려갔다 —
+  // 37차(가격 생존편향 제거)와 40차(배당 비대칭 제거)로 통과 근거 자체가 사라졌다.
+  // 그 사실이 note 맨 앞에서 빠지면 탈락한 조합을 고를 수 있게 되고, 그것이 이 화면의
+  // 유일한 실질 위험이다(라벨·note가 유일한 방어선이다).
   const NOTE_MUST: [string, string][] = [
+    ['판정 탈락 명시', '판정 탈락'],
+    ['탈락 회차(40차) 표기', '40차'],
+    ['실매매 금지 경고', '실제 매매를 붙이지 마라'],
+    ['유리하게 고쳐도 안 됐다는 사실', '유리한 쪽으로 고쳤는데도'],
     ['34차 실측 표기', '34차'],
     ['칼마 수치', '칼마'],
     ['CAGR 수치', 'CAGR'],
@@ -281,7 +289,7 @@ section('④ presets.ts 불변식 — 화면과 사전계산이 같은 배열을
     ['전반 알파', '전반'],
     ['후반 알파', '후반'],
     ['QQQ 벽을 넘지 못했다', '넘지 못했다'],
-    ['QQQ 벽 칼마 0.670', '0.670'],
+    ['QQQ 벽 칼마 0.625(40차 갱신)', '0.625'],
     ['35변형 다중검정', '35변형'],
     ['우연 가능성 병기', '우연'],
     ['17년 표본', '17년'],
@@ -301,20 +309,31 @@ section('④ presets.ts 불변식 — 화면과 사전계산이 같은 배열을
   // 각 프리셋의 고유 실측 수치가 서로 뒤바뀌지 않았는지(복사 실수 방지)
   const n3 = p3?.kind === 'momentum' ? p3.note : ''
   const n5 = p5?.kind === 'momentum' ? p5.note : ''
-  check('krx-xsmom3g: 칼마 0.335·CAGR 19.3%·MDD −57.4%', n3.includes('0.335') && n3.includes('19.3') && n3.includes('57.4'))
-  check('krx-xsmom3g: 전반 +0.7%p · 후반 +15.4%p', n3.includes('+0.7%p') && n3.includes('+15.4%p'))
-  check('krx-xsmom5g: 칼마 0.260·CAGR 13.9%·MDD −53.5%', n5.includes('0.260') && n5.includes('13.9') && n5.includes('53.5'))
-  check('krx-xsmom5g: 전반 +2.5%p · 후반 +2.7%p', n5.includes('+2.5%p') && n5.includes('+2.7%p'))
-  check('krx-xsmom3g: 집중도 위험 경고', n3.includes('집중도'))
+  // 40차 재측정치가 정본이다. 옛 34차 수치는 "폐기됨" 맥락에서만 남아 있어야 한다 —
+  // 두 수치가 나란히 있으면 어느 쪽이 현재값인지가 이 표의 생사를 가른다.
+  check('krx-xsmom3g: 40차 칼마 0.252·CAGR 14.8%·MDD −58.9%', n3.includes('0.252') && n3.includes('14.8') && n3.includes('58.9'))
+  check('krx-xsmom3g: 40차 전반 −6.4%p · 후반 +17.1%p', n3.includes('−6.4%p') && n3.includes('+17.1%p'))
+  check('krx-xsmom5g: 40차 칼마 0.128·CAGR 7.1%·MDD −55.0%', n5.includes('0.128') && n5.includes('7.1') && n5.includes('55.0'))
+  check('krx-xsmom5g: 40차 전반 −6.1%p · 후반 +0.3%p', n5.includes('−6.1%p') && n5.includes('+0.3%p'))
+  check('krx-xsmom5g: 전 구간 알파도 음수임을 명시', n5.includes('전 구간 알파가 음수'))
+  // 옛 수치를 지우지 않되 **폐기 표시와 함께**만 둔다(다음 세션이 그것을 근거로 쓰지 않게).
+  check('krx-xsmom3g: 옛 34차 수치는 폐기 표시와 함께', n3.includes('폐기된 34차'))
+  check('krx-xsmom5g: 옛 34차 수치는 폐기 표시와 함께', n5.includes('폐기된 34차'))
 
   // 상시 안내 배너 — 화면 상단에 항상 뜬다(프리셋을 고르지 않아도 보여야 한다)
-  check('배너: KRX 실측 기반 명시', PRESET_BANNER.includes('KRX 실측'))
-  check('배너: 34차 명시', PRESET_BANNER.includes('34차'))
-  check('배너: 33차 사후선택 편향 명시', PRESET_BANNER.includes('33차') && PRESET_BANNER.includes('편향'))
+  // 배너는 프리셋을 고르지 않아도 항상 보인다 — 40차부터 이 자리는 "권장 프리셋 없음"을 말한다.
+  check('배너: 권장 프리셋 없음 명시', PRESET_BANNER.includes('권장 프리셋이 없습니다'))
+  check('배너: 탈락 사실 명시', PRESET_BANNER.includes('탈락'))
+  check('배너: 실매매 금지', PRESET_BANNER.includes('실제 매매에 쓰지 마'))
+  check('탈락 사유: 생존편향 제거(37차)', PRESET_FAILED_NOTE.includes('37차') && PRESET_FAILED_NOTE.includes('생존편향'))
+  check('탈락 사유: 배당 비대칭 제거(40차)', PRESET_FAILED_NOTE.includes('40차') && PRESET_FAILED_NOTE.includes('배당'))
+  check('탈락 사유: 유리하게 고쳐도 음수였다', PRESET_FAILED_NOTE.includes('유리한 쪽으로 고쳤는데도'))
 
-  // 34차 벽 상수 — 화면이 사전계산 없이 강등할 때 쓰는 값
-  eq('벽 칼마 상수', KRXCAL_QQQ_WALL.calmar, 0.67)
-  eq('벽 CAGR 상수', KRXCAL_QQQ_WALL.cagrPct, 20.3)
+  // 벽 상수 — 화면이 사전계산 없이 강등할 때 쓰는 값.
+  // 40차에서 벽도 가격수익으로 다시 쟀다(0.670/20.3 → 0.625/19.3). 벽을 낮춘 것이 아니라
+  // 전략과 **같은 기준**으로 맞춘 것이다 — 전략이 가격수익인데 벽만 배당 재투자면 벽이 부당하게 높다.
+  eq('벽 칼마 상수(40차 가격수익 기준)', KRXCAL_QQQ_WALL.calmar, 0.625)
+  eq('벽 CAGR 상수(40차 가격수익 기준)', KRXCAL_QQQ_WALL.cagrPct, 19.3)
   check('벽 MDD 상수는 음수', KRXCAL_QQQ_WALL.mddPct < 0)
 
   // presets.ts는 UI 무의존이어야 한다 — React가 들어오면 스크립트 번들이 오염된다

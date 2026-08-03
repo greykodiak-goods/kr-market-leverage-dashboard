@@ -96,6 +96,7 @@ import {
   MOM_SLOT_CHOICES,
   PRESETS,
   PRESET_BANNER,
+  PRESET_FAILED_NOTE,
   PRESET_PIT_BASE,
   REGIME_FALLBACK_SYMBOL,
   normalizeGoldW,
@@ -2199,7 +2200,9 @@ export function SpecSimulator() {
           <option value="" disabled>
             프리셋 불러오기…
           </option>
-          {/* 프리셋은 2종뿐이다(34차 판정 통과분). 구 10종은 [추정] 목록 위에서 고른 것이라 전부 뺐다. */}
+          {/* 목록에 2종이 남아 있지만 **둘 다 40차에서 판정 탈락**했다(라벨이 ❌ [탈락]로 시작한다).
+              지우지 않은 이유는 기록을 없애면 다음 세션이 같은 조합을 다시 후보로 올리기 때문이다.
+              구 10종은 [추정] 목록 위에서 고른 것이라 33차에서 전부 뺐다. */}
           {/* 라벨의 MDD·10년 연평균은 **사전계산 산출물에서 온다** — 하드코딩이 아니라
               GHA가 파일을 갱신하면 라벨도 따라 바뀐다. 파일이 없으면 원래 라벨 그대로. */}
           {PRESETS.map((p) => (
@@ -2211,12 +2214,19 @@ export function SpecSimulator() {
       </div>
       {/* 상시 안내 — 프리셋이 어떤 유니버스 위에서 나왔는지, 왜 구 프리셋이 사라졌는지 한 줄로 못 박는다.
           이 줄은 프리셋을 고르지 않아도 항상 보인다(고르고 나서야 알게 되면 늦다). */}
-      <div className="bt-note">
+      {/* 40차(2026-08-03)부터 이 자리는 "프리셋 없음"을 말한다. 경고(bt-warn)로 올린 이유는
+          이것이 안내가 아니라 **쓰지 말라는 통지**이기 때문이다 — 목록에 두 줄이 남아 있어서
+          고를 수 있게 보이는 것이 이 화면의 유일한 위험 지점이다. */}
+      <div className="bt-warn" role="alert">
         <strong>{PRESET_BANNER}</strong>
+        <div style={{ marginTop: 4, fontSize: 12 }}>{PRESET_FAILED_NOTE}</div>
         <div style={{ marginTop: 4, fontSize: 12 }}>
-          ⚠️ 34차 35변형 중 <strong>같은 구간 QQQ 원화 보유(칼마 {wall.calmar.toFixed(3)} · CAGR{' '}
-          {fmtPct(wall.cagrPct)} · MDD {fmtPct(wall.mddPct)})를 넘은 조합은 하나도 없습니다</strong> — 아래 두
-          프리셋은 판정(전·후반 알파 양수)만 통과한 기록이지 그 벽을 넘은 답이 아닙니다.
+          ⚠️ 같은 구간{' '}
+          <strong>
+            QQQ 원화 보유(칼마 {wall.calmar.toFixed(3)} · CAGR {fmtPct(wall.cagrPct)} · MDD {fmtPct(wall.mddPct)})를
+            넘은 조합은 지금까지 하나도 없습니다
+          </strong>{' '}
+          — 34·40차 35변형 · 38차 밸류 18변형 · 39차 고원 405셀 전부입니다.
           {wallFromFile && ' (이 벽 수치는 사전계산 산출물에서 같은 구간으로 다시 잰 실측값입니다.)'}
         </div>
       </div>
