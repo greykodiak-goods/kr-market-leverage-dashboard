@@ -58,14 +58,17 @@ import {
 // 아니다. 로드 실패 시 조용한 폴백은 없다(krxUniverseSource.ts 머리말 참조 · 33차 재발 방지).
 import type { KrxPitUniverse } from './krxPitUniverse'
 import {
-  DEFAULT_KRX_TOP_N,
+  DEFAULT_KRX_WIDTH,
   KRX_TOP_N_CHOICES,
   KRX_UNIVERSE_START_DATE,
   deriveKrxUniverse,
   loadKrxUniverse,
+  isDefaultKrxWidth,
+  krxWidthLabel,
   normalizeTopN,
+  normalizeWidth,
   type DerivedKrxUniverse,
-  type KrxTopN,
+  type KrxWidth,
 } from './krxUniverseSource'
 import {
   SPEC_VERSION,
@@ -143,8 +146,8 @@ interface Saved {
   marketGate?: boolean
   /** 결합 모드의 금(GLD 원화) 슬리브 비중 — 없으면 0(금 없음) */
   goldW?: number
-  /** 실측 유니버스 폭(각 시장 상위 N) — 없으면 기본 10(=10+10 · 34차 판정이 나온 폭) */
-  topN?: number
+  /** 실측 유니버스 폭 — 시장별 상위 N. 숫자 하나(v3 저장본)면 두 시장 같은 폭으로 읽는다. */
+  width?: KrxWidth | number
   /** 국내 종목 시세 소스 — 없으면 기본 야후(KRX 정본 파일이 아직 없다) */
   priceSource?: PriceSource
   spec: StrategySpec
@@ -282,7 +285,7 @@ function loadSaved(): Saved {
           comboWA: normalizeWA(s.comboWA),
           marketGate: s.marketGate === true,
           goldW: normalizeGoldW(s.goldW),
-          topN: normalizeTopN(s.topN),
+          width: normalizeWidth((s as unknown as { width?: unknown; topN?: unknown }).width ?? (s as unknown as { topN?: unknown }).topN),
           priceSource: normalizePriceSource(s.priceSource),
         }
     }
@@ -298,7 +301,7 @@ function loadSaved(): Saved {
     comboWA: DEFAULT_COMBO_WA,
     marketGate: false,
     goldW: DEFAULT_GOLD_W,
-    topN: DEFAULT_KRX_TOP_N,
+    width: { ...DEFAULT_KRX_WIDTH },
     // 기본은 **야후**다 — KRX 일별 정본 파일이 아직 리포에 없다(EC2 수집 중).
     // 데이터가 도착하면 기본값 전환은 총괄이 판단한다(화면이 먼저 넘어가면 실행 불가가 된다).
     priceSource: DEFAULT_PRICE_SOURCE,
@@ -966,7 +969,7 @@ export function SpecSimulator() {
   const [cost, setCost] = useState<CostSettings>(saved.cost)
 
   // ---- 유니버스 (KRX 실측) --------------------------------------------------
-  const [topN, setTopN] = useState<KrxTopN>(normalizeTopN(saved.topN))
+  const [width, setWidth] = useState<KrxWidth>(normalizeWidth(saved.width))
   const uniState = useKrxUniverseFile()
   /**
    * 파생 실패(결측 연도·빈 목록)도 로드 실패와 **같은 취급**이다 — 둘 다 실행 불가이며,
@@ -976,11 +979,11 @@ export function SpecSimulator() {
     if (uniState.status === 'loading') return null
     if (uniState.status === 'error') return { err: uniState.message }
     try {
-      return { ok: deriveKrxUniverse(uniState.uni, topN) }
+      return { ok: deriveKrxUniverse(uniState.uni, width) }
     } catch (e) {
       return { err: e instanceof Error ? e.message : String(e) }
     }
-  }, [uniState, topN])
+  }, [uniState, width])
   const uni = universe && 'ok' in universe ? universe.ok : null
   const uniError = universe && 'err' in universe ? universe.err : null
 
@@ -1068,7 +1071,7 @@ export function SpecSimulator() {
           comboWA,
           marketGate,
           goldW,
-          topN,
+          width,
           priceSource,
           spec,
           startDate,
@@ -1079,7 +1082,7 @@ export function SpecSimulator() {
     } catch {
       /* 저장 실패는 치명적이지 않다 */
     }
-  }, [kind, mom, comboWA, marketGate, goldW, topN, priceSource, spec, startDate, endDate, cost])
+  }, [kind, mom, comboWA, marketGate, goldW, width, priceSource, spec, startDate, endDate, cost])
 
   const flat = useMemo(() => asFlatAnd(spec.entry), [spec.entry])
   // 종목 목록은 실행 시 그 해 유니버스로 주입되므로, 검증에는 대표로 첫 해 목록을 쓴다.
@@ -1090,8 +1093,8 @@ export function SpecSimulator() {
 
   /** 전략 설정 지문 — 사전계산 블록이 지금 설정과 같은 전략을 가리키는지 판정한다 */
   const settingsSig = useMemo(
-    () => JSON.stringify({ kind, mom, comboWA, marketGate, goldW, spec }),
-    [kind, mom, comboWA, marketGate, goldW, spec],
+    () => JSON.stringify({ kind, mom, comboWA, marketGate, goldW, width, spec }),
+    [kind, mom, comboWA, marketGate, goldW, width, spec],
   )
   /** 지문이 어긋나면 띄우지 않는다(설정을 손대면 사전계산 결과는 그 설정의 것이 아니다) */
   const showPre = shownPre != null && precomputed != null && preSig === settingsSig
@@ -1965,21 +1968,46 @@ export function SpecSimulator() {
           유니버스 (고정 불가)
           <InfoTip text="종목을 직접 고르는 입력은 없앴습니다. 오늘 살아남은 대형주를 표본으로 고정하면 과거 성적이 크게 부풀려지기 때문입니다(승자편향). 목록은 KRX Open API 실측 랭킹이며, 매년 1월 1일에 그 해 유니버스로 교체하고 그 해를 독립 실행한 뒤 연말 평가액을 다음 해 자본으로 이월합니다. 실측 파일을 읽지 못하면 [추정] 목록으로 대신 돌리지 않고 실행을 막습니다 — 33차에서 [추정] 목록발 알파가 무너졌기 때문입니다." />
         </label>
+        {/* 유니버스 폭은 **시장별로** 고른다(2026-08-03 대표 지시). 0을 고르면 그 시장을 뺀다 —
+            코스피만·코스닥만 돌려 어느 쪽이 성적을 만들었는지 가를 수 있다. */}
         <label>
-          유니버스 폭
+          코스피 상위
           <select
-            value={topN}
+            value={width.kospi}
             disabled={busy}
-            onChange={(e) => setTopN(normalizeTopN(Number(e.target.value)))}
-            title="각 시장 상위 N을 잘라 씁니다 — 34차 판정이 나온 폭은 10+10입니다"
+            onChange={(e) => setWidth((w) => ({ ...w, kospi: normalizeTopN(Number(e.target.value)) }))}
+            title="코스피에서 그 해 시총 상위 N을 잘라 씁니다. 0이면 코스피를 뺍니다."
           >
             {KRX_TOP_N_CHOICES.map((n) => (
               <option key={n} value={n}>
-                {n}+{n}
+                {n === 0 ? '없음(제외)' : `상위 ${n}`}
               </option>
             ))}
           </select>
         </label>
+        <label>
+          코스닥 상위
+          <InfoTip text="시장별로 따로 고릅니다. 수집 원본이 시장당 40종목이라 40이 상한이고, 0을 고르면 그 시장을 제외합니다(둘 다 0이면 실행할 수 없습니다). ⚠️ 프리셋 2종의 성적은 코스피 10 + 코스닥 10에서 나온 것이라, 폭을 바꾸면 그 수치와 직접 비교할 수 없습니다 — 폭을 바꾸면 프리셋 사전계산 수치는 화면에서 사라지고 직접 실행해야 합니다." />
+          <select
+            value={width.kosdaq}
+            disabled={busy}
+            onChange={(e) => setWidth((w) => ({ ...w, kosdaq: normalizeTopN(Number(e.target.value)) }))}
+            title="코스닥에서 그 해 시총 상위 N을 잘라 씁니다. 0이면 코스닥을 뺍니다."
+          >
+            {KRX_TOP_N_CHOICES.map((n) => (
+              <option key={n} value={n}>
+                {n === 0 ? '없음(제외)' : `상위 ${n}`}
+              </option>
+            ))}
+          </select>
+        </label>
+        {!isDefaultKrxWidth(width) && (
+          <div className="bt-note" style={{ width: '100%' }}>
+            ⚠️ 지금 폭은 <strong>{krxWidthLabel(width)}</strong>입니다 — 프리셋 2종의 성적이 나온 폭(
+            {krxWidthLabel(DEFAULT_KRX_WIDTH)})과 달라서 <strong>그 수치와 직접 비교할 수 없습니다.</strong> 이
+            폭의 성적은 직접 실행해야 나옵니다.
+          </div>
+        )}
         <label>
           시세 소스
           <select

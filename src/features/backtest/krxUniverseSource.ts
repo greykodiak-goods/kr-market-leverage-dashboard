@@ -19,10 +19,9 @@
 
 import {
   KRX_PIT_PATH,
-  krxPitCodes,
+  krxPitMarketCodes,
   krxPitSourceNote,
   krxPitSpan,
-  krxPitUnion,
   krxPitYears,
   parseKrxPitUniverse,
   type KrxPitUniverse,
@@ -39,19 +38,58 @@ export const KRX_UNIVERSE_FROM = 2010
 export const KRX_UNIVERSE_START_DATE = '2010-01-01'
 
 /**
- * 유니버스 폭 선택지 — 각 시장 상위 N을 잘라 쓴다(10이면 10+10, 40이면 40+40).
- * 34차 판정 통과분이 나온 곳은 **10+10**이고, 40+40은 대조 참고다(34차에서 판정 통과 0).
+ * 유니버스 폭 선택지 — 각 시장에서 상위 N을 잘라 쓴다. **시장별로 따로 고른다**
+ * (2026-08-03 대표 지시 "코스피 상위 몇 종목, 코스닥 상위 몇 종목 이렇게 선택").
+ *
+ * 수집 원본이 시장당 40종목이라 40이 상한이다. 0은 **그 시장을 빼는 것**이고,
+ * 코스피만·코스닥만 돌리는 비교가 가능해진다(둘 다 0이면 실행 불가 — deriveKrxUniverse가 던진다).
+ *
+ * ⚠️ 34차 판정 통과분(프리셋 2종)이 나온 곳은 **코스피 10 + 코스닥 10**이다. 폭을 바꾸면
+ * 그 수치와 비교가 성립하지 않으므로, 사전계산 블록은 폭이 기본값과 다르면 숨는다.
  */
-export const KRX_TOP_N_CHOICES = [10, 40] as const
+export const KRX_TOP_N_CHOICES = [0, 5, 10, 20, 30, 40] as const
 export type KrxTopN = (typeof KRX_TOP_N_CHOICES)[number]
 export const DEFAULT_KRX_TOP_N: KrxTopN = 10
+
+/** 시장별 폭. `kospi`·`kosdaq`을 따로 고른다. */
+export interface KrxWidth {
+  kospi: KrxTopN
+  kosdaq: KrxTopN
+}
+
+/** 34차 프리셋의 전제 폭 — 이 값과 다르면 프리셋 수치와 비교가 성립하지 않는다. */
+export const DEFAULT_KRX_WIDTH: KrxWidth = { kospi: DEFAULT_KRX_TOP_N, kosdaq: DEFAULT_KRX_TOP_N }
 
 /** 화면이 fetch할 정적 자산 경로(BASE_URL 뒤에 붙인다). 스크립트는 KRX_PIT_PATH를 직접 읽는다. */
 export const KRX_UNIVERSE_ASSET_PATH = 'data/krx-pit/universe.json'
 
-/** 임의 값이 새어 들어오면 기본값(10+10)으로 좁힌다 — 저장본·URL 파라미터 방어. */
+/** 임의 값이 새어 들어오면 기본값으로 좁힌다 — 저장본·URL 파라미터 방어. */
 export function normalizeTopN(v: number | undefined): KrxTopN {
   return (KRX_TOP_N_CHOICES as readonly number[]).includes(v as number) ? (v as KrxTopN) : DEFAULT_KRX_TOP_N
+}
+
+/**
+ * 저장본·입력을 시장별 폭으로 정규화한다.
+ * 숫자 하나만 오면 **두 시장 같은 폭**으로 읽는다 — v3 저장본(`topN: 10`)과 옛 호출부 호환.
+ */
+export function normalizeWidth(v: unknown): KrxWidth {
+  if (typeof v === 'number') return { kospi: normalizeTopN(v), kosdaq: normalizeTopN(v) }
+  if (v && typeof v === 'object') {
+    const o = v as Partial<Record<keyof KrxWidth, number>>
+    return { kospi: normalizeTopN(o.kospi), kosdaq: normalizeTopN(o.kosdaq) }
+  }
+  return { ...DEFAULT_KRX_WIDTH }
+}
+
+/** 폭 표기 — "10+10" / "코스피 30 + 코스닥 0" 처럼 사람이 읽는 한 줄. */
+export function krxWidthLabel(w: KrxWidth): string {
+  if (w.kospi === w.kosdaq) return `${w.kospi}+${w.kosdaq}`
+  return `코스피 ${w.kospi} + 코스닥 ${w.kosdaq}`
+}
+
+/** 34차 프리셋 전제(10+10)와 같은 폭인가 — 사전계산 수치를 띄워도 되는지 판정한다. */
+export function isDefaultKrxWidth(w: KrxWidth): boolean {
+  return w.kospi === DEFAULT_KRX_WIDTH.kospi && w.kosdaq === DEFAULT_KRX_WIDTH.kosdaq
 }
 
 /** 로드 실패 시 화면에 그대로 보여줄 안내의 머리말 — "폴백은 없다"를 문장으로 못 박는다. */
@@ -62,12 +100,13 @@ export const KRX_UNIVERSE_LOAD_FAIL =
 
 /** 실측 유니버스에서 파생된 실행 재료 — 화면·사전계산이 **같은 함수**로 만든다. */
 export interface DerivedKrxUniverse {
-  topN: KrxTopN
+  /** 시장별 폭(코스피·코스닥 각각 상위 N) */
+  width: KrxWidth
   /** 실행할 연도(오름차순 · 빈틈 없음) */
   years: number[]
   /** 전 연도 합집합 — 시세를 한 번만 받기 위한 로딩 목록 */
   union: string[]
-  /** 그 해 유니버스 코드(코스피 상위 topN + 코스닥 상위 topN) */
+  /** 그 해 유니버스 코드(코스피 상위 width.kospi + 코스닥 상위 width.kosdaq) */
   codesFor: (year: number) => string[]
   /** 화면 표기용 한 줄 — "KRX 실측 연도별 상위 10+10 · 2010~2026 · 고유 N종목" */
   label: string
@@ -78,8 +117,14 @@ export interface DerivedKrxUniverse {
 /**
  * 파싱된 실측 유니버스 → 실행 재료. **구멍이 있으면 던진다**(krxPitSpan) —
  * 조용히 짧은 구간으로 돌면 다른 표와 비교가 성립하지 않는다.
+ *
+ * 폭은 시장별로 받는다. 숫자 하나를 주면 두 시장 같은 폭으로 읽는다(옛 호출부 호환).
  */
-export function deriveKrxUniverse(u: KrxPitUniverse, topN: KrxTopN = DEFAULT_KRX_TOP_N): DerivedKrxUniverse {
+export function deriveKrxUniverse(
+  u: KrxPitUniverse,
+  widthIn: KrxTopN | KrxWidth = DEFAULT_KRX_WIDTH,
+): DerivedKrxUniverse {
+  const width = normalizeWidth(widthIn)
   const covered = krxPitYears(u).filter((y) => y >= KRX_UNIVERSE_FROM)
   if (covered.length === 0)
     throw new Error(
@@ -87,14 +132,23 @@ export function deriveKrxUniverse(u: KrxPitUniverse, topN: KrxTopN = DEFAULT_KRX
     )
   // 덮는 구간 안에 결측 연도가 있으면 여기서 던진다(결측을 숨기지 않는다).
   const years = krxPitSpan(u, covered[0], covered[covered.length - 1])
-  const union = krxPitUnion(u, topN, years)
-  if (union.length === 0) throw new Error(`실측 유니버스 상위 ${topN}+${topN}에서 종목을 하나도 뽑지 못했습니다.`)
+  const codesFor = (year: number) => [
+    ...krxPitMarketCodes(u, year, 'kospi', width.kospi),
+    ...krxPitMarketCodes(u, year, 'kosdaq', width.kosdaq),
+  ]
+  const set = new Set<string>()
+  for (const y of years) for (const c of codesFor(y)) set.add(c)
+  const union = [...set].sort()
+  if (union.length === 0)
+    throw new Error(
+      `실측 유니버스 ${krxWidthLabel(width)}에서 종목을 하나도 뽑지 못했습니다 — 두 시장 폭이 모두 0이면 실행할 수 없습니다.`,
+    )
   return {
-    topN,
+    width,
     years,
     union,
-    codesFor: (year: number) => krxPitCodes(u, year, topN),
-    label: `KRX 실측 연도별 상위 ${topN}+${topN} · ${years[0]}~${years[years.length - 1]} · 고유 ${union.length}종목`,
+    codesFor,
+    label: `KRX 실측 연도별 상위 ${krxWidthLabel(width)} · ${years[0]}~${years[years.length - 1]} · 고유 ${union.length}종목`,
     sourceNote: krxPitSourceNote(u),
   }
 }

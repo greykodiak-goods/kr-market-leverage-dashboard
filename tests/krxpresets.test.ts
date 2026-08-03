@@ -18,7 +18,9 @@ import {
   KRX_UNIVERSE_START_DATE,
   deriveKrxUniverse,
   loadKrxUniverse,
+  isDefaultKrxWidth,
   normalizeTopN,
+  normalizeWidth,
   type KrxUniverseResponse,
 } from '../src/features/backtest/krxUniverseSource'
 import { parseKrxPitUniverse } from '../src/features/backtest/krxPitUniverse'
@@ -84,6 +86,7 @@ async function main(): Promise<void> {
     eq('연도는 2010부터', d10.years[0], 2010)
     eq('연도 수', d10.years.length, 3)
     eq('기본 폭은 10+10', DEFAULT_KRX_TOP_N, 10)
+    eq('파생 결과에 시장별 폭이 박힌다', JSON.stringify(d10.width), JSON.stringify({ kospi: 10, kosdaq: 10 }))
     eq('그 해 유니버스는 10+10 = 20종목', d10.codesFor(2010).length, 20)
     // 각 시장 상위 10만 잘라 쓴다 — 합성은 시장당 40개를 넣어 뒀으므로 절단이 실제로 일어난다
     eq('코스피 상위 10 절단', d10.codesFor(2010).filter((c) => c.startsWith('8')).length, 10)
@@ -98,8 +101,33 @@ async function main(): Promise<void> {
     const d40 = deriveKrxUniverse(uni, 40)
     eq('40+40은 80종목', d40.codesFor(2010).length, 80)
     check('폭을 넓히면 합집합이 커진다', d40.union.length > d10.union.length)
-    eq('폭 선택지는 10·40 둘뿐', KRX_TOP_N_CHOICES.join(','), '10,40')
+    eq('폭 선택지(0=제외 포함)', KRX_TOP_N_CHOICES.join(','), '0,5,10,20,30,40')
     eq('임의 폭은 기본값으로 좁혀진다', normalizeTopN(7), DEFAULT_KRX_TOP_N)
+
+    // 시장별 폭 — 2026-08-03 대표 지시 "코스피 상위 몇 종목, 코스닥 상위 몇 종목"
+    const dSplit = deriveKrxUniverse(uni, { kospi: 40, kosdaq: 5 })
+    eq('코스피 40 + 코스닥 5 = 45종목', dSplit.codesFor(2010).length, 45)
+    eq('코스피 쪽만 40', dSplit.codesFor(2010).filter((c) => c.startsWith('8')).length, 40)
+    eq('코스닥 쪽만 5', dSplit.codesFor(2010).filter((c) => c.startsWith('9')).length, 5)
+    eq('라벨이 시장별 폭을 밝힌다', dSplit.label.includes('코스피 40 + 코스닥 5'), true)
+
+    // 0 = 그 시장 제외
+    const dKsOnly = deriveKrxUniverse(uni, { kospi: 10, kosdaq: 0 })
+    eq('코스닥 0이면 코스피만', dKsOnly.codesFor(2010).length, 10)
+    check('코스닥 코드가 하나도 없다', dKsOnly.union.every((c) => !c.startsWith('9')))
+    // 둘 다 0이면 실행 불가 — 조용히 빈 유니버스로 돌지 않는다
+    let threw = false
+    try {
+      deriveKrxUniverse(uni, { kospi: 0, kosdaq: 0 })
+    } catch {
+      threw = true
+    }
+    check('두 시장 폭이 모두 0이면 던진다(빈 유니버스 금지)', threw)
+
+    // 저장본 호환 — v3는 숫자 하나(topN)였다
+    eq('숫자 저장본은 두 시장 같은 폭', JSON.stringify(normalizeWidth(40)), JSON.stringify({ kospi: 40, kosdaq: 40 }))
+    eq('없으면 기본 폭', JSON.stringify(normalizeWidth(undefined)), JSON.stringify({ kospi: 10, kosdaq: 10 }))
+    check('기본 폭 판정', isDefaultKrxWidth({ kospi: 10, kosdaq: 10 }) && !isDefaultKrxWidth({ kospi: 10, kosdaq: 5 }))
     eq('저장본 없음도 기본값', normalizeTopN(undefined), DEFAULT_KRX_TOP_N)
     eq('허용 폭은 그대로', normalizeTopN(40), 40)
 
@@ -211,7 +239,9 @@ async function main(): Promise<void> {
     // 리포에 실제로 들어 있는 실측 파일을 읽는다(합성이 아니다) — 굽는 쪽 경로 전체 검증
     const u = loadKrxUniverseFile(ROOT)
     eq('사전계산 유니버스도 2010부터', u.years[0], KRX_UNIVERSE_FROM)
-    eq('사전계산 기본 폭은 10+10', u.topN, DEFAULT_KRX_TOP_N)
+    // 사전계산은 **프리셋 전제 폭(10+10)에 고정**된다 — 화면 폭 선택과 무관해야
+    // 프리셋 라벨의 수치가 그 폭에서 나온 값이라는 계약이 유지된다.
+    eq('사전계산 기본 폭은 10+10', JSON.stringify(u.width), JSON.stringify({ kospi: 10, kosdaq: 10 }))
     check('실행 연도가 17년 안팎', u.years.length >= 15, `${u.years.length}년`)
     check('연도에 빈틈이 없다', u.years.every((y, i) => i === 0 || y === u.years[i - 1] + 1))
     check('그 해 유니버스는 최대 20종목', u.years.every((y) => u.codesFor(y).length <= 20))
