@@ -11,6 +11,7 @@ import {
   dayGapSuspects,
   kstDow,
   kstMinOfDay,
+  lastBarMinSummary,
   verdictOf,
 } from '../scripts/lib/verifyIntraday.mjs'
 // @ts-expect-error — .mjs 라이브러리(타입 선언 없음)
@@ -101,6 +102,25 @@ section('2-1) 구조 위반 각각 검출')
 {
   const zv = cleanDay(D0).map((b) => ({ ...b, v: 0 }))
   eq('거래량 0인 날 검출', checkStructure(zv).zeroVolDays.length, 1)
+}
+
+// 2026-08-03 실측 사고 재현: 야후 누적분은 하루 72봉을 09:00~**14:55**로 주고 끝난다.
+// 개수 게이트(78×0.8=62.4)는 통과하지만 15:20~15:30 종가 단일가가 통째로 없어
+// 집계 "종가"가 실제 종가가 아니다 — 80종목 4,800일 중 96.7%가 이 모양이었다.
+section('2-2) 마감 구간 절단 — 개수는 충분한데 종가가 없는 날')
+{
+  const truncated = cleanDay(D0).slice(0, 72) // 09:00~14:55, 72봉 = 92% (thin 아님)
+  const s = checkStructure(truncated)
+  eq('절단일은 thinDays 아님(개수는 충분)', s.thinDays.length, 0)
+  eq('절단일 검출', s.truncatedDays.length, 1)
+  eq('절단일은 fullDays 제외 — 일봉 대조에 안 쓴다', s.fullDays.length, 0)
+  eq('막봉 시각 기록', lastBarMinSummary(s.lastBarMinHist), '14:55×1')
+
+  // 15:20에 끝나면 종가 단일가 구간에 닿았으므로 통과해야 한다(마지막 봉 시각이
+  // 15:20·15:25·15:30 중 무엇이든 오탐하지 않게 SESSION_CLOSE_MIN을 15:15로 잡았다).
+  const toClose = cleanDay(D0).slice(0, 77) // 09:00~15:20
+  eq('15:20 종료는 절단 아님', checkStructure(toClose).truncatedDays.length, 0)
+  eq('15:20 종료는 fullDays 포함', checkStructure(toClose).fullDays.length, 1)
 }
 
 // -------------------------------------------------------------- 3) 스플라이스 감지
@@ -202,6 +222,14 @@ section('6) 판정 — FAIL/WARN/PASS')
 
   const kiwoomOff = verdictOf({ structure, splices: [], kiwoomCmp: { n: 100, badPct: 5, avgAbsDevPct: 0.5 }, yahooCmp: null, yahooVol: null })
   eq('키움 교차 어긋남 → FAIL', kiwoomOff.level, 'FAIL')
+
+  // 절단은 **원인**, 키움 불일치는 **증상**이다. 2026-08-03에 증상만 보고 키움 파싱 버그를
+  // 의심했다 — 판정문에 원인이 먼저 뜨는지 확인한다.
+  const truncStruct = checkStructure(cleanDay(D0).slice(0, 72))
+  const trunc = verdictOf({ structure: truncStruct, splices: [], kiwoomCmp: null, yahooCmp: null, yahooVol: null })
+  eq('마감 절단 → FAIL', trunc.level, 'FAIL')
+  check('FAIL 사유에 마감 구간 결측 명시', trunc.fails.some((f: string) => f.includes('마감 구간 결측')))
+  check('FAIL 사유에 막봉 시각 명시', trunc.fails.some((f: string) => f.includes('14:55')))
 
   const yahooSys = verdictOf({ structure, splices: [], kiwoomCmp: { n: 100, badPct: 0, avgAbsDevPct: 0 }, yahooCmp: { n: 100, badPct: 98, avgAbsDevPct: 0.2, medianSignedDevPct: 0.2 }, yahooVol: { n: 100, medianRatio: 0.9 } })
   eq('Yahoo 계통 편차 → WARN(FAIL 아님)', yahooSys.level, 'WARN')

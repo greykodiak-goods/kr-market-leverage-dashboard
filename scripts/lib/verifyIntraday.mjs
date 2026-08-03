@@ -26,11 +26,34 @@ export function kstMinOfDay(tsSec) {
 }
 
 /**
+ * 하루가 "장 마감까지 닿았다"고 인정하는 마지막 봉의 최소 시작시각(KST 분).
+ *
+ * 왜 개수가 아니라 **시각**을 보는가 (2026-08-03 실측으로 밝혀진 사고):
+ *   기존 게이트는 `봉 개수 ≥ 78×0.8 = 62.4`만 봤다. 그런데 야후 5분봉은 하루 72봉을
+ *   09:00~**14:55**로 주고 끝난다 — 개수 게이트는 통과하지만 **15:00~15:30이 통째로 없다.**
+ *   한국장의 공식 종가는 15:20~15:30 종가 단일가에서 정해지므로, 이 데이터를 일봉으로
+ *   집계하면 "종가"가 실제 종가가 아니라 **15:00 직전 가격**이 된다.
+ *   80종목 4,800일 전수 조사: **96.7%가 14:55에 끝난다.** KRX 일별 정본 종가와 대조하면
+ *   88.5%가 0.1% 허용치를 벗어나고 평균 절대편차 0.712%(부호 중앙값 −0.084% — 계통 편차가
+ *   아니라 산발, 즉 마감 구간 가격 변동 그 자체다).
+ *   개수만 세는 게이트가 이 결함을 몇 달 동안 통과시켰다. 그래서 **마감 도달 여부**를 본다.
+ *
+ * 15:15(915분)로 잡은 이유: 14:55(895분) 절단은 20분 차이로 확실히 잡으면서,
+ * 마지막 봉이 15:20·15:25·15:30 중 무엇으로 찍히든 통과시킨다.
+ * ⚠️ **키움 5분봉의 마지막 봉 시각이 정확히 몇 분인지는 `[미검증]`이다** — 첫 실제 수집
+ * 응답으로 확정한 뒤 이 상수를 조이고 주석의 [미검증]을 지운다(글로벌 규칙 4).
+ */
+export const SESSION_CLOSE_MIN = 915
+
+/**
  * ① 구조 무결성 검사.
  * 정규장 09:00–15:30(장 시작 540분~930분, 봉 시작시각 기준) 밖의 봉,
  * OHLC 역전, 5분 격자 이탈, 중복·역순, 주말 봉을 센다.
  * thinDays: 봉이 정상(78개)의 80% 미만인 날(장 단축·수집 구멍).
+ * truncatedDays: 봉 수는 충분한데 **마지막 봉이 SESSION_CLOSE_MIN 이전**인 날 —
+ *   종가 단일가 구간이 없으므로 이 날의 "종가"는 실제 종가가 아니다.
  * excessDays: 79개 초과인 날(중복·시간축 오염 의심 — 정상적으론 불가능).
+ * fullDays: thin·truncated 둘 다 아닌 날 — **일봉 대조는 이 날들만 쓴다.**
  */
 export function checkStructure(bars) {
   const r = {
@@ -48,12 +71,14 @@ export function checkStructure(bars) {
     firstDate: null,
     lastDate: null,
     thinDays: [],
+    truncatedDays: [], // 봉 수는 충분한데 마감 구간이 없는 날(종가가 실제 종가가 아니다)
+    lastBarMinHist: new Map(), // 막봉 시작시각(분) → 일수 — 절단의 지문을 눈에 보이게
     excessDays: [],
     zeroVolDays: [],
-    fullDays: [], // 봉 수가 충분한 날 — 일봉 대조는 이 날들만 쓴다
+    fullDays: [], // 봉 수도 충분하고 마감까지 닿은 날 — 일봉 대조는 이 날들만 쓴다
   }
   if (!bars.length) return r
-  const byDay = new Map() // date → { n, vol }
+  const byDay = new Map() // date → { n, vol, lastMin }
   let prevTs = -Infinity
   for (const b of bars) {
     if (!(b.o > 0 && b.h > 0 && b.l > 0 && b.c > 0)) r.nonPositive++
@@ -77,9 +102,14 @@ export function checkStructure(bars) {
     else if (b.ts < prevTs) r.unsorted++
     prevTs = b.ts
     const d = kstDate(b.ts)
-    const cur = byDay.get(d) ?? { n: 0, vol: 0 }
+    const cur = byDay.get(d) ?? { n: 0, vol: 0, lastMin: -1, lastTs: -Infinity }
     cur.n++
     cur.vol += b.v ?? 0
+    // 막봉은 "가장 늦은 봉"이지 "배열 마지막 봉"이 아니다 — 역순 데이터에서도 맞게 잡는다.
+    if (b.ts > cur.lastTs) {
+      cur.lastTs = b.ts
+      cur.lastMin = mod
+    }
     byDay.set(d, cur)
   }
   const days = [...byDay.keys()].sort()
@@ -87,13 +117,33 @@ export function checkStructure(bars) {
   r.firstDate = days[0]
   r.lastDate = days[days.length - 1]
   for (const d of days) {
-    const { n, vol } = byDay.get(d)
-    if (n < KR_BARS_PER_DAY * 0.8) r.thinDays.push(d)
-    else r.fullDays.push(d)
+    const { n, vol, lastMin } = byDay.get(d)
+    r.lastBarMinHist.set(lastMin, (r.lastBarMinHist.get(lastMin) ?? 0) + 1)
+    // 두 게이트를 **둘 다** 통과해야 대조에 쓴다: 개수(구멍 없음) + 마감 도달(종가 유효).
+    // 개수만 보던 시절 야후의 14:55 절단이 몇 달을 통과했다(위 SESSION_CLOSE_MIN 주석).
+    const thin = n < KR_BARS_PER_DAY * 0.8
+    const truncated = lastMin < SESSION_CLOSE_MIN
+    if (thin) r.thinDays.push(d)
+    if (truncated) r.truncatedDays.push(d)
+    if (!thin && !truncated) r.fullDays.push(d)
     if (n > KR_BARS_PER_DAY + 1) r.excessDays.push(d)
     if (vol === 0) r.zeroVolDays.push(d)
   }
   return r
+}
+
+/** 자정 기준 경과 분 → "15:25" */
+export function fmtMin(m) {
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
+}
+
+/** 막봉 시각 분포를 사람이 읽는 한 줄로 — "14:55×4640 15:00×80" 형태(많은 순 3개). */
+export function lastBarMinSummary(hist, top = 3) {
+  return [...(hist ?? new Map()).entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, top)
+    .map(([m, n]) => `${fmtMin(m)}×${n}`)
+    .join(' ')
 }
 
 /**
@@ -188,18 +238,23 @@ export function verdictOf({ structure, splices, kiwoomCmp, kiwoomVol, yahooCmp, 
       `구조 위반 ohlc=${s.ohlcBad} 격자=${s.offGrid} 주말=${s.weekend} 중복=${s.dup} 역순=${s.unsorted} 비양수=${s.nonPositive}`,
     )
   if (s.excessDays.length) fails.push(`봉 초과일 ${s.excessDays.length}일(${s.excessDays.slice(0, 2).join(',')})`)
-  if (s.outOfSession) {
-    const fmt = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
-    const times = [...(s.outOfSessionTimes ?? new Map()).entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3)
-      .map(([m, n]) => `${fmt(m)}×${n}`)
-      .join(' ')
-    warns.push(`장외 시간 봉 ${s.outOfSession}개(${times})`)
-  }
+  if (s.outOfSession) warns.push(`장외 시간 봉 ${s.outOfSession}개(${lastBarMinSummary(s.outOfSessionTimes)})`)
   if (splices.length)
     fails.push(`수정주가 스플라이스 의심 ${splices.length}건(${splices.map((x) => `${x.date} ${x.gapPct}%`).slice(0, 2).join(', ')}) → 파일 삭제 후 전체 재수집`)
   if (s.days && s.thinDays.length > s.days * 0.05) warns.push(`구멍 난 날 ${s.thinDays.length}/${s.days}일`)
+  // 마감 절단 — **키움 일봉 불일치보다 먼저** 판정한다. 절단된 데이터를 일봉과 대조하면
+  // "불일치 88%"라는 2차 증상만 보이고 원인(마감 구간 결측)은 안 보이기 때문이다.
+  // 2026-08-03에 실제로 그렇게 오진했다: 키움 파싱 버그를 의심했는데 범인은 야후 누적분이었다.
+  if (s.days && s.truncatedDays.length) {
+    const ratio = s.truncatedDays.length / s.days
+    const msg =
+      `마감 구간 결측 ${s.truncatedDays.length}/${s.days}일 — 막봉이 ${fmtMin(SESSION_CLOSE_MIN)} 이전에 끝난다` +
+      ` (막봉 시각 ${lastBarMinSummary(s.lastBarMinHist)}).` +
+      ` 한국장 공식 종가는 15:20~15:30 종가 단일가에서 정해지므로 이 날들의 "종가"는 실제 종가가 아니다` +
+      ` → 일봉 대조에서 제외했고, 장중 전략·종가 기준 신호에 쓰면 안 된다.`
+    if (ratio > 0.05) fails.push(msg)
+    else warns.push(`${msg} (장 단축일일 수 있다 — 비율 ${(ratio * 100).toFixed(1)}%)`)
+  }
   if (s.zeroVolDays.length) warns.push(`거래량 0인 날 ${s.zeroVolDays.length}일`)
   if (kiwoomCmp && kiwoomCmp.n) {
     if (kiwoomCmp.badPct > 1) fails.push(`키움 일봉 불일치 ${kiwoomCmp.badPct.toFixed(1)}% (같은 소스인데 어긋남 — 파싱·병합 버그 의심)`)

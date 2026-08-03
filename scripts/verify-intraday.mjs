@@ -22,7 +22,14 @@ import { join } from 'node:path'
 import { loadSecret } from './lib/loadSecret.mjs'
 import { createKiwoomClient, parseDailyChart } from './lib/kiwoom.mjs'
 import { toDailyBars, unpackBars } from './lib/intraday.mjs'
-import { checkStructure, compareDailySeries, compareVolume, dayGapSuspects, verdictOf } from './lib/verifyIntraday.mjs'
+import {
+  checkStructure,
+  compareDailySeries,
+  compareVolume,
+  dayGapSuspects,
+  lastBarMinSummary,
+  verdictOf,
+} from './lib/verifyIntraday.mjs'
 
 const args = new Map(
   process.argv.slice(2).map((a) => {
@@ -172,7 +179,10 @@ for (const sym of targets) {
       : `Yahoo 교차 불가${yahooCmp.error ? `(${yahooCmp.error})` : ''}`
     : 'Yahoo 스킵'
   console.log(
-    `${verdict.level === 'PASS' ? '✅' : verdict.level === 'WARN' ? '⚠️ ' : '❌'} ${sym} · ${structure.days}일/${structure.bars}봉${structure.afterHours ? `(시간외 ${structure.afterHours})` : ''} · ${kTxt} · ${yTxt}${
+    `${verdict.level === 'PASS' ? '✅' : verdict.level === 'WARN' ? '⚠️ ' : '❌'} ${sym} · ${structure.days}일/${structure.bars}봉${structure.afterHours ? `(시간외 ${structure.afterHours})` : ''}` +
+      ` · 막봉 ${lastBarMinSummary(structure.lastBarMinHist, 2)}` +
+      ` · 대조가능 ${structure.fullDays.length}일` +
+      ` · ${kTxt} · ${yTxt}${
       verdict.fails.length || verdict.warns.length ? ` · ${[...verdict.fails, ...verdict.warns].join(' | ')}` : ''
     }`,
   )
@@ -187,6 +197,13 @@ if (counts.FAIL) {
   for (const r of results.filter((x) => x.verdict.level === 'FAIL'))
     console.log(`  ${r.sym}: ${r.verdict.fails.join(' | ')}`)
   console.log('  → 스플라이스·구조 위반은 해당 파일 삭제 후 kiwoom-backfill.mjs 재실행(전체 재수집)으로 해소된다.')
+  console.log(
+    '  → **마감 구간 결측은 증분 수집으로 못 고친다.** 절단된 과거 구간(야후 누적분)이 파일에 남아 있는 한',
+  )
+  console.log(
+    '     매번 같은 FAIL이 난다. 해당 파일을 비우고 키움에서 전체 재수집해야 하며, 키움 소급 한도 밖 구간은',
+  )
+  console.log('     복구되지 않는다(그 구간은 없는 것으로 취급 — 있는 척하는 것보다 낫다).')
 }
 if (counts.WARN) {
   console.log('\nWARN 종목 — 사용 가능하되 한계 명시(규칙 3):')
