@@ -45,6 +45,18 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - name: 백테스트 실행
         if: inputs.mode != 'presets'
+        # 시크릿은 **ussrc:* (미장 소스 실사)에서만** 쓴다. 나머지 모드는 야후 공개
+        # 엔드포인트라 값이 비어 있어도 그대로 돈다(빈 값이면 loadSecret가 "없음"으로
+        # 판정하고 그 소스를 skipped로 센다 — 조용히 통과시키지 않는다).
+        #
+        # ⚠️ 시크릿 단일 원본은 Doppler(investing-ops/prd)다. 여기 있는 것은 **사본**이고
+        #    그 이유는 하나뿐이다: GHA 러너에는 investing-ops Doppler 토큰이 없고,
+        #    AI 세션엔 그 토큰을 주지 않는다(SECRETS-POLICY). EC2를 쓰지 않기로 한
+        #    2026-08-04 대표 지시에 따라 남은 유일한 경로다. 값이 바뀌면 **두 곳 다** 고쳐야
+        #    한다 — Doppler가 먼저고 여기가 따라간다.
+        env:
+          TIINGO_API_KEY: ${{ secrets.TIINGO_API_KEY }}
+          ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
         run: |
           RAW="${{ inputs.mode }}"
           SCRIPT="spec-backtest.mjs"; RUN_MODE="$RAW"
