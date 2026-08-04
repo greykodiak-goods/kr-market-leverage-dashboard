@@ -27,8 +27,10 @@
 //        현재 구성종목 표의 열: `Symbol · Security · GICS Sector · GICS Sub-Industry ·
 //              Headquarters Location · Date added · CIK · Founded`
 //              (2026-07-13 시점 실제 표 헤더 — github.com/fja05680/sp500 노트북 출력으로 확인)
-//        변경 이력표의 열: `Date · Added(Ticker, Security) · Removed(Ticker, Security) · Reason`
-//              **[미검증]** — 헤더 2단(rowspan/colspan) 구조라 이름 후보를 여러 개 받아들이고,
+//        변경 이력표의 열: `Effective Date · Added(Ticker, Security) · Removed(Ticker, Security) · Reason`
+//              (2026-08-04 GHA run 30873560955의 **실제 응답으로 확정**. 첫 실행은 여기서
+//              실패했는데, 원인은 열 이름이 아니라 파서였다 — 2단 헤더 아랫줄이 `!!`가 아니라
+//              `||`로 구분돼 있어 셀 1개로 뭉쳤다. 관용 파싱을 넓히는 대신 구분자를 고쳤다.)
 //              하나도 못 찾으면 **던진다**(기본값으로 때우지 않는다).
 //   ④ 데이터 범위: 현재 목록은 완전하다. 변경 이력표는 제목 그대로 **"Selected changes"**이며
 //      **불완전하다.** 이 데이터셋을 10년 넘게 유지해 온 fja05680/sp500의 저자도 README에
@@ -271,7 +273,12 @@ export function parseTableRows(block: string): { isHeader: boolean; cells: WikiC
     if (t.startsWith('!')) {
       if (!cur) cur = { isHeader: true, cells: [] }
       cur.isHeader = true
-      for (const c of splitTopLevel(t.slice(1), '!!')) cur.cells.push(splitAttrs(c))
+      // 헤더 행의 인라인 구분자는 `!!` **와** `||` 둘 다다 — MediaWiki가 둘을 같게 취급한다.
+      // `!!`만 자르면 `! Ticker || Security || Ticker || Security` 한 줄이 셀 1개로 뭉쳐
+      // 2단 헤더가 무너진다(2026-08-04 uspit:collect run 30873560955 실패의 원인:
+      // 헤더가 `Added Ticker || Security || Ticker || Security`로 나와 'Added Security'를 못 찾았다).
+      for (const h of splitTopLevel(t.slice(1), '!!'))
+        for (const c of splitTopLevel(h, '||')) cur.cells.push(splitAttrs(c))
       continue
     }
     if (t.startsWith('|+')) continue // 표 캡션 — 셀이 아니다
@@ -464,9 +471,10 @@ export interface ChangeRow {
 }
 
 /**
- * 변경 이력표를 읽는다. 헤더는 2단(`Date | Added(Ticker,Security) | Removed(Ticker,Security) | Reason`)
- * 이라 `expandSpans`가 펼친 뒤 상·하단을 이어 붙인 이름으로 매칭한다. **[미검증]** —
- * 첫 실행의 실제 헤더로 확정한다. 하나도 못 맞추면 `findColumn`이 실제 헤더를 찍고 던진다.
+ * 변경 이력표를 읽는다. 헤더는 2단(`Effective Date | Added(Ticker,Security) |
+ * Removed(Ticker,Security) | Reason`)이라 `expandSpans`가 펼친 뒤 상·하단을 이어 붙인
+ * 이름으로 매칭한다. 열 이름은 2026-08-04 실제 응답으로 확정했다.
+ * 하나도 못 맞추면 `findColumn`이 실제 헤더를 찍고 던진다.
  */
 export function parseChangesTable(block: string, where = '변경 이력표'): { rows: ChangeRow[]; skipped: number } {
   const grid = expandSpans(parseTableRows(block))
@@ -617,8 +625,8 @@ export async function collect(): Promise<number> {
   log(`미장 실측 PIT 유니버스 수집 — ${meta.page} (${fromYear}~${toYear})`)
   log(`출처: ${meta.url} · 라이선스 CC BY-SA · UA=${userAgent()}`)
   log('⚠️ 변경 이력표는 "Selected changes"라 **불완전하다**. 되감기 한계는 추정하지 않고 게이트로 측정한다.')
-  log('⚠️ [미검증] 변경 이력표의 열 이름(Date/Added Ticker/Added Security/Removed Ticker/Removed Security)은')
-  log('   공식 문서로 확정하지 못했다 — 아래 "표#n" 로그의 실제 헤더로 확정한 뒤 이 문구를 지운다.')
+  log('✅ 변경 이력표 열 이름은 2026-08-04 실제 응답으로 확정: Effective Date / Added(Ticker,Security)')
+  log('   / Removed(Ticker,Security) / Reason. 2단 헤더 아랫줄 구분자는 `!!`가 아니라 `||`다.')
   log('⚠️ [미검증] Wikipedia 익명 읽기의 수치 호출 상한. 이 수집기는 지수당 HTTP 1건 + 디스크 캐시다.')
   log('')
 

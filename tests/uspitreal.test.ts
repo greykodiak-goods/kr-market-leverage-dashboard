@@ -164,6 +164,35 @@ eq('rowspan된 날짜가 다음 행에 복제된다(열 밀림 방지)', plain(s
 eq('열이 밀리지 않았다 — 2행 Added Ticker', plain(spanData[1].cells[1]), 'CCC')
 eq('열이 밀리지 않았다 — 2행 Reason', plain(spanData[1].cells[5]), '인수 완료')
 
+// ── 실제 응답으로 확정된 헤더 (2026-08-04 GHA run 30873560955) ────────────────
+// 위 SPAN_TABLE 픽스처는 2단 헤더 아랫줄을 `!!`로 썼는데, **실제 문서는 `||`를 쓴다.**
+// MediaWiki는 헤더 행에서 `!!`와 `||`를 같게 취급하지만 파서는 `!!`만 잘랐다 →
+// 아랫줄 전체가 셀 1개로 뭉쳐 헤더가
+//   [Effective Date | Added Ticker || Security || Ticker || Security | Added | Removed | Removed | Reason]
+// 로 나왔고 'Added Security'를 못 찾아 수집이 통째로 실패했다(조용히 넘어가지는 않았다 —
+// findColumn이 실제 헤더를 찍고 던졌다). 픽스처가 실제와 달라 테스트는 초록이었다.
+// 아래는 그 실제 헤더를 그대로 재현한 회귀 픽스처다.
+const REAL_CHANGES_TABLE = `
+! rowspan="2" | Effective Date
+! colspan="2" | Added
+! colspan="2" | Removed
+! rowspan="2" | Reason
+|-
+! Ticker || Security || Ticker || Security
+|-
+| September 22, 2025 || AAA || Alpha Co || BBB || Beta Co || S&P 500 재구성
+`
+eq(
+  '실제 문서 헤더(아랫줄 `||` 구분자) → 열 이름이 제대로 합성된다',
+  headerOf(expandSpans(parseTableRows(REAL_CHANGES_TABLE))).join('|'),
+  'Effective Date|Added Ticker|Added Security|Removed Ticker|Removed Security|Reason',
+)
+const realChg = parseChangesTable(REAL_CHANGES_TABLE)
+eq('실제 헤더에서도 편입 티커를 읽는다', realChg.rows[0].added[0].ticker, 'AAA')
+eq('실제 헤더에서도 편입 사명을 읽는다', realChg.rows[0].added[0].name, 'Alpha Co')
+eq('실제 헤더에서도 제외 티커를 읽는다', realChg.rows[0].removed[0].ticker, 'BBB')
+eq("'Effective Date'도 Date 열로 인식한다", realChg.rows[0].date, '2025-09-22')
+
 // ═════════════════════════════════════════════════════════════════════════════
 section('③ 현재 구성종목 표 · 변경 이력표 파싱')
 
