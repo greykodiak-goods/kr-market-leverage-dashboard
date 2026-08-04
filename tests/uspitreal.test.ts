@@ -22,7 +22,12 @@
 import { check, eq, section, finish } from './harness'
 import {
   US_BLOCKED_TICKERS,
+  US_LATE_ADDED_MAX,
+  US_LATE_FIXED_RATE_BASIS,
+  US_LATE_FIXED_RATE_MAX,
   US_PIT_REAL_LOAD_FAIL,
+  US_PIT_REAL_SCHEMA,
+  usFixedRate,
   buildUsPitRealUniverse,
   deriveUsRealUniverse,
   judgeUsPitReliability,
@@ -290,10 +295,13 @@ check('티커변경: 2022-01-01 목록에는 FB가 있고 META는 없다', at(20
 check('티커변경: 2023-01-01 목록에는 META가 있고 FB는 없다', at(2023).includes('META') && !at(2023).includes('FB'))
 check('티커재사용: 2009 목록의 SUNW는 Sun Microsystems', rw.years[2009].members.some((m) => m.ticker === 'SUNW' && m.name === 'Sun Microsystems'))
 check('티커재사용: 2026 목록의 SUNW는 Sunworks', rw.years[2026].members.some((m) => m.ticker === 'SUNW' && m.name === 'Sunworks'))
-eq('이력 구멍: 2015 목록에 늦은편입 1건(GAP)', rw.years[2015].lateAdded, 1)
-eq('이력 구멍: 2016 목록에는 0건', rw.years[2016].lateAdded, 0)
-eq('늦은편입 표본에 티커·편입일이 남는다', rw.years[2015].lateAddedSample[0], 'GAP(2015-04-01)')
-check('되감기가 크기를 흔들지 않았다(전 연도 9종목)', Object.values(rw.years).every((r) => r.members.length === 9))
+eq('이력 구멍: 2015 목록에서 늦은편입 1건(GAP)을 교정한다', rw.years[2015].lateAddedFixed, 1)
+eq('이력 구멍: 2016 목록에는 교정 0건', rw.years[2016].lateAddedFixed, 0)
+check('교정 후 잔여 위반은 전 연도 0', Object.values(rw.years).every((r) => r.lateAdded === 0))
+eq('교정 표본에 티커·편입일이 남는다', rw.years[2015].lateAddedFixedSample[0], 'GAP(2015-04-01)')
+check('교정 전에는 되감기가 크기를 흔들지 않았다(전 연도 9종목)', Object.values(rw.years).every((r) => r.members.length + r.lateAddedFixed === 9))
+check('교정이 크기를 줄인 것은 GAP이 남던 2015년 이하뿐(9 → 8)', rw.years[2016].members.length === 9 && rw.years[2015].members.length === 8)
+check('이상 징후 누계는 과거로 갈수록 줄지 않는다', rw.years[2008].addNotPresent >= rw.years[2026].addNotPresent)
 check(
   '되감기로 재편입된 종목은 편입일을 모른다(null) — 모르는 것을 지어내지 않는다',
   rw.years[2024].members.find((m) => m.ticker === 'OLD')?.addedOn === null,
@@ -320,22 +328,105 @@ check(
 )
 
 // ═════════════════════════════════════════════════════════════════════════════
+section('④-b 교착 재현 — "변경표에 편입행이 없는 최신 종목" 1건이 전량 거부를 만들던 자리')
+//
+// 🔴 2026-08-04 GHA run 30874993266 재현.
+//   위키 파싱은 **정상**이었다(현재 구성종목 504 · 편입일 503/503 · 변경행 406 · 버린 행 0).
+//   그런데 2026-03-23 편입된 SATS의 **편입행이 변경 이력표에 없어서** 되감은 목록에
+//   그대로 남았고, `lateAdded=1 > US_LATE_ADDED_MAX=0` 으로 **가장 최근 연도부터** 게이트가
+//   깨져 수집이 통째로 거부됐다. 그 종목의 `addedOn`은 **모든 과거 연도 스냅샷에도 남으므로**
+//   어떤 해도 통과할 수 없다 — 임계를 만지지 않는 한 구조적 교착이다.
+//
+//   해법은 임계 완화가 아니라 **`Date added`를 되감기의 보조 진실로 쓰는 교정**이다.
+//   그 시점에 아직 편입되지 않은 종목을 스냅샷에서 **제거**하고, 제거 건수를
+//   `lateAddedFixed`로 남긴다 — 버그가 아니라 "변경 이력표가 이만큼 불완전하다"는 측정값이다.
+//
+//   ⚠️ 아래 임계값(FIX_MAX_DEAD)은 **이 합성 10종목 지수용**이다. 운영 임계
+//      `US_LATE_FIXED_RATE_MAX`는 500종목 지수 기준이라 그대로 쓰면 의미가 없다
+//      (밴드를 [477,517] 대신 [7,11]로 좁혀 쓰는 것과 같은 이유).
+
+const CURRENT_DEADLOCK: CurrentMember[] = [
+  ...CURRENT,
+  // 변경 이력표에 **편입행이 없는** 종목. 실제 사고의 SATS에 해당한다.
+  { ticker: 'SATZ', name: 'Satz Communications', addedOn: '2026-03-23' },
+]
+const rwDead = rewind(CURRENT_DEADLOCK, CHANGES, '2026-08-03', 2008, 2026)
+/** 합성 지수(10종목)용 교정 비율 임계 — 1건(10%)은 견디고 2건(20%)은 못 견디는 자리. */
+const FIX_MAX_DEAD = 0.15
+/** 교정 뒤 크기가 8~9라 밴드도 그에 맞춰 좁힌다(운영 밴드 [477,517]과 같은 역할). */
+const BAND_DEAD: [number, number] = [7, 11]
+
+eq('교정: 최신 연도(2026)에서 늦은편입 1건을 제거한다', rwDead.years[2026].lateAddedFixed, 1)
+eq('교정 후 잔여 위반은 구조상 0', rwDead.years[2026].lateAdded, 0)
+check('교정된 종목은 그 해 스냅샷에 없다', !rwDead.years[2026].members.some((m) => m.ticker === 'SATZ'))
+eq('교정 표본에 티커·편입일이 남는다(숨기지 않는다)', rwDead.years[2026].lateAddedFixedSample[0], 'SATZ(2026-03-23)')
+eq('교정은 과거 연도에도 같은 종목을 걷어낸다', rwDead.years[2015].lateAddedFixed, 2)
+check('교정 뒤 크기: 2026=9 · 2015=8', rwDead.years[2026].members.length === 9 && rwDead.years[2015].members.length === 8)
+
+const judgedDead = judgeUsPitReliability(
+  Object.fromEntries(Object.entries(rwDead.years).map(([k, v]) => [k, v as UsPitYearRecord])),
+  BAND_DEAD,
+  FIX_MAX_DEAD,
+)
+check('교착 해소: 최신 연도가 게이트를 통과한다(예전 코드는 여기서 던졌다)', judgedDead.verdicts['2026'].ok === true)
+eq('교정 비율이 판정표에 숫자로 남는다', judgedDead.verdicts['2026'].fixedRate, 0.1)
+eq('교정 전 크기도 남는다(비율의 분모를 검증 가능하게)', judgedDead.verdicts['2026'].sizeBeforeFix, 10)
+eq('신뢰 경계는 교정 비율이 정한다 — 2015(20%)에서 끊긴다', judgedDead.reliableFrom, 2016)
+check('2015년은 교정비율 게이트에서 실패', judgedDead.verdicts['2015'].fixedRateOk === false)
+
+// ═════════════════════════════════════════════════════════════════════════════
 section('⑤ 신뢰구간 게이트 — reliableFrom은 데이터가 정한다')
 
+// ── 운영 상수 — **완화되지 않았음을 못 박는다** ─────────────────────────────
+eq('잔여 위반 허용치는 여전히 0 (임계를 올려 교착을 "해결"하지 않았다)', US_LATE_ADDED_MAX, 0)
+check('교정 비율 임계는 0 초과 · 10% 이하 (너무 후하게 열어 두지 않는다)', US_LATE_FIXED_RATE_MAX > 0 && US_LATE_FIXED_RATE_MAX <= 0.1)
+check('임계 숫자에는 근거 문장이 붙어 있다', US_LATE_FIXED_RATE_BASIS.length > 80 && /밴드|회전율/.test(US_LATE_FIXED_RATE_BASIS))
+eq('교정 비율은 교정 전 크기를 분모로 쓴다', usFixedRate(9, 1), 0.1)
+eq('교정 0건이면 비율 0', usFixedRate(500, 0), 0)
+
 const BAND: [number, number] = [7, 11]
-const judged = judgeUsPitReliability(
-  Object.fromEntries(Object.entries(rw.years).map(([k, v]) => [k, v as UsPitYearRecord])),
-  BAND,
-  0,
-)
-eq('reliableFrom = 2016 (2015년 늦은편입 1건에서 끊긴다)', judged.reliableFrom, 2016)
-check('2015년 판정 실패', judged.verdicts['2015'].ok === false && judged.verdicts['2015'].lateAddedOk === false)
+/** 합성 지수(9종목)용 교정 비율 임계 — 1건(11.1%)에서 끊기는 자리. 운영 임계와 다른 이유는 위 ④-b 참조. */
+const FIX_MAX: number = 0.05
+const asRecords = (src: Record<number, UsPitYearRecord>): Record<string, UsPitYearRecord> =>
+  Object.fromEntries(Object.entries(src).map(([k, v]) => [k, v as UsPitYearRecord]))
+const judged = judgeUsPitReliability(asRecords(rw.years), BAND, FIX_MAX)
+eq('reliableFrom = 2016 (2015년 교정 1/9=11.1%에서 끊긴다)', judged.reliableFrom, 2016)
+check('2015년 판정 실패', judged.verdicts['2015'].ok === false && judged.verdicts['2015'].fixedRateOk === false)
 check('2016년 판정 통과', judged.verdicts['2016'].ok === true)
 
+// ── throw 조건 재정의: 두 게이트의 **진단을 가른다** ─────────────────────────
+// 구판은 최신 연도 실패를 뭉뚱그려 "현재 목록 파싱이 틀렸을 가능성이 높다"고만 말했는데,
+// 2026-08-04 실측에서 그 진단은 틀렸다(파싱은 멀쩡, 변경 이력표가 불완전).
 throws(
-  '가장 최근 연도부터 깨지면 던진다(되감기 이전에 현재 목록 파싱이 틀린 것)',
-  () => judgeUsPitReliability(Object.fromEntries(Object.entries(rw.years).map(([k, v]) => [k, v as UsPitYearRecord])), [100, 200], 0),
-  '가장 최근 연도',
+  '최신 연도의 **구성종목 수**가 밴드 밖이면 → 현재 목록 파싱을 의심하라고 던진다',
+  () => judgeUsPitReliability(asRecords(rw.years), [100, 200], FIX_MAX),
+  '현재 목록 파싱',
+)
+throws(
+  '최신 연도의 **교정 비율**이 임계를 넘으면 → 파싱은 정상이고 변경 이력표가 불완전하다고 던진다',
+  () => judgeUsPitReliability(asRecords(rwDead.years), BAND_DEAD, 0.05),
+  '변경 이력표가 가장 최근 구간부터 이미 불완전',
+)
+check(
+  '교정비율 실패의 진단문에 "현재 목록 파싱이 틀렸다"는 오진이 없다',
+  (() => {
+    try {
+      judgeUsPitReliability(asRecords(rwDead.years), BAND_DEAD, 0.05)
+      return false
+    } catch (e) {
+      return /현재 목록 파싱은 정상이다/.test((e as Error).message)
+    }
+  })(),
+)
+throws(
+  '교정을 거치지 않은 입력(잔여 위반 > 0)은 판정 자체를 거부한다 — 임계로 넘길 문제가 아니다',
+  () =>
+    judgeUsPitReliability(
+      { '2026': { ...rw.years[2026], lateAdded: 1 } },
+      BAND,
+      FIX_MAX,
+    ),
+  '되감기 교정(rewind)을 거치지 않은 입력',
 )
 
 const uni = buildUsPitRealUniverse({
@@ -346,9 +437,11 @@ const uni = buildUsPitRealUniverse({
   changesFirstDate: '2010-01-27',
   changeRows: CHANGES.length,
   sizeBand: BAND,
-  lateAddedMax: 0,
+  fixedRateMax: FIX_MAX,
+  fixedRateBasis: '합성 픽스처용 임계 — 9종목 지수에서 1건(11.1%)이 걸리는 자리',
 })
 eq('빌드 결과 reliableFrom', uni.reliableFrom, 2016)
+eq('스키마 버전이 데이터에 박힌다', uni.schema, US_PIT_REAL_SCHEMA)
 eq('시총 순위는 만들지 않는다', uni.rankSource, 'none')
 check('라이선스(CC BY-SA)를 데이터에 남긴다', /CC BY-SA/.test(uni.license))
 check('출처 문구에 "시총 상위 N이 아니다"가 들어 있다', /시총 상위 N이 아니다/.test(uni.basis))
@@ -356,8 +449,10 @@ eq('신뢰구간 연도 = 2016~2026', usRealYears(uni).join(','), '2016,2017,201
 check('전체 연도는 2008부터 남아 있다(버리지 않고 경계만 기록)', usRealAllYears(uni)[0] === 2008)
 check('출처 한 줄에 신뢰구간·게이트 수치가 들어 있다', /reliableFrom|신뢰|되감기 신뢰 판정/.test(usRealSourceNote(uni)))
 
+check('출처 한 줄에 교정 규모가 드러난다(불완전성을 숨기지 않는다)', /교정/.test(usRealSourceNote(uni)))
+
 throws('신뢰구간 밖 연도는 조용히 못 쓴다 — 던진다', () => usRealCodes(uni, 2012), '신뢰구간 밖')
-eq('진단 목적이면 명시적으로만 꺼낼 수 있다', usRealCodes(uni, 2012, true).length, 9)
+eq('진단 목적이면 명시적으로만 꺼낼 수 있다(2012는 GAP이 교정돼 8종목)', usRealCodes(uni, 2012, true).length, 8)
 throws('구간 시작이 신뢰구간 밖이면 던진다', () => usRealSpan(uni, 2010, 2026), '신뢰구간')
 eq('신뢰구간 안이면 구멍 없이 돌려준다', usRealSpan(uni, 2018, 2020).join(','), '2018,2019,2020')
 
@@ -398,7 +493,100 @@ const mutate = (f: (o: Record<string, unknown>) => void): Record<string, unknown
 }
 
 check('정상 파일은 통과', parseUsPitRealUniverse(good).reliableFrom === 2016)
+throws('schema 필드가 없으면 거부(구판 파일을 조용히 읽지 않는다)', () => parseUsPitRealUniverse(mutate((o) => delete o.schema)), 'schema')
+throws('schema 버전이 다르면 거부', () => parseUsPitRealUniverse(mutate((o) => (o.schema = 'us-pit/universe@1'))), 'schema')
 throws('rankSource를 순위 있는 것처럼 바꾸면 거부', () => parseUsPitRealUniverse(mutate((o) => (o.rankSource = 'marketcap'))), 'rankSource')
+
+// ── 교정 관련 신설 필드도 **같은 급으로** 위조를 막는다 ──────────────────────
+throws(
+  '교정을 안 돌린 파일 거부 — members에서 직접 다시 세어 늦은편입 잔여를 찾아낸다',
+  () =>
+    parseUsPitRealUniverse(
+      mutate((o) => {
+        // lateAdded는 0으로 둔 채 members에만 "그 시점 이후 편입" 종목을 끼워 넣는다.
+        const y = (o.years as Record<string, { members: { ticker: string; name: string; addedOn: string | null }[] }>)['2020']
+        y.members.push({ ticker: 'ZED', name: 'Zed Co', addedOn: '2025-01-01' })
+      }),
+    ),
+  '되감기 교정이 적용되지 않았다',
+)
+throws(
+  'lateAdded를 0이 아닌 값으로 적으면 거부(구조상 0이어야 한다)',
+  () =>
+    parseUsPitRealUniverse(
+      mutate((o) => {
+        ;(o.years as Record<string, { lateAdded: number }>)['2020'].lateAdded = 1
+      }),
+    ),
+  '구조상 0이어야 한다',
+)
+throws(
+  '판정표의 lateAddedFixed를 줄여 적으면 거부',
+  () =>
+    parseUsPitRealUniverse(
+      mutate((o) => {
+        ;((o.reliability as Record<string, unknown>).years as Record<string, { lateAddedFixed: number }>)['2015'].lateAddedFixed = 0
+      }),
+    ),
+  'lateAddedFixed',
+)
+throws(
+  '교정 비율의 **분모**를 부풀려 임계를 통과시키면 거부',
+  () =>
+    parseUsPitRealUniverse(
+      mutate((o) => {
+        const v = ((o.reliability as Record<string, unknown>).years as Record<string, { sizeBeforeFix: number }>)['2015']
+        v.sizeBeforeFix = 100
+      }),
+    ),
+  '비율의 분모를 손대지 마라',
+)
+throws(
+  '교정 비율 값을 위조하면 거부(재계산과 대조)',
+  () =>
+    parseUsPitRealUniverse(
+      mutate((o) => {
+        ;((o.reliability as Record<string, unknown>).years as Record<string, { fixedRate: number }>)['2015'].fixedRate = 0.01
+      }),
+    ),
+  '재계산값',
+)
+throws(
+  '임계 근거 문장을 지우면 거부(숫자만 남기지 마라)',
+  () => parseUsPitRealUniverse(mutate((o) => ((o.reliability as Record<string, unknown>).lateAddedFixedRateBasis = ''))),
+  'lateAddedFixedRateBasis',
+)
+throws(
+  '교정 표본을 교정 건수보다 많이 적으면 거부(표본 날조 방지)',
+  () =>
+    parseUsPitRealUniverse(
+      mutate((o) => {
+        ;(o.years as Record<string, { lateAddedFixedSample: string[] }>)['2020'].lateAddedFixedSample = ['XYZ(2020-05-05)']
+      }),
+    ),
+  '표본을 지어내지 마라',
+)
+throws(
+  'dateAddedKnown 위조 거부(members에서 다시 센다)',
+  () =>
+    parseUsPitRealUniverse(
+      mutate((o) => {
+        ;(o.years as Record<string, { dateAddedKnown: number }>)['2020'].dateAddedKnown = 0
+      }),
+    ),
+  'dateAddedKnown',
+)
+throws(
+  '이상 징후 누계가 과거로 갈수록 줄면 거부(누계가 아니다)',
+  () =>
+    parseUsPitRealUniverse(
+      mutate((o) => {
+        const ys = o.years as Record<string, { addNotPresent: number }>
+        ys['2026'].addNotPresent = 5
+      }),
+    ),
+  '누계가 아니다',
+)
 throws('라이선스 삭제 거부', () => parseUsPitRealUniverse(mutate((o) => (o.license = ''))), 'license')
 throws(
   '한 해 안의 중복 티커 거부',

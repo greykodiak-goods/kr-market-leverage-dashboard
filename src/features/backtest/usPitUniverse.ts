@@ -597,18 +597,73 @@ export const US_SIZE_BAND_BASIS =
   'ndx: 지수 정의(100~102)에서 잡은 [95, 107] [미검증]'
 
 /**
- * **되감기 신뢰 게이트 ②** — "늦게 편입된 종목이 과거 목록에 남아 있는 수"의 허용치.
+ * **되감기 잔여 위반 허용치 — 여전히 0.** (구 "게이트 ②"의 임계였던 상수)
  *
  * 현재 구성종목 표에는 `Date added`(편입일) 열이 있다. 되감기가 완전하다면 기준일 D의
- * 복원 목록에는 **편입일이 D보다 늦은 종목이 하나도 없어야 한다.** 하나라도 있으면 그
- * 종목의 편입 행이 변경 이력표에서 빠졌다는 **직접 증거**다(추정이 아니다).
- * 기본값 0 — 한 건도 허용하지 않는다.
+ * 복원 목록에는 **편입일이 D보다 늦은 종목이 하나도 없어야 한다.**
  *
- * ⚠️ 이 게이트는 **한 방향만** 잡는다. "그 시절 있었다가 지금은 없는 회사"는 현재 표에
- *   없으므로 편입일을 알 수 없고, 그 종목의 누락은 여기서 안 잡힌다. 즉 두 게이트를
+ * ⚠️ **2026-08-04 개정 — 이 값은 이제 "임계"가 아니라 "불변식"이다.**
+ *   개정 전에는 이 수를 세어 0을 넘으면 그 해를 버렸는데, 그 설계가 **구조적 교착**을
+ *   만들었다(GHA run 30874993266): 2026-03-23 편입된 SATS의 편입행이 변경 이력표에 없어
+ *   `lateAdded=1`이 나왔고, 그 종목의 `addedOn`은 **모든 과거 연도 스냅샷에도 그대로 남으므로**
+ *   어떤 해도 통과할 수 없어 데이터셋 전체가 거부됐다. 위키 파싱 자체는 정상이었다
+ *   (현재 구성종목 504 · 편입일 503/503 · 변경행 406 · 버린 행 0).
+ *
+ *   해법은 임계 완화가 아니다 — **`Date added`를 되감기의 보조 진실로 쓴다.** `Date added`는
+ *   현재 구성종목 **전원**에 있고, 변경 이력표는 스스로 "**Selected** changes"라 밝힌
+ *   불완전한 소스다. 편입 사실에 관해서는 `Date added`가 더 완전하므로, 그 시점에 아직
+ *   편입되지 않은 종목은 스냅샷에서 **제거**한다(`lateAddedFixed`로 계수).
+ *   따라서 파일에 남는 `lateAdded`는 **구조상 0**이며, 0이 아니면 교정을 거치지 않은
+ *   입력이라는 뜻이라 파서가 거부한다. **완화가 아니라 검사 방향의 교체다.**
+ *
+ * ⚠️ 이 검사는 **한 방향만** 잡는다. "그 시절 있었다가 지금은 없는 회사"는 현재 표에
+ *   없으므로 편입일을 알 수 없고, 그 종목의 누락은 여기서 안 잡힌다. 즉 게이트를
  *   모두 통과해도 "완전하다"는 증명이 아니라 **"발견 가능한 결함이 없다"**는 뜻이다.
  */
 export const US_LATE_ADDED_MAX = 0
+
+/**
+ * **되감기 신뢰 게이트 ②(신판)** — 그 해 스냅샷에서 교정으로 걷어낸 비율의 상한.
+ *
+ * 교정 건수 자체는 버그가 아니라 **"변경 이력표가 이만큼 불완전하다"는 측정값**이다.
+ * 한 건도 없을 수는 없으므로(그 표는 Selected changes다) 임계는 **비율**에 건다:
+ *   `lateAddedFixed / (교정 전 스냅샷 크기)` 가 이 값을 넘으면 그 해부터 신뢰 불가.
+ *
+ * 값의 근거는 `US_LATE_FIXED_RATE_BASIS`에 문장으로 남긴다(숫자만 두지 않는다).
+ */
+export const US_LATE_FIXED_RATE_MAX = 0.04
+
+/**
+ * 임계 0.04의 근거 — **데이터 파일에 그대로 박아 둔다**(나중에 "왜 이 숫자?"를 잃지 않게).
+ *
+ * 두 갈래가 같은 자리를 가리켜서 골랐다. 임의로 고른 숫자가 아니라는 뜻이지,
+ * 최적값이라는 뜻은 아니다 — **첫 실행의 연도별 분포로 재검토한다**(수집기가 그 분포를 찍는다).
+ */
+export const US_LATE_FIXED_RATE_BASIS =
+  '① 밴드 정합: 구성종목 수 밴드 [477,517]의 반폭 20을 중심 497로 나누면 4.02%다. ' +
+  '수 게이트가 이미 "4% 어긋나면 못 믿는다"고 선언했으므로, 같은 스냅샷의 **구성 오차**에 ' +
+  '다른 잣대를 새로 만들지 않고 같은 4%를 쓴다. ' +
+  '② 회전율 정합: S&P 500의 연간 교체는 대략 20종목 ≈ 500의 4% 수준이다 [미검증 — 이 리포가 ' +
+  '측정한 값은 **순증감** 최대 ±5뿐이고 총교체(gross)는 그보다 크다]. 한 해치 교체량보다 더 많이 ' +
+  '교정해야 하는 스냅샷은 "그 다음 해 목록을 그대로 쓰는 것"보다 나을 근거가 없어 되감기의 의미가 없다. ' +
+  '③ 백스톱: 교정은 스냅샷을 **줄이므로** 큰 교정은 결국 수 밴드에도 걸린다. 비율 게이트는 ' +
+  '양방향 누락이 상쇄돼 수는 밴드 안에 남는 경우를 잡는 몫이다.'
+
+/** 교정 비율 = 교정 건수 ÷ 교정 **전** 크기. 파일에 적힌 값과 정확히 비교하려고 6자리에서 끊는다. */
+export function usFixedRate(size: number, fixed: number): number {
+  const before = size + fixed
+  if (!(before > 0)) return 0
+  return Math.round((fixed / before) * 1e6) / 1e6
+}
+
+/**
+ * `universe.json` 스키마 버전. **@2 = 2026-08-04 되감기 교정 도입판.**
+ *   @1(미출시): `lateAdded`를 게이트 임계로 쓰던 판. 실제 데이터로는 한 번도 통과하지
+ *   못해(교착) 파일이 생산된 적이 없다 — 그래서 마이그레이션 대상이 없다.
+ *   @2: 스냅샷에 교정을 적용하고 `lateAddedFixed` 비율에 게이트를 건다.
+ * 파서가 정확히 이 문자열을 요구한다 — 구판 파일이 조용히 읽히지 않게 한다.
+ */
+export const US_PIT_REAL_SCHEMA = 'us-pit/universe@2'
 
 /** 한 종목 한 줄 — 그 시점 티커·회사명·(알면) 편입일. **시총 순위는 없다.** */
 export interface UsPitEntry {
@@ -623,29 +678,59 @@ export interface UsPitEntry {
 export interface UsPitYearRecord {
   /** 이 목록이 성립하는 기준일 `YYYY-MM-DD`(그 해 첫 거래일 근사). */
   asOfDate: string
+  /** **교정 후** 구성종목. 편입일이 asOfDate보다 늦은 종목은 여기서 빠져 있다. */
   members: UsPitEntry[]
-  /** 편입일이 asOfDate보다 늦은 종목 수 = **누락된 변경행의 하한**(0이어야 정상). */
+  /** 교정 후 남은 위반 수 — **구조상 0**. 0이 아니면 교정을 안 돌린 파일이다. */
   lateAdded: number
-  /** 그 표본 몇 개(진단용 · 최대 10개). */
-  lateAddedSample: string[]
-  /** 편입일을 알아 위 검사를 적용할 수 있었던 종목 수(검사 커버리지). */
+  /**
+   * 교정으로 **걷어낸** 종목 수 = 변경 이력표에서 편입행이 빠진 종목의 하한.
+   * 버그가 아니라 **불완전성의 측정값**이다 — 게이트 ②가 이 비율에 걸린다.
+   */
+  lateAddedFixed: number
+  /** 걷어낸 표본 몇 개(진단용 · 최대 10개 · `TICKER(YYYY-MM-DD)`). */
+  lateAddedFixedSample: string[]
+  /** 교정 후 members 중 편입일을 아는 종목 수(검사 커버리지). */
   dateAddedKnown: number
+  /**
+   * 되감기 중 "편입인데 그 시점 목록에 없음"의 **누계**(asOf → 이 해까지).
+   * 과거로 갈수록 줄지 않는다. 별도 임계를 두지 않는 이유는 `UsPitReliability` 주석 참조.
+   */
+  addNotPresent: number
+  /** 되감기 중 "제외인데 이미 목록에 있음"의 **누계**(같은 규약). */
+  removeAlreadyPresent: number
 }
 
 /** 연도별 게이트 판정. */
 export interface UsPitYearVerdict {
+  /** 교정 **후** 구성종목 수 — 백테스트가 실제로 쓰는 목록의 크기다. */
   size: number
   sizeOk: boolean
+  /** 교정 후 잔여 위반(0이어야 한다 — 게이트가 아니라 불변식). */
   lateAdded: number
-  lateAddedOk: boolean
+  lateAddedFixed: number
+  /** 교정 전 크기 = size + lateAddedFixed. 비율의 분모를 검증 가능하게 남긴다. */
+  sizeBeforeFix: number
+  /** lateAddedFixed ÷ sizeBeforeFix (6자리 반올림). */
+  fixedRate: number
+  fixedRateOk: boolean
   ok: boolean
 }
 
-/** `reliableFrom`을 어떻게 판정했는지 — 숫자로 남긴다. */
+/**
+ * `reliableFrom`을 어떻게 판정했는지 — 숫자로 남긴다.
+ *
+ * ⚠️ `addNotPresent`/`removeAlreadyPresent`에는 **별도 임계를 두지 않았다.** 둘 다
+ *   되감기 상태의 **순 크기**를 흔드는 사건이고(짝이 없는 편입·제외 행), 그 누적 효과는
+ *   게이트 ①(구성종목 수 밴드)이 **직접** 측정한다. 따로 임계를 세우면 같은 증거를 두 번
+ *   세는 셈이라, **연도별로 기록만 하고 판정에는 쓰지 않는다**(숨기지도 않는다).
+ */
 export interface UsPitReliability {
   sizeBand: [number, number]
   sizeBandBasis: string
-  lateAddedMax: number
+  /** 게이트 ② — 교정 비율 상한(0~1). */
+  lateAddedFixedRateMax: number
+  /** 그 숫자의 근거 문장. 비우면 파서가 거부한다. */
+  lateAddedFixedRateBasis: string
   /** 변경 이력표에서 파싱한 가장 이른 행의 날짜 — 이보다 과거는 되감기 자체가 불가능하다. */
   changesFirstDate: string
   /** 파싱한 변경행 수(0이면 수집기가 던진다 — 조용한 빈 결과 금지). */
@@ -655,6 +740,8 @@ export interface UsPitReliability {
 
 /** `public/data/us-pit/universe.json`의 전체 스키마. */
 export interface UsPitRealUniverse {
+  /** `US_PIT_REAL_SCHEMA`와 정확히 같아야 한다. */
+  schema: string
   source: string
   sourceUrl: string
   license: string
@@ -729,10 +816,19 @@ function parseUsEntries(raw: unknown, where: string): UsPitEntry[] {
  *   · `reliableFrom`이 판정표(`reliability.years`)와 어긋나는 것 — 신뢰구간을 손으로
  *     늘려 적는 것도, 반대로 통과한 해를 임의로 버리는 것도 막는다. **경계는 게이트가 정한다.**
  *   · 게이트 판정이 실제 목록 크기·위반 수와 다른 것(판정 위조 방지)
+ *   · **교정을 돌리지 않은 파일** — `members`에서 직접 다시 세어 늦은편입 잔여가 있으면 거부한다.
+ *     숫자(`lateAdded`)만 0으로 고쳐 적는 위조는 이 재계산에 걸린다.
+ *   · 교정 건수·비율·이상징후 누계의 위조(전부 재계산·단조성으로 대조)
  */
 export function parseUsPitRealUniverse(raw: unknown): UsPitRealUniverse {
   if (typeof raw !== 'object' || raw == null) ufail('최상위가 객체가 아니다')
   const o = raw as Record<string, unknown>
+  const schema = String(o.schema ?? '')
+  if (schema !== US_PIT_REAL_SCHEMA)
+    ufail(
+      `schema가 ${US_PIT_REAL_SCHEMA}가 아니다 (${schema || '없음'}) — 구판 파일을 조용히 읽지 않는다. ` +
+        `GHA(uspit:collect)로 다시 수집하라.`,
+    )
   const source = String(o.source ?? '')
   const sourceUrl = String(o.sourceUrl ?? '')
   const license = String(o.license ?? '')
@@ -778,14 +874,53 @@ export function parseUsPitRealUniverse(raw: unknown): UsPitRealUniverse {
     }
     const lateAdded = Number(rec.lateAdded)
     const dateAddedKnown = Number(rec.dateAddedKnown)
-    if (!Number.isInteger(lateAdded) || lateAdded < 0) ufail(`years.${k}.lateAdded가 0 이상의 정수가 아니다`)
-    if (!Number.isInteger(dateAddedKnown) || dateAddedKnown < 0)
-      ufail(`years.${k}.dateAddedKnown이 0 이상의 정수가 아니다`)
-    if (dateAddedKnown > members.length) ufail(`years.${k}.dateAddedKnown이 구성종목 수보다 크다`)
-    if (lateAdded > dateAddedKnown) ufail(`years.${k}.lateAdded가 검사 가능 종목 수보다 크다 — 판정이 조작됐다`)
-    if (!Array.isArray(rec.lateAddedSample)) ufail(`years.${k}.lateAddedSample이 배열이 아니다`)
-    const lateAddedSample = rec.lateAddedSample.map(String)
-    years[k] = { asOfDate, members, lateAdded, lateAddedSample, dateAddedKnown }
+    const lateAddedFixed = Number(rec.lateAddedFixed)
+    const addNotPresent = Number(rec.addNotPresent)
+    const removeAlreadyPresent = Number(rec.removeAlreadyPresent)
+    for (const [n, v] of [
+      ['lateAdded', lateAdded],
+      ['dateAddedKnown', dateAddedKnown],
+      ['lateAddedFixed', lateAddedFixed],
+      ['addNotPresent', addNotPresent],
+      ['removeAlreadyPresent', removeAlreadyPresent],
+    ] as const)
+      if (!Number.isInteger(v) || v < 0) ufail(`years.${k}.${n}이 0 이상의 정수가 아니다 (${String(rec[n])})`)
+
+    // 🔴 **교정 재계산** — 숫자만 고쳐 적는 위조를 막는 핵심 검사다.
+    //    members에서 직접 다시 세므로, `lateAdded: 0`이라 적어 두고 실제로는 교정하지 않은
+    //    파일이 통과할 수 없다(게이트 위조 방지 규약을 신설 필드에도 같은 급으로 건다).
+    const residual = members.filter((m) => m.addedOn !== null && m.addedOn > asOfDate)
+    if (residual.length > 0)
+      ufail(
+        `years.${k}.members에 asOfDate(${asOfDate})보다 늦게 편입된 종목이 ${residual.length}건 남아 있다 ` +
+          `(${residual.slice(0, 3).map((m) => `${m.ticker}(${m.addedOn})`).join(', ')}) — 되감기 교정이 적용되지 않았다`,
+      )
+    if (lateAdded !== 0)
+      ufail(`years.${k}.lateAdded가 0이 아니다 (${lateAdded}) — 교정 후 잔여 위반은 구조상 0이어야 한다`)
+    const known = members.filter((m) => m.addedOn !== null).length
+    if (dateAddedKnown !== known)
+      ufail(`years.${k}.dateAddedKnown(${dateAddedKnown})이 실제 값(${known})과 다르다`)
+
+    if (!Array.isArray(rec.lateAddedFixedSample)) ufail(`years.${k}.lateAddedFixedSample이 배열이 아니다`)
+    const lateAddedFixedSample = rec.lateAddedFixedSample.map(String)
+    if (lateAddedFixedSample.length > Math.min(10, lateAddedFixed))
+      ufail(
+        `years.${k}.lateAddedFixedSample이 ${lateAddedFixedSample.length}개인데 교정 건수는 ${lateAddedFixed}건이다 — 표본을 지어내지 마라`,
+      )
+    for (const s of lateAddedFixedSample)
+      if (!/^[A-Z]{1,5}(-[A-Z])?\(\d{4}-\d{2}-\d{2}\)$/.test(s))
+        ufail(`years.${k}.lateAddedFixedSample에 형식이 다른 항목이 있다 (${s}) — TICKER(YYYY-MM-DD)여야 한다`)
+
+    years[k] = {
+      asOfDate,
+      members,
+      lateAdded,
+      lateAddedFixed,
+      lateAddedFixedSample,
+      dateAddedKnown,
+      addNotPresent,
+      removeAlreadyPresent,
+    }
   }
 
   const present = keys.map(Number).sort((a, b) => a - b)
@@ -795,6 +930,20 @@ export function parseUsPitRealUniverse(raw: unknown): UsPitRealUniverse {
     if (years[String(y)]) continue
     if (missSet.has(y)) continue
     ufail(`${y}년이 빠졌는데 missingYears에도 없다 — 결측을 숨기지 마라`)
+  }
+
+  // 이상 징후는 되감기 **누계**라 과거로 갈수록 줄지 않는다. 뒤집혀 있으면 손으로 적은 값이다.
+  for (let i = 1; i < present.length; i++) {
+    const older = years[String(present[i - 1])]
+    const newer = years[String(present[i])]
+    if (older.addNotPresent < newer.addNotPresent)
+      ufail(
+        `addNotPresent 누계가 과거로 갈수록 줄었다 (${present[i]}년 ${newer.addNotPresent} → ${present[i - 1]}년 ${older.addNotPresent}) — 누계가 아니다`,
+      )
+    if (older.removeAlreadyPresent < newer.removeAlreadyPresent)
+      ufail(
+        `removeAlreadyPresent 누계가 과거로 갈수록 줄었다 (${present[i]}년 ${newer.removeAlreadyPresent} → ${present[i - 1]}년 ${older.removeAlreadyPresent}) — 누계가 아니다`,
+      )
   }
 
   // ── 신뢰구간 판정표 검증 ────────────────────────────────────────────────
@@ -807,8 +956,12 @@ export function parseUsPitRealUniverse(raw: unknown): UsPitRealUniverse {
     ufail(`reliability.sizeBand가 유효한 구간이 아니다 (${sizeBand.join(', ')})`)
   const sizeBandBasis = String(r.sizeBandBasis ?? '')
   if (!sizeBandBasis.trim()) ufail('reliability.sizeBandBasis가 비어 있다 — 밴드 숫자의 근거를 지우지 마라')
-  const lateAddedMax = Number(r.lateAddedMax)
-  if (!Number.isInteger(lateAddedMax) || lateAddedMax < 0) ufail('reliability.lateAddedMax가 0 이상의 정수가 아니다')
+  const lateAddedFixedRateMax = Number(r.lateAddedFixedRateMax)
+  if (!Number.isFinite(lateAddedFixedRateMax) || lateAddedFixedRateMax < 0 || lateAddedFixedRateMax > 1)
+    ufail(`reliability.lateAddedFixedRateMax가 0~1의 비율이 아니다 (${String(r.lateAddedFixedRateMax)})`)
+  const lateAddedFixedRateBasis = String(r.lateAddedFixedRateBasis ?? '')
+  if (!lateAddedFixedRateBasis.trim())
+    ufail('reliability.lateAddedFixedRateBasis가 비어 있다 — 임계 숫자의 근거를 지우지 마라')
   const changesFirstDate = String(r.changesFirstDate ?? '')
   if (!/^\d{4}-\d{2}-\d{2}$/.test(changesFirstDate))
     ufail(`reliability.changesFirstDate가 YYYY-MM-DD가 아니다 (${changesFirstDate || '없음'})`)
@@ -825,16 +978,28 @@ export function parseUsPitRealUniverse(raw: unknown): UsPitRealUniverse {
     const vv = v as Record<string, unknown>
     const size = Number(vv.size)
     const lateAdded = Number(vv.lateAdded)
+    const lateAddedFixed = Number(vv.lateAddedFixed)
+    const sizeBeforeFix = Number(vv.sizeBeforeFix)
+    const fixedRate = Number(vv.fixedRate)
     if (size !== years[k].members.length)
       ufail(`reliability.years.${k}.size(${size})가 실제 구성종목 수(${years[k].members.length})와 다르다`)
     if (lateAdded !== years[k].lateAdded)
       ufail(`reliability.years.${k}.lateAdded(${lateAdded})가 실제 값(${years[k].lateAdded})과 다르다`)
+    if (lateAddedFixed !== years[k].lateAddedFixed)
+      ufail(`reliability.years.${k}.lateAddedFixed(${lateAddedFixed})가 실제 값(${years[k].lateAddedFixed})과 다르다`)
+    if (sizeBeforeFix !== size + lateAddedFixed)
+      ufail(
+        `reliability.years.${k}.sizeBeforeFix(${sizeBeforeFix})가 size+lateAddedFixed(${size + lateAddedFixed})와 다르다 — 비율의 분모를 손대지 마라`,
+      )
+    const expectedRate = usFixedRate(size, lateAddedFixed)
+    if (fixedRate !== expectedRate)
+      ufail(`reliability.years.${k}.fixedRate(${fixedRate})가 재계산값(${expectedRate})과 다르다`)
     const sizeOk = size >= sizeBand[0] && size <= sizeBand[1]
-    const lateOk = lateAdded <= lateAddedMax
+    const fixedRateOk = fixedRate <= lateAddedFixedRateMax
     if (vv.sizeOk !== sizeOk) ufail(`reliability.years.${k}.sizeOk가 밴드 계산과 다르다`)
-    if (vv.lateAddedOk !== lateOk) ufail(`reliability.years.${k}.lateAddedOk가 임계 계산과 다르다`)
-    if (vv.ok !== (sizeOk && lateOk)) ufail(`reliability.years.${k}.ok가 두 게이트의 논리곱과 다르다`)
-    verdicts[k] = { size, sizeOk, lateAdded, lateAddedOk: lateOk, ok: sizeOk && lateOk }
+    if (vv.fixedRateOk !== fixedRateOk) ufail(`reliability.years.${k}.fixedRateOk가 임계 계산과 다르다`)
+    if (vv.ok !== (sizeOk && fixedRateOk)) ufail(`reliability.years.${k}.ok가 두 게이트의 논리곱과 다르다`)
+    verdicts[k] = { size, sizeOk, lateAdded, lateAddedFixed, sizeBeforeFix, fixedRate, fixedRateOk, ok: sizeOk && fixedRateOk }
   }
 
   const reliableFrom = Number(o.reliableFrom)
@@ -851,6 +1016,7 @@ export function parseUsPitRealUniverse(raw: unknown): UsPitRealUniverse {
     ufail(`${below}년이 게이트를 통과했는데 reliableFrom이 ${reliableFrom}이다 — 경계는 게이트가 정한다`)
 
   return {
+    schema: US_PIT_REAL_SCHEMA,
     source,
     sourceUrl,
     license,
@@ -859,7 +1025,15 @@ export function parseUsPitRealUniverse(raw: unknown): UsPitRealUniverse {
     basis,
     rankSource: 'none',
     reliableFrom,
-    reliability: { sizeBand, sizeBandBasis, lateAddedMax, changesFirstDate, changeRows, years: verdicts },
+    reliability: {
+      sizeBand,
+      sizeBandBasis,
+      lateAddedFixedRateMax,
+      lateAddedFixedRateBasis,
+      changesFirstDate,
+      changeRows,
+      years: verdicts,
+    },
     missingYears,
     years,
   }
@@ -876,7 +1050,7 @@ export function parseUsPitRealUniverse(raw: unknown): UsPitRealUniverse {
 export function judgeUsPitReliability(
   years: Record<string, UsPitYearRecord>,
   sizeBand: [number, number],
-  lateAddedMax: number,
+  fixedRateMax: number,
 ): { reliableFrom: number; verdicts: Record<string, UsPitYearVerdict> } {
   const keys = Object.keys(years)
     .map(Number)
@@ -884,18 +1058,47 @@ export function judgeUsPitReliability(
   if (keys.length === 0) throw new Error('판정할 연도가 없다')
   const verdicts: Record<string, UsPitYearVerdict> = {}
   for (const y of keys) {
-    const size = years[String(y)].members.length
-    const lateAdded = years[String(y)].lateAdded
+    const rec = years[String(y)]
+    // 불변식 — 교정을 거치지 않은 입력은 판정 대상이 아니다(게이트가 아니라 전제 위반이다).
+    if (rec.lateAdded !== 0)
+      throw new Error(
+        `${y}년 스냅샷에 교정되지 않은 늦은편입이 ${rec.lateAdded}건 남아 있다 — ` +
+          `되감기 교정(rewind)을 거치지 않은 입력이다. 임계를 올려 넘길 문제가 아니다.`,
+      )
+    const size = rec.members.length
+    const lateAddedFixed = rec.lateAddedFixed
+    const sizeBeforeFix = size + lateAddedFixed
+    const fixedRate = usFixedRate(size, lateAddedFixed)
     const sizeOk = size >= sizeBand[0] && size <= sizeBand[1]
-    const lateAddedOk = lateAdded <= lateAddedMax
-    verdicts[String(y)] = { size, sizeOk, lateAdded, lateAddedOk, ok: sizeOk && lateAddedOk }
+    const fixedRateOk = fixedRate <= fixedRateMax
+    verdicts[String(y)] = {
+      size,
+      sizeOk,
+      lateAdded: rec.lateAdded,
+      lateAddedFixed,
+      sizeBeforeFix,
+      fixedRate,
+      fixedRateOk,
+      ok: sizeOk && fixedRateOk,
+    }
   }
   const newest = keys[keys.length - 1]
-  if (!verdicts[String(newest)].ok)
+  const nv = verdicts[String(newest)]
+  // ── 최신 연도 실패의 **진단을 게이트별로 가른다.** ────────────────────────────
+  //    구판은 둘을 뭉쳐 "현재 목록 파싱이 틀렸을 가능성이 높다"고만 말했는데,
+  //    2026-08-04 실측(run 30874993266)에서 그 진단은 **틀렸다** — 파싱은 멀쩡했고
+  //    변경 이력표가 불완전했을 뿐이다. 같은 오진을 되풀이하지 않는다.
+  if (!nv.sizeOk)
     throw new Error(
-      `가장 최근 연도(${newest})부터 게이트를 통과하지 못했다 — 되감기 이전에 ` +
-        `**현재 목록 파싱**이 이미 틀렸을 가능성이 높다(구성종목 ${verdicts[String(newest)].size}종목 · ` +
-        `허용 ${sizeBand.join('~')} · 늦은편입 위반 ${verdicts[String(newest)].lateAdded}건).`,
+      `가장 최근 연도(${newest})의 **구성종목 수**가 밴드 밖이다(${nv.size}종목 · 허용 ${sizeBand.join('~')}) — ` +
+        `되감기 이전에 **현재 목록 파싱**이 이미 틀렸을 가능성이 높다(표 선택·열 매핑을 먼저 보라).`,
+    )
+  if (!nv.fixedRateOk)
+    throw new Error(
+      `가장 최근 연도(${newest})의 **변경 이력 교정 비율**이 임계를 넘었다` +
+        `(${(nv.fixedRate * 100).toFixed(2)}% = ${nv.lateAddedFixed}/${nv.sizeBeforeFix} · 허용 ≤${(fixedRateMax * 100).toFixed(2)}%) — ` +
+        `현재 목록 파싱은 정상이다(구성종목 ${nv.size}종목이 밴드 ${sizeBand.join('~')} 안). ` +
+        `**변경 이력표가 가장 최근 구간부터 이미 불완전**하다는 뜻이고, 그러면 되감기로 신뢰할 수 있는 해가 없다.`,
     )
   let reliableFrom = newest
   for (let i = keys.length - 1; i >= 0; i--) {
@@ -914,18 +1117,21 @@ export function buildUsPitRealUniverse(input: {
   changesFirstDate: string
   changeRows: number
   sizeBand?: [number, number]
-  lateAddedMax?: number
+  fixedRateMax?: number
+  /** 임계 근거 문장(기본은 정본 상수). 합성 임계를 쓰는 테스트가 근거도 함께 바꾸도록 열어 둔다. */
+  fixedRateBasis?: string
 }): UsPitRealUniverse {
   const meta = US_INDEX_META[input.index]
   const sizeBand = input.sizeBand ?? US_INDEX_SIZE_BAND[input.index]
-  const lateAddedMax = input.lateAddedMax ?? US_LATE_ADDED_MAX
+  const fixedRateMax = input.fixedRateMax ?? US_LATE_FIXED_RATE_MAX
   const years: Record<string, UsPitYearRecord> = {}
   for (const y of Object.keys(input.years)
     .map(Number)
     .sort((a, b) => a - b))
     years[String(y)] = input.years[y]
-  const { reliableFrom, verdicts } = judgeUsPitReliability(years, sizeBand, lateAddedMax)
+  const { reliableFrom, verdicts } = judgeUsPitReliability(years, sizeBand, fixedRateMax)
   return parseUsPitRealUniverse({
+    schema: US_PIT_REAL_SCHEMA,
     source: US_PIT_REAL_SOURCE,
     sourceUrl: meta.url,
     license: US_PIT_REAL_LICENSE,
@@ -937,7 +1143,8 @@ export function buildUsPitRealUniverse(input: {
     reliability: {
       sizeBand,
       sizeBandBasis: US_SIZE_BAND_BASIS,
-      lateAddedMax,
+      lateAddedFixedRateMax: fixedRateMax,
+      lateAddedFixedRateBasis: input.fixedRateBasis ?? US_LATE_FIXED_RATE_BASIS,
       changesFirstDate: input.changesFirstDate,
       changeRows: input.changeRows,
       years: verdicts,
@@ -1069,9 +1276,16 @@ export function usRealSourceNote(u: UsPitRealUniverse): string {
   const dropped = all.filter((y) => y < u.reliableFrom)
   const drop = dropped.length ? ` · 신뢰구간 밖이라 버린 해 ${dropped[0]}~${dropped[dropped.length - 1]}` : ''
   const miss = u.missingYears.length ? ` · 복원 불가 연도 ${u.missingYears.join(', ')}` : ''
+  // 교정 규모도 한 줄에 남긴다 — "변경 이력표가 이만큼 불완전했다"를 화면·로그에서 숨기지 않는다.
+  const fixes = ys.map((y) => u.reliability.years[String(y)])
+  const worst = fixes.reduce((a, b) => (b.fixedRate > a.fixedRate ? b : a), fixes[0])
+  const fixNote = worst
+    ? ` · 신뢰구간 안 최대 교정 ${(worst.fixedRate * 100).toFixed(2)}%(${worst.lateAddedFixed}/${worst.sizeBeforeFix})`
+    : ''
   return (
     `유니버스: ${u.source} ${US_INDEX_META[u.index].page} 실측 구성종목 ${span} · 수집일 ${u.asOf}${drop}${miss} — ` +
-    `${u.basis} 되감기 신뢰 판정: 구성종목 수 ${u.reliability.sizeBand.join('~')} · 늦은편입 위반 ≤${u.reliability.lateAddedMax} ` +
+    `${u.basis} 되감기 신뢰 판정: 구성종목 수 ${u.reliability.sizeBand.join('~')} · ` +
+    `변경이력 교정 비율 ≤${(u.reliability.lateAddedFixedRateMax * 100).toFixed(2)}%${fixNote} ` +
     `(변경행 ${u.reliability.changeRows}건 · 가장 이른 행 ${u.reliability.changesFirstDate})`
   )
 }
