@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'MODE (예: pit1010 / idea:seasonal — idea: 접두면 idea-lab.mjs / short:all — short: 접두면 shortterm-lab.mjs / overfit:overfit — overfit: 접두면 overfit-lab.mjs(과최적화 채점, 네트워크 불필요) / value:all — value: 접두면 value-lab.mjs(밸류·퀄리티 18변형, 시세·재무는 커밋된 정본·야후는 벤치만) / plateau:plateau — plateau: 접두면 plateau-lab.mjs(39차 고원 격자 405셀 · 시세는 KRX 커밋 정본·야후는 벤치·벽만 · plateau:quick 축소판 / plateau:offline 네트워크 불필요 / plateau:selftest 합성) / us:all — us: 접두면 us-lab.mjs(41차 미장 탐색 48변형: 27차 재현 8 + 다섯 계열 분위 격자 40 · 시세는 전량 야후 · us:xsmom 재현+모멘텀 분위 16 / us:quantile 계열 분위 40 / us:quick 스모크 4 / us:selftest 합성·네트워크 불필요) / presets = 프리셋 사전계산+커밋)'
+        description: 'MODE (예: pit1010 / idea:seasonal — idea: 접두면 idea-lab.mjs / short:all — short: 접두면 shortterm-lab.mjs / overfit:overfit — overfit: 접두면 overfit-lab.mjs(과최적화 채점, 네트워크 불필요) / value:all — value: 접두면 value-lab.mjs(밸류·퀄리티 18변형, 시세·재무는 커밋된 정본·야후는 벤치만) / plateau:plateau — plateau: 접두면 plateau-lab.mjs(39차 고원 격자 405셀 · 시세는 KRX 커밋 정본·야후는 벤치·벽만 · plateau:quick 축소판 / plateau:offline 네트워크 불필요 / plateau:selftest 합성) / us:all — us: 접두면 us-lab.mjs(41차 미장 탐색 48변형: 27차 재현 8 + 다섯 계열 분위 격자 40 · 시세는 전량 야후 · us:xsmom 재현+모멘텀 분위 16 / us:quantile 계열 분위 40 / us:quick 스모크 4 / us:selftest 합성·네트워크 불필요) / dokkaebi:all — dokkaebi: 접두면 dokkaebi-lab.mjs(42차 유튜브 댓글 이평선 돌파 매매법 재측정 36변형: 기준이평 MA2·MA5 × 유니버스 40·80 × 진입필터 9종 · 시세는 KRX 커밋 정본·야후는 벤치(KODEX 200)만 · dokkaebi:ma2 MA2 축 18 / dokkaebi:quick 스모크 4 / dokkaebi:selftest 합성·네트워크 불필요) / presets = 프리셋 사전계산+커밋)'
         type: string
         required: true
       grid:
@@ -54,6 +54,8 @@ jobs:
             overfit:*) SCRIPT="overfit-lab.mjs"; RUN_MODE="${RAW#overfit:}";;
             value:*) SCRIPT="value-lab.mjs"; RUN_MODE="${RAW#value:}";;
             plateau:*) SCRIPT="plateau-lab.mjs"; RUN_MODE="${RAW#plateau:}";;
+            # `dokkaebi:`는 다른 접두와 겹치지 않는다(`us:` 함정과 다르다) — 위치 의존성 없음.
+            dokkaebi:*) SCRIPT="dokkaebi-lab.mjs"; RUN_MODE="${RAW#dokkaebi:}";;
             # `uspit:`를 `us:`보다 **위에** 둔다 — case는 위에서부터 매칭이라 순서가 뒤바뀌면
             # `us:*`가 `uspit:collect`를 삼켜 us-lab이 MODE=pit:collect로 돈다(조용한 오작동).
             uspit:*) SCRIPT="us-pit-collect.mjs"; RUN_MODE="${RAW#uspit:}";;
