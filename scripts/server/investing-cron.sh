@@ -32,11 +32,68 @@ export NODE_OPTIONS="--max-old-space-size=256"
 export KIWOOM_TOKEN_CACHE="$DIR/.kiwoom-token-cache.json"
 
 cd "$REPO"
-# --autostash 필수: 배포 워크플로의 `chmod +x`가 파일 모드를 바꿔 놓으면 ff-only가 매번 막히고,
-# set -e 때문에 크론이 **수집을 시작하기도 전에** 조용히 죽는다(2026-08-03 첫 16:15 실행이 그랬다).
-# 파일 모드는 git 인덱스를 755로 고쳐 근본 원인을 없앴지만, 다른 잔여물(npm이 만진 lock 등)에도
-# 같은 사고가 나므로 방어를 남긴다. --rebase는 EC2가 남긴 미푸시 데이터 커밋을 origin 위에 얹는다.
-git pull --rebase --autostash origin main
+
+# ─── 동기화 (2026-08-04 전면 개정 — 사고 원인 실측 후) ────────────────────────
+#
+# 무엇이 잘못이었나 (gitdiag 실측, awning-ops run 30878440819):
+#   `git pull --rebase --autostash` 가 **데이터 파일에 autostash 를 걸었다.**
+#   수집기가 public/data/intraday/*.json 을 고쳐 놓은 채(커밋 전) 다음 실행이 오면
+#   autostash 가 그걸 스태시했다가 pull 뒤 pop 하는데, origin 쪽에서도 같은 파일이
+#   바뀌어 있으면 **pop 이 충돌**한다. 그 순간:
+#     · 작업트리 JSON 에 충돌 마커가 박혀 **파일이 깨진다**(파싱 불가)
+#     · rebase/merge 가 "진행 중"이 아니므로 `rebase --abort` 로는 못 푼다
+#     · 다음 실행마다 `git pull` 이 "unmerged files" 로 즉사 → set -e →
+#       **수집을 시작하기도 전에** 크론이 조용히 영구 정지
+#   실측 결과: 미푸시 커밋 0건 · rebase 진행 중 아님 · UU 91개 파일(전부 intraday).
+#   즉 원인은 "미푸시 커밋 누적"이 아니라 **커밋 안 된 데이터에 스태시를 건 것**이었다.
+#
+# 어떻게 바꿨나:
+#   ① **스태시하지 않는다.** 데이터 경로가 더러우면 pull 전에 **먼저 커밋**한다.
+#      커밋은 rebase 가 정상적으로 얹지만, 커밋 안 된 변경은 pop 충돌로 리포를 망가뜨린다.
+#   ② 그래도 unmerged 가 남아 있으면 **덮어쓰지 말고 즉시 실패**한다 — 사람이 봐야 한다.
+#      (조용히 고치면 다음 사고를 못 본다.)
+#   ③ push 는 **pull 직후에, 재시도 루프 안에서** 한다. main 은 하루에도 여러 번 움직여서
+#      pull 과 push 사이가 벌어지면 non-fast-forward 로 거부된다.
+sync_guard() {
+  if [ -n "$(git ls-files --unmerged)" ]; then
+    echo "[investing-cron] ❌ 미해결 충돌이 남아 있다 — 자동 복구하지 않는다(데이터 손상 방지)." >&2
+    echo "[investing-cron]    awning-ops deploy-investing.yml 을 backtest_mode=gitdiag 로 돌려 상태를 보고," >&2
+    echo "[investing-cron]    backtest_mode=gitfix 로 백업 후 복구하라." >&2
+    git status --short | head -20 >&2
+    exit 1
+  fi
+}
+
+# 데이터 경로의 커밋 안 된 변경을 **커밋으로 승격**한다(스태시 금지).
+commit_stray_data() {
+  git add public/data 2>/dev/null || true
+  if ! git diff --cached --quiet; then
+    echo "[investing-cron] 이전 실행이 남긴 미커밋 데이터 발견 — 스태시 대신 커밋으로 승격"
+    git -c user.name="investing-cron" -c user.email="investing-cron@ec2.local" \
+      commit -q -m "data: 이전 실행이 남긴 수집분 회수 (EC2 cron, 자동)"
+  fi
+  # package-lock 등 코드 파일의 잔여 변경은 데이터가 아니다 — 되돌린다(재생성 가능).
+  git checkout -- package-lock.json 2>/dev/null || true
+}
+
+# pull → push 를 한 묶음으로, 재시도까지. 인자로 받은 함수가 없으면 pull 만 한다.
+sync_push() {
+  local i
+  for i in 1 2 3; do
+    git pull --rebase origin main || { sync_guard; return 1; }
+    sync_guard
+    if [ -z "$(git log --oneline origin/main..HEAD 2>/dev/null)" ]; then return 0; fi
+    if git push origin main; then return 0; fi
+    echo "[investing-cron] push 거부(main 이 그새 움직였다) — 재시도 $i/3"
+    sleep $((i * 3))
+  done
+  echo "[investing-cron] ❌ 3회 시도 후에도 push 실패 — 커밋은 로컬에 남아 있다." >&2
+  return 1
+}
+
+sync_guard
+commit_stray_data
+sync_push
 npm install --no-audit --no-fund --loglevel=error
 
 DOPPLER=(doppler run --project investing-ops --config prd --)
@@ -85,9 +142,11 @@ case "${1:-}" in
 esac
 
 # 변경분이 있을 때만 커밋·푸시 (데이터 크론 커밋은 paper-trading.yml과 동일한 관례)
+# push 는 반드시 sync_push 로 — 맨손 `git push origin main` 은 main 이 그새 움직이면
+# 거부되고, 그 커밋이 로컬에 남아 다음 실행의 rebase 대상이 된다(2026-08-04 사고의 씨앗).
 git add $COMMIT_PATHS
 if ! git diff --cached --quiet; then
   git -c user.name="investing-cron" -c user.email="investing-cron@ec2.local" commit -m "$MSG"
-  git push origin main
+  sync_push
 fi
 echo "[investing-cron] ${1:-} 완료 $(date -u +%FT%TZ)"
