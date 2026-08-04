@@ -39,6 +39,10 @@
 //      그래서 **"몇 년까지 되감아도 되는가"를 데이터가 스스로 판정**하게 만들었다
 //      (`reliableFrom` · 게이트 2종 — usPitUniverse.ts 참조). 되감기 한계는 **추정하지 않고
 //      측정한다.**
+//      2026-08-04 개정: 불완전한 편입행은 **현재 표의 `Date added`로 교정**하고(그 시점에
+//      아직 편입되지 않은 종목을 스냅샷에서 제거) 게이트 ②를 "위반 건수 0"에서
+//      **"교정 비율 ≤ 임계"**로 바꿨다. 구판은 최신 연도의 위반 1건이 전 연도에 그대로
+//      남아 **어떤 해도 통과할 수 없는 구조적 교착**이었다(run 30874993266).
 //   ⑤ 실패 표현: Action API는 오류를 **HTTP 200 본문**으로 준다 —
 //      `{"error":{"code":"missingtitle","info":"..."}}`(구 형식) 또는 `{"errors":[{...}]}`(신
 //      형식), 그리고 `MediaWiki-API-Error` 응답 헤더. 따라서 `res.ok`만 보면 오류를 통째로
@@ -64,8 +68,10 @@ import { dirname, join } from 'node:path'
 import {
   US_INDEX_META,
   US_INDEX_SIZE_BAND,
-  US_LATE_ADDED_MAX,
+  US_LATE_FIXED_RATE_BASIS,
+  US_LATE_FIXED_RATE_MAX,
   US_PIT_REAL_PATH,
+  US_PIT_REAL_SCHEMA,
   buildUsPitRealUniverse,
   usRealNameConflicts,
   usRealUnclassifiedConflicts,
@@ -545,6 +551,19 @@ export interface RewindResult {
  * 그대로 옳다 — 과거 목록에는 **그 시점 티커**(FB)가 남는다. 티커 **재사용**은 되감기로
  * 구분할 수 없고, 사후에 `usRealNameConflicts`가 사명 충돌로 잡아 조회를 거부한다.
  *
+ * ── `Date added` 교정 (2026-08-04 개정) ─────────────────────────────────────
+ *   변경 이력표는 스스로 "**Selected** changes"라 밝힌 불완전한 소스지만, 현재 구성종목
+ *   표의 `Date added`는 **전원에 있다**(2026-08-04 실측 503/503). 편입 **사실**에 관해서는
+ *   후자가 더 완전하므로 **보조 진실로 쓴다**: 되감은 스냅샷에 `addedOn > 기준일`인 종목이
+ *   남아 있으면 그 시점에 아직 편입되지 않았다는 뜻이므로 **그 스냅샷에서 제거한다.**
+ *
+ *   제거 건수는 `lateAddedFixed`로 **연도별로 남긴다** — 버그가 아니라 "변경 이력표가 이만큼
+ *   불완전하다"는 측정값이라 숨기지 않는다. 게이트 ②는 이 비율에 걸린다.
+ *
+ *   ⚠️ 교정은 `state`를 건드리지 않고 **스냅샷 단계에서만** 한다. `addedOn`은 고정값이라
+ *      기준일이 과거로 갈수록 조건이 단조로 유지되고, 되감기 본체(상태 전이)는 변경행만
+ *      본다 — 두 경로를 섞지 않아야 절단 불변성이 유지된다.
+ *
  * 🔴 각 연도 스냅샷은 **그 시점까지의 변경만** 적용한다(미래참조 금지). 구현상으로도
  *    변경행을 날짜 내림차순으로 한 번만 훑으며 경계를 넘어설 때만 적용한다.
  */
@@ -590,14 +609,22 @@ export function rewind(
         state.set(r.ticker, { ticker: r.ticker, name: r.name, addedOn: null })
       }
     }
-    const members = [...state.values()].sort((a, b) => (a.ticker < b.ticker ? -1 : 1))
-    const late = members.filter((m) => m.addedOn !== null && m.addedOn > target)
+    const all = [...state.values()].sort((a, b) => (a.ticker < b.ticker ? -1 : 1))
+    // 교정 — 그 시점에 아직 편입되지 않은 종목을 스냅샷에서 걷어낸다(위 주석 참조).
+    const late = all.filter((m) => m.addedOn !== null && m.addedOn > target)
+    const lateSet = new Set(late.map((m) => m.ticker))
+    const members = all.filter((m) => !lateSet.has(m.ticker)).map((m) => ({ ...m }))
+    // 잔여는 다시 세어 남긴다(0을 하드코딩하지 않는다 — 교정이 실제로 먹었는지의 증거다).
+    const residual = members.filter((m) => m.addedOn !== null && m.addedOn > target).length
     years[y] = {
       asOfDate: target,
-      members: members.map((m) => ({ ...m })),
-      lateAdded: late.length,
-      lateAddedSample: late.slice(0, 10).map((m) => `${m.ticker}(${m.addedOn})`),
+      members,
+      lateAdded: residual,
+      lateAddedFixed: late.length,
+      lateAddedFixedSample: late.slice(0, 10).map((m) => `${m.ticker}(${m.addedOn})`),
       dateAddedKnown: members.filter((m) => m.addedOn !== null).length,
+      addNotPresent: anomalies.addNotPresent,
+      removeAlreadyPresent: anomalies.removeAlreadyPresent,
     }
   }
   return { years, missingYears: missingYears.sort((a, b) => a - b), anomalies }
@@ -666,8 +693,29 @@ export async function collect(): Promise<number> {
   log('')
   log(`되감기 결과: ${builtYears}개 연도 복원 · 복원 불가 ${missingYears.join(', ') || '없음'}`)
   log(`이상 징후(변경 이력 불완전의 직접 증거): 편입인데 목록에 없음 ${anomalies.addNotPresent}건 · 제외인데 이미 있음 ${anomalies.removeAlreadyPresent}건`)
+  log('   ↑ 둘 다 되감기 상태의 **순 크기**를 흔든다 → 그 누적 효과는 게이트 ①(구성종목 수 밴드)이 직접 잰다.')
+  log('     같은 증거를 두 번 세지 않으려고 별도 임계는 두지 않고, 연도별 누계로 파일에 기록만 한다.')
   for (const s of anomalies.samples) log(`   · ${s}`)
   if (builtYears === 0) throw new Error('복원한 연도가 0개다.')
+
+  // ── 교정 분포 — **임계를 재검토할 근거를 매 실행이 스스로 찍는다.** ─────────
+  const fixRates = Object.keys(years)
+    .map(Number)
+    .sort((a, b) => a - b)
+    .map((y) => {
+      const r = years[y]
+      const before = r.members.length + r.lateAddedFixed
+      return { y, fixed: r.lateAddedFixed, before, rate: before > 0 ? r.lateAddedFixed / before : 0 }
+    })
+  const sorted = [...fixRates].map((r) => r.rate).sort((a, b) => a - b)
+  const q = (p: number): number => sorted[Math.min(sorted.length - 1, Math.max(0, Math.round((sorted.length - 1) * p)))]
+  const pct = (v: number): string => `${(v * 100).toFixed(2)}%`
+  log('')
+  log(
+    `교정(Date added 기준) 비율 분포 — 최소 ${pct(q(0))} · 중앙 ${pct(q(0.5))} · 최대 ${pct(q(1))} · 임계 ${pct(US_LATE_FIXED_RATE_MAX)}`,
+  )
+  log(`   임계 근거: ${US_LATE_FIXED_RATE_BASIS}`)
+  log('   ↑ 이 분포가 임계와 크게 어긋나면 **임계를 재검토하라**(숫자를 실측 없이 옮기지 말 것).')
 
   const uni = buildUsPitRealUniverse({
     index,
@@ -677,15 +725,20 @@ export async function collect(): Promise<number> {
     changesFirstDate,
     changeRows: changeN,
     sizeBand: US_INDEX_SIZE_BAND[index],
-    lateAddedMax: US_LATE_ADDED_MAX,
+    fixedRateMax: US_LATE_FIXED_RATE_MAX,
   })
 
   log('')
-  log('| 연도 | 구성종목 | 밴드 | 늦은편입 위반 | 판정 |')
-  log('|---|---|---|---|---|')
+  log(`스키마: ${US_PIT_REAL_SCHEMA}`)
+  log('| 연도 | 교정전 | 교정(건) | 교정비율 | 구성종목 | 밴드 | 잔여위반 | 이상징후(누계) | 판정 |')
+  log('|---|---|---|---|---|---|---|---|---|')
   for (const y of Object.keys(uni.years).map(Number).sort((a, b) => a - b)) {
     const v = uni.reliability.years[String(y)]
-    log(`| ${y} | ${v.size} | ${v.sizeOk ? 'OK' : '❌'} | ${v.lateAdded} | ${v.ok ? '✅' : '❌ 신뢰구간 밖'} |`)
+    const r = uni.years[String(y)]
+    log(
+      `| ${y} | ${v.sizeBeforeFix} | ${v.lateAddedFixed} | ${pct(v.fixedRate)}${v.fixedRateOk ? '' : ' ❌'} | ${v.size} | ` +
+        `${v.sizeOk ? 'OK' : '❌'} | ${v.lateAdded} | +${r.addNotPresent}/-${r.removeAlreadyPresent} | ${v.ok ? '✅' : '❌ 신뢰구간 밖'} |`,
+    )
   }
   log('')
   log(`🎯 reliableFrom = ${uni.reliableFrom} (게이트가 정했다 — 사람이 늘려 적을 수 없다)`)

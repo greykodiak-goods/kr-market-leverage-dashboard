@@ -106,6 +106,11 @@
 
 import { createKiwoomClient, numAbs } from './lib/kiwoom.mjs'
 import { loadSecret, maskerFor } from './lib/loadSecret.mjs'
+// tiingo 호출은 **공용 모듈이 정본**이다(2026-08-04). 이 프로브와 백테스트 러너(us-lab)가
+// 같은 URL·같은 상태코드 분류·같은 파서를 지나야 실사 결과와 실제 수집이 어긋나지 않는다.
+// 복붙하면 두 벌이 서로 다르게 썩는다 — 실사에서 확인한 "404=absent / 429=실패"가
+// 러너 쪽에서만 뭉개지는 식이다.
+import { classifyTiingoStatus, parseTiingoRows, tiingoDailyUrl, tiingoHeaders } from './lib/tiingo'
 
 // ── 0) 타입 ─────────────────────────────────────────────────────────────────
 
@@ -352,28 +357,16 @@ export function parseStooqCsv(text: string): ParseOutcome {
   return finishBars(bars, dropped ? `탈락 ${dropped}행` : '')
 }
 
-/** tiingo daily — 배열 응답. 빈 배열만 absent, 배열이 아니면 throw. */
+/**
+ * tiingo daily — 빈 배열만 absent, 배열이 아니면 throw.
+ * 파싱 본체는 `lib/tiingo.ts`가 정본이다(백테스트 러너와 **같은 코드**를 지난다).
+ * 여기서는 프로브의 `ParseOutcome`(날짜·종가만) 모양으로 옮기기만 한다.
+ */
 export function parseTiingoDaily(json: unknown): ParseOutcome {
-  if (json && typeof json === 'object' && !Array.isArray(json)) {
-    const o = json as Record<string, unknown>
-    const detail = o.detail ?? o.message ?? o.error
-    if (detail) throw new Error(`tiingo 오류 본문: ${String(detail).slice(0, 160)}`)
-  }
-  if (!Array.isArray(json)) throw new Error(`tiingo 응답이 배열이 아니다 — 형식: ${typeof json}`)
-  if (json.length === 0) return { kind: 'absent', bars: [], note: 'tiingo 빈 배열' }
-  const bars: Bar[] = []
-  let dropped = 0
-  for (const row of json as Record<string, unknown>[]) {
-    const date = String(row.date ?? '').slice(0, 10)
-    const close = Number(row.close ?? row.adjClose)
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(close)) {
-      dropped++
-      continue
-    }
-    bars.push({ date, close })
-  }
-  if (bars.length === 0) throw new Error(`tiingo ${json.length}행을 모두 파싱 실패 — 필드명 변경 의심 (첫 행 키: ${Object.keys((json[0] ?? {}) as object).join(', ')})`)
-  return finishBars(bars, dropped ? `탈락 ${dropped}행` : '')
+  const out = parseTiingoRows(json)
+  if (out.absent) return { kind: 'absent', bars: [], note: 'tiingo 빈 배열' }
+  const bars: Bar[] = out.rows.map((r) => ({ date: r.date, close: r.close }))
+  return finishBars(bars, out.dropped ? `탈락 ${out.dropped}행` : '')
 }
 
 /**
@@ -640,12 +633,12 @@ async function probeStooq(ref: TickerRef): Promise<ProbeResult> {
 }
 
 async function probeTiingo(ref: TickerRef, token: string): Promise<ProbeResult> {
-  const url = `https://api.tiingo.com/tiingo/daily/${encodeURIComponent(ref.ticker.toLowerCase())}/prices?startDate=1990-01-01&format=json`
-  const { status, text } = await getText(url, { Authorization: `Token ${token}`, 'Content-Type': 'application/json' })
-  if (status === 404) return toResult('tiingo', ref.ticker, { kind: 'absent', bars: [], note: `tiingo HTTP 404: ${text.slice(0, 100)}` })
-  if (status === 401 || status === 403) throw new Error(`tiingo 인증 실패 HTTP ${status} — 키 확인 필요`)
-  if (status === 429) throw new Error('tiingo HTTP 429 한도 초과 — 소스 실패')
-  if (status !== 200) throw new Error(`tiingo HTTP ${status} — 앞부분: ${text.slice(0, 120)}`)
+  // URL·헤더·상태코드 분류 전부 공용 모듈이 정본이다(복붙 금지 — 두 벌이 어긋나면
+  // "실사에서는 absent였는데 러너에서는 실패"처럼 조용히 갈린다).
+  const url = tiingoDailyUrl(ref.ticker, { startDate: '1990-01-01' })
+  const { status, text } = await getText(url, tiingoHeaders(token))
+  const cls = classifyTiingoStatus(status, text)
+  if (cls.kind === 'absent') return toResult('tiingo', ref.ticker, { kind: 'absent', bars: [], note: cls.note })
   return toResult('tiingo', ref.ticker, parseTiingoDaily(jsonOrThrow('tiingo', status, text)))
 }
 

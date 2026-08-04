@@ -35,9 +35,12 @@
 //
 //   국장에서 **같은 결함이 실제로 성적을 무너뜨렸다** — 33차에서 [추정] 목록을 KRX
 //   실측으로 바꾸자 알파가 +21.9%p → +2.6%p로 내려앉았다. 즉 이 회차의 수치는
-//   "목록이 맞다면"이라는 가정 위에 있다. 지금 다른 워커가 미장 실측 목록을 만들고
-//   있고, 그것이 들어오면 **`US_UNIVERSES` 표에 한 줄 추가 + `US_UNIVERSE_KEY`
-//   기본값 한 줄 교체**로 갈아끼울 수 있게 설계했다(아래 §1 유니버스 어댑터).
+//   "목록이 맞다면"이라는 가정 위에 있다.
+//   2026-08-04: 실측 목록 경로가 붙었다 — **`US_UNIVERSE=real`** 이면 커밋된
+//   `public/data/us-pit/universe.json`(Wikipedia 되감기 + 신뢰구간 게이트)으로 돈다.
+//   연도·전후반 경계도 그 파일의 `reliableFrom`이 정한다. 기본값은 여전히 `80`이다 —
+//   실측 목록은 **지수 구성종목**이라 시총 상위 N [추정]과 **의미가 달라** 옛 수치와
+//   직접 비교하면 거짓이기 때문이다(새 기준선으로 읽어야 한다).
 //
 // ── 🚫 규칙 1(미래참조 금지) — 이 파일에서 지킨 것 ────────────────────────────
 //   1. 모든 랭킹 점수는 **리밸런스 달 1일 미만**(strictly before) 확정 봉으로만 만든다.
@@ -56,8 +59,23 @@
 //      (분위 슬롯 `round(후보수 × pct)`의 후보수도 그 시점 단면에서만 나온다.)
 //   집행자는 `tests/uslab.test.ts`의 **절단 불변성 + 미래 조작 불변성** 테스트다.
 //
+// ── 시세 소스 2종 (2026-08-04 추가) ──────────────────────────────────────────
+//   `US_PRICE_SOURCE=yahoo|tiingo` — 기본 **yahoo**(41차 수치와의 연속성).
+//   야후의 문제는 값이 틀린 게 아니라 **죽은 종목을 안 주는 것**이다(41차 2000년 매핑률
+//   56/80 · 실패 6건 중 5건이 상폐사). 2026-08-04 소스 실사에서 **tiingo만 상폐를 줬다**
+//   (상폐 8종 중 회사일치 3 · 대조군 4/4). 호출·파싱·보정 감사는 `scripts/lib/tiingo.ts`가
+//   정본이고 소스 실사 프로브와 **같은 코드**를 지난다(복붙 금지).
+//
+//   🚫 **조용한 폴백 없음.** 한 실행은 유니버스·벤치·벽을 전부 같은 소스로 받는다.
+//      tiingo가 실패한 종목을 야후로 메우지 않는다 — 실패는 실패로 세고 매핑률에 드러난다.
+//      종목별 출처는 `PriceTally.sourceOf`에 기록되어 결과에 한 줄로 찍힌다.
+//   ⚠️ **가장 큰 함정은 배당 기준이다.** tiingo `adj*`가 분할만 반영한다면 전략은 가격수익,
+//      벤치·벽은 총수익이 되어 40차에서 제거한 배당 비대칭이 되살아난다. 문서를 믿지 않고
+//      벤치(SPY)의 **실제 응답**으로 판정하며(`auditTiingoAdjustment`), 미반영·판정불가면
+//      실행을 **중단**한다(판정불가는 `US_TIINGO_ALLOW_UNVERIFIED=1`로만 명시 통과).
+//
 // ── 규칙 4(외부 API) — 야후 호출 규약 ────────────────────────────────────────
-//   미장 시세는 KRX Open API 밖이라 **전량 야후**(비공식 v8 chart)다.
+//   야후 경로(기본)는 KRX Open API 밖이라 **비공식 v8 chart**를 쓴다.
 //     · 인증: 없음(공개 엔드포인트). 별도 이용신청·승인 절차 없음.
 //     · 한도: 공식 문서 없음 → **[미검증]**. 호출 사이 120ms를 둔다.
 //     · 필드/단위: `indicators.quote[0].{open,high,low,close,volume}` + `adjclose`.
@@ -97,9 +115,20 @@
 //     us:quick     축소 격자 스모크런 (야후 필요)
 //     us:selftest  합성 데이터 자기검증 (네트워크 불필요)
 //   환경변수: `US_UNIVERSE`(80 기본 · 20) · `US_PBO_MAX_COMBOS` · `US_FETCH_DELAY_MS`
+//             `US_PRICE_SOURCE`(yahoo 기본 · tiingo — tiingo는 `TIINGO_API_KEY` 필요)
+//             `US_TIINGO_ALLOW_UNVERIFIED=1`(보정 기준 판정불가일 때만 명시 통과)
 
 import type { CostSettings } from '../src/features/backtest/conditionScreen'
 import type { DailyBar } from '../src/features/backtest/types'
+// 시세 소스 2번째 경로 — 호출·파싱·보정 감사는 공용 모듈이 정본이다(소스 실사 프로브와 공유).
+import {
+  TIINGO_UNVERIFIED,
+  checkTickerReuseGap,
+  fetchTiingoDaily,
+  loadTiingoKey,
+  tiingoBarsToDaily,
+  type TiingoAdjAudit,
+} from './lib/tiingo'
 import {
   DSR_PASS_THRESHOLD,
   PBO_WARN_THRESHOLD,
@@ -117,13 +146,20 @@ import {
   US_COMPANY_NAMES,
   US_PIT80_SOURCE_NOTE,
   US_PIT80_UNION,
+  US_PIT_REAL_LOAD_FAIL,
+  US_PIT_REAL_PATH,
   US_PIT_SOURCE_NOTE,
   US_PIT_UNION,
   US_PIT_YEARS,
+  deriveUsRealUniverse,
+  parseUsPitRealUniverse,
   resolveUsTicker,
   usPit80Codes,
   usPitCodes,
+  type UsPitRealUniverse,
 } from '../src/features/backtest/usPitUniverse'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 export function log(msg: string): void {
   console.log(msg)
@@ -237,7 +273,7 @@ export const REPRO_TOLERANCE_PP = 0.5
 
 export interface UsUniverse {
   key: string
-  /** 그 해 목록의 종목 수(매핑률 분모 · 분위 계산의 명목 모집단). */
+  /** 그 해 목록의 종목 수(로그·소요시간 추정용 명목값). 랭킹 슬롯은 그 시점 후보 수로 계산한다. */
   size: number
   label: string
   codesFor: (y: number) => string[]
@@ -246,6 +282,10 @@ export interface UsUniverse {
   sourceNote: string
   /** **[추정] 목록인가.** 실측 목록이 들어오면 false로 둔다 — 경고 문구가 바뀐다. */
   estimated: boolean
+  /** 실행 연도. [추정] 목록은 `US_PIT_YEARS` 고정, 실측 목록은 신뢰구간이 정한다. */
+  years: readonly number[]
+  /** 전·후반 경계 연도. [추정] 목록은 24·26·27차와 맞추려고 2014 고정이다. */
+  halfYear: number
 }
 
 export const US_UNI20: UsUniverse = {
@@ -256,6 +296,8 @@ export const US_UNI20: UsUniverse = {
   union: US_PIT_UNION,
   sourceNote: US_PIT_SOURCE_NOTE,
   estimated: true,
+  years: US_PIT_YEARS,
+  halfYear: US_HALF_YEAR,
 }
 export const US_UNI80: UsUniverse = {
   key: '80',
@@ -265,6 +307,55 @@ export const US_UNI80: UsUniverse = {
   union: US_PIT80_UNION,
   sourceNote: US_PIT80_SOURCE_NOTE,
   estimated: true,
+  years: US_PIT_YEARS,
+  halfYear: US_HALF_YEAR,
+}
+
+/**
+ * **실측 유니버스 키.** `US_UNIVERSE=real` 로만 켜진다 — 기본값으로 두지 않는 이유는
+ * 41차 수치와의 연속성 때문이고, 그보다 중요하게는 **의미가 다르기 때문**이다:
+ * 실측 목록은 **지수 구성종목**(위원회 선정)이고 US_PIT20/80은 **시총 상위 N [추정]**이다.
+ * 두 수치를 "좋아졌다/나빠졌다"로 나란히 읽으면 거짓이다 — **새 기준선**으로 읽어야 한다.
+ */
+export const US_UNIVERSE_REAL_KEY = 'real'
+
+/** 파싱된 실측 유니버스 → 러너 어댑터. 연도·경계도 **데이터가 정한다**(사람이 적지 않는다). */
+export function realUniverseFrom(u: UsPitRealUniverse): UsUniverse {
+  const d = deriveUsRealUniverse(u)
+  const sizes = d.years.map((y) => d.codesFor(y).length)
+  const median = [...sizes].sort((a, b) => a - b)[Math.floor(sizes.length / 2)] ?? 0
+  return {
+    key: US_UNIVERSE_REAL_KEY,
+    size: median,
+    label: d.label,
+    codesFor: d.codesFor,
+    union: d.union,
+    sourceNote: d.sourceNote,
+    estimated: false,
+    years: d.years,
+    halfYear: halfYearOf(d.years),
+  }
+}
+
+/**
+ * 커밋된 실측 파일을 읽는다. **없으면 [추정] 목록으로 조용히 내려가지 않고 던진다** —
+ * 국장 33차가 무너진 경로가 "틀린 목록 위에서 조용히 계속 도는 것"이었다.
+ */
+export function loadRealUniverseFromDisk(root = process.env.REPO_ROOT ?? process.cwd()): UsUniverse {
+  const path = join(root, US_PIT_REAL_PATH)
+  let raw: string
+  try {
+    raw = readFileSync(path, 'utf8')
+  } catch (e) {
+    throw new Error(`${US_PIT_REAL_LOAD_FAIL} (파일을 읽지 못했다: ${path} · ${String(e)})`)
+  }
+  let json: unknown
+  try {
+    json = JSON.parse(raw)
+  } catch (e) {
+    throw new Error(`${US_PIT_REAL_LOAD_FAIL} (JSON 파싱 실패: ${path} · ${String(e)})`)
+  }
+  return realUniverseFrom(parseUsPitRealUniverse(json))
 }
 
 export const US_UNIVERSES: readonly UsUniverse[] = [US_UNI80, US_UNI20]
@@ -272,12 +363,13 @@ export const US_UNIVERSES: readonly UsUniverse[] = [US_UNI80, US_UNI20]
 /** 기본 유니버스 — 27차가 알파를 낸 유일한 표본이 상위 80이라 그것을 기본으로 둔다. */
 export const US_UNIVERSE_KEY_DEFAULT = '80'
 
-export function pickUniverse(key: string | undefined): UsUniverse {
+export function pickUniverse(key: string | undefined, loadReal: () => UsUniverse = loadRealUniverseFromDisk): UsUniverse {
   const k = (key ?? US_UNIVERSE_KEY_DEFAULT).trim()
+  if (k === US_UNIVERSE_REAL_KEY) return loadReal()
   const hit = US_UNIVERSES.find((u) => u.key === k)
   if (!hit)
     throw new Error(
-      `알 수 없는 US_UNIVERSE=${k} — 가능한 값: ${US_UNIVERSES.map((u) => u.key).join(' | ')}. ` +
+      `알 수 없는 US_UNIVERSE=${k} — 가능한 값: ${[...US_UNIVERSES.map((u) => u.key), US_UNIVERSE_REAL_KEY].join(' | ')}. ` +
         '조용히 기본값으로 넘어가지 않는다(어느 목록으로 돌았는지가 결과 해석의 전제라서).',
     )
   return hit
@@ -305,26 +397,62 @@ export function estimateBanner(uni: UsUniverse): string {
  */
 export type ReturnBasis = 'total' | 'price'
 
-/** 시세 소스 — 미장 유니버스는 KRX Open API 밖이라 `yahoo` 하나뿐이다. */
-export type UsPriceSource = 'yahoo'
+/**
+ * 시세 소스.
+ *   · `yahoo`  — 41차까지 쓴 기본값. **죽은 종목을 주지 않는다**(생존편향의 원천).
+ *   · `tiingo` — 2026-08-04 실사에서 **상폐를 주는 유일한 무료 소스**로 확인됐다
+ *     (상폐 8종 중 회사일치 3 · 대조군 4/4 · MER은 야후가 껍데기 1봉, tiingo가 진짜 506봉).
+ *
+ * ⚠️ **소스를 섞지 않는다.** 한 실행은 유니버스·벤치·벽을 **전부 같은 소스**로 받는다.
+ *   tiingo가 실패한 종목을 야후로 슬쩍 메우면 (a) 그 종목만 보정 기준이 달라지고
+ *   (b) "상폐 커버리지가 얼마나 메워졌나"를 잴 수 없게 된다. 실패는 실패로 센다.
+ */
+export type UsPriceSource = 'yahoo' | 'tiingo'
+export const US_PRICE_SOURCES: readonly UsPriceSource[] = ['yahoo', 'tiingo'] as const
 
 /**
- * 시세 소스에 맞는 비교 기준. **미장은 전략·벤치·벽이 전부 야후 `adjclose`라 total 하나뿐**이며,
- * 국장에서 40차에 제거한 배당 비대칭(전략=가격수익 vs 벤치=총수익)이 **애초에 없다**.
- * 그럼에도 함수로 두는 이유: 나중에 실측 시세 소스가 붙어도 기준을 **한 곳에서** 정하게
- * 하려는 것이다(국장 사고의 원인이 벤치와 벽이 각자 다른 기준으로 로드된 것이었다).
+ * 기본값은 **yahoo**다 — 41차 수치와의 연속성을 기본으로 두고, 소스 교체는 **명시적으로만**
+ * 하게 한다(어느 소스로 돌았는지가 결과 해석의 전제라서 조용히 바뀌면 안 된다).
+ */
+export function pickPriceSource(raw = process.env.US_PRICE_SOURCE): UsPriceSource {
+  const s = (raw ?? 'yahoo').trim().toLowerCase()
+  const hit = US_PRICE_SOURCES.find((x) => x === s)
+  if (!hit)
+    throw new Error(
+      `알 수 없는 US_PRICE_SOURCE=${s} — 가능한 값: ${US_PRICE_SOURCES.join(' | ')}. ` +
+        '조용히 기본값으로 넘어가지 않는다(어느 소스로 돌았는지가 결과 해석의 전제라서).',
+    )
+  return hit
+}
+
+/**
+ * 시세 소스에 맞는 비교 기준. **전략·벤치·벽이 한 소스·한 기준을 지난다** —
+ * 국장 40차 사고의 원인이 벤치와 벽이 각자 다른 기준으로 로드된 것이었다.
+ *
+ * 둘 다 `total`인데, 그 근거가 소스마다 다르다:
+ *   · yahoo  — `adjclose ÷ close` 계수를 OHLC에 곱한다(규칙 3의 정본 규약).
+ *   · tiingo — `adjClose ÷ close` 계수를 **같은 식으로** 곱한다. 다만 tiingo의 `adj*`가
+ *     배당까지 반영하는지는 **문서로 확정하지 못했으므로**(규칙 4) 실행 중
+ *     `auditTiingoAdjustment`가 **실제 응답의 배당락 계수 변화로** 판정하고,
+ *     'price'(배당 미반영)로 나오면 **실행을 중단한다**. 여기가 이 소스 교체의 가장 큰
+ *     함정이다 — 기준이 어긋나면 40차에서 제거한 배당 비대칭이 그대로 되살아난다.
  */
 export function compareBasisFor(source: UsPriceSource): ReturnBasis {
   return source === 'yahoo' ? 'total' : 'total'
 }
 
-export function compareBasisNote(b: ReturnBasis): string {
-  return b === 'total'
-    ? '⚖️ 비교 기준: **총수익**(배당 재투자) — 전략·벤치(SPY)·벽(QQQ)이 **전부 야후 `adjclose` 기준**이라 ' +
-        '**미장은 기준이 이미 일치한다.** 2026-08-03 국장(40차)에서 제거한 배당 비대칭(전략=가격수익 vs ' +
-        '벤치=총수익)이 미장에는 애초에 없다 — 알파가 어느 쪽으로도 기울지 않는다. ' +
-        '남는 것은 **미국 배당세(원천징수 15%) 미반영**이며 그 방향은 성적을 후하게 만든다.'
-    : '⚖️ 비교 기준: **가격수익**(배당 제외) — 전략과 벤치를 같은 기준으로 맞췄다.'
+export function compareBasisNote(b: ReturnBasis, source: UsPriceSource = 'yahoo'): string {
+  if (b !== 'total') return '⚖️ 비교 기준: **가격수익**(배당 제외) — 전략과 벤치를 같은 기준으로 맞췄다.'
+  const src =
+    source === 'yahoo'
+      ? '**전부 야후 `adjclose` 기준**'
+      : '**전부 tiingo `adjClose` 기준**(계수 변환식은 야후와 동일 · 배당 반영 여부는 실행 중 실측 감사로 확정)'
+  return (
+    `⚖️ 비교 기준: **총수익**(배당 재투자) — 전략·벤치(SPY)·벽(QQQ)이 ${src}이라 ` +
+    '**한 실행 안에서 기준이 일치한다.** 2026-08-03 국장(40차)에서 제거한 배당 비대칭(전략=가격수익 vs ' +
+    '벤치=총수익)이 여기에는 없다 — 알파가 어느 쪽으로도 기울지 않는다. ' +
+    '남는 것은 **미국 배당세(원천징수 15%) 미반영**이며 그 방향은 성적을 후하게 만든다.'
+  )
 }
 
 // ============================================================================
@@ -1543,13 +1671,24 @@ export function runGrids(inp: RunInputs, onVariant?: (done: number, total: numbe
 // 12. 야후 로딩 (규칙 4 — 실패를 삼키지 않는다)
 // ============================================================================
 
-/** 야후 호출 성공/실패 카운터. 전량 실패는 **비정상 종료**의 근거가 된다. */
-export interface YahooTally {
+/**
+ * 시세 호출 성공/실패 카운터. 전량 실패는 **비정상 종료**의 근거가 된다.
+ * `sourceOf`는 "어느 봉이 어느 소스에서 왔나"를 종목 단위로 남긴다 — 소스를 섞지 않지만
+ * 기록은 남긴다(규칙 3 · 조용한 폴백 금지의 증거).
+ */
+export interface PriceTally {
   attempted: number
   ok: number
   failed: { symbol: string; reason: string }[]
+  sourceOf: Record<string, UsPriceSource>
+  /** tiingo 보정 기준 감사 결과(심볼별). 야후 경로에서는 비어 있다. */
+  audits: { symbol: string; audit: TiingoAdjAudit }[]
 }
-export const newYahooTally = (): YahooTally => ({ attempted: 0, ok: 0, failed: [] })
+export const newPriceTally = (): PriceTally => ({ attempted: 0, ok: 0, failed: [], sourceOf: {}, audits: [] })
+
+/** 기존 이름 — 호출부·테스트가 쓰던 형태를 깨지 않으려고 남긴다. */
+export type YahooTally = PriceTally
+export const newYahooTally = newPriceTally
 
 /**
  * 야후 일봉. **어떤 실패도 삼키지 않는다** — HTTP 오류·`chart.error`(200 본문)·빈 result
@@ -1622,24 +1761,103 @@ export async function fetchDaily(symbol: string, range = US_RANGE, basis: Return
  * `minBars`개 미만이면 실패로 본다.
  */
 export async function tallyFetch(
-  tally: YahooTally,
+  tally: PriceTally,
   symbol: string,
   range = US_RANGE,
   minBars = 200,
+  source: UsPriceSource = 'yahoo',
+  token: string | null = null,
 ): Promise<DailyBar[] | null> {
   tally.attempted++
   try {
-    const bars = await fetchDaily(symbol, range, 'total')
+    const got = source === 'tiingo' ? await loadTiingoBars(symbol, token, range) : { bars: await fetchDaily(symbol, range, 'total'), audit: null }
+    const bars = got.bars
+    if (got.audit) tally.audits.push({ symbol, audit: got.audit })
     if (bars.length < minBars) {
       tally.failed.push({ symbol, reason: `봉 ${bars.length}개 — 구간 요청(${range})에 비해 비정상적으로 적다` })
       return null
     }
     tally.ok++
+    tally.sourceOf[symbol] = source
     return bars
   } catch (e) {
     tally.failed.push({ symbol, reason: String(e) })
     return null
   }
+}
+
+// ── tiingo 경로 ─────────────────────────────────────────────────────────────
+//
+// 호출·파싱·감사는 전부 `scripts/lib/tiingo.ts`가 정본이다(소스 실사 프로브와 **같은 코드**).
+// 여기서는 러너 규약으로 옮기기만 한다: 구간 변환 · 재사용 가드 · 봉 변환.
+
+/** `since:YYYY-MM-DD` 규약을 tiingo `startDate`로 옮긴다. 다른 형태면 던진다(추측 금지). */
+export function rangeToStartDate(range: string): string {
+  if (!range.startsWith('since:'))
+    throw new Error(`tiingo 경로는 'since:YYYY-MM-DD' 구간만 받는다 — 받은 값: ${range}(야후 전용 range 표기)`)
+  const d = range.slice(6)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) throw new Error(`구간 시작일이 YYYY-MM-DD가 아니다 — ${d}`)
+  return d
+}
+
+/**
+ * tiingo 일봉 → `DailyBar[]`. 실패는 **던진다**(호출부 `tallyFetch`가 센다).
+ *   · absent(404·빈 배열) → 던진다. 러너에게는 "그 종목을 못 받았다"와 같은 뜻이고,
+ *     매핑 실패로 계수돼 연도별 매핑률에 드러난다(= 잔존 생존편향의 크기).
+ *   · **티커 재사용 의심(긴 공백)** → 던진다. 뒤 구간만 쓰면 조용한 오염이다(MER 사건).
+ */
+export async function loadTiingoBars(
+  symbol: string,
+  token: string | null,
+  range = US_RANGE,
+): Promise<{ bars: DailyBar[]; audit: TiingoAdjAudit }> {
+  if (!token) throw new Error('TIINGO_API_KEY 없음 — tiingo 소스를 고르고 키가 없으면 야후로 조용히 내려가지 않고 실패로 센다')
+  const res = await fetchTiingoDaily(symbol, token, { startDate: rangeToStartDate(range) })
+  if (res.kind === 'absent') throw new Error(`tiingo absent — ${res.note}`)
+  const gap = checkTickerReuseGap(res.rows)
+  if (!gap.ok) throw new Error(gap.reason)
+  const { bars, dropped } = tiingoBarsToDaily(res.rows, 'total')
+  if (bars.length === 0) throw new Error(`tiingo ${res.rows.length}행에서 OHLC 완전한 봉이 0개다(버린 행 ${dropped})`)
+  return { bars, audit: res.audit }
+}
+
+/**
+ * 🔴 **배당·분할 기준 게이트** — 이 작업의 가장 큰 함정을 여기서 막는다.
+ *
+ * tiingo `adj*`가 분할만 반영한다면 전략은 가격수익, 벤치·벽은 총수익이 되어 40차에서
+ * 제거한 **배당 비대칭**이 되살아난다. 문서를 믿지 않고 **벤치(SPY)의 실제 응답**으로
+ * 판정한다 — 27년 구간이면 배당락 사건이 100건 남짓이라 표본이 충분하다.
+ *
+ *   · `total`   → 통과(야후 `adjclose`와 같은 기준)
+ *   · `price`   → **중단.** 조용히 돌면 알파가 전략에 불리하게 기운다.
+ *   · `unknown` → **중단.** `US_TIINGO_ALLOW_UNVERIFIED=1`로만 명시적으로 넘긴다
+ *     (그 경우 결과에 `[미검증]`이 붙는다 — 추측으로 메우지 않는다).
+ */
+export function tiingoBasisGate(audit: TiingoAdjAudit, allowUnverified = process.env.US_TIINGO_ALLOW_UNVERIFIED === '1'): string {
+  if (audit.verdict === 'total')
+    return `✅ tiingo 보정 기준 확정: **분할+배당(총수익)** — ${audit.note}${audit.singleFactorOk ? ' · adjOpen/open = adjClose/close 확인(단일 계수 모델 성립)' : ''}`
+  if (audit.verdict === 'price')
+    throw new Error(
+      `⛔ tiingo adj*가 **배당을 반영하지 않는다**(${audit.note}). 이대로 돌면 전략은 가격수익, ` +
+        '벤치·벽은 총수익이 되어 2026-08-03 국장 40차에서 제거한 **배당 비대칭**이 그대로 되살아난다. ' +
+        '실행을 중단한다 — 기준을 맞추려면 배당 계열을 따로 받아 계수를 만들어야 한다.',
+    )
+  const msg =
+    `tiingo 보정 기준을 **판정하지 못했다** [미검증] — ${audit.note}. ` +
+    `총수익이라 가정하고 돌면 배당 비대칭 위험이 그대로 남는다.`
+  if (!allowUnverified)
+    throw new Error(`⛔ ${msg} 그래도 돌리려면 US_TIINGO_ALLOW_UNVERIFIED=1을 명시하라(결과에 [미검증]이 붙는다).`)
+  return `⚠️ [미검증] ${msg} US_TIINGO_ALLOW_UNVERIFIED=1로 명시 진행 — **이 회차 수치에 [미검증] 딱지를 유지하라.**`
+}
+
+/** 소스별 로드 결과 한 줄 — "어느 봉이 어느 소스에서 왔나"를 결과에 남긴다(규칙 3). */
+export function sourceMixLine(tally: PriceTally): string {
+  const counts = new Map<UsPriceSource, number>()
+  for (const s of Object.values(tally.sourceOf)) counts.set(s, (counts.get(s) ?? 0) + 1)
+  const parts = [...counts.entries()].map(([s, n]) => `${s} ${n}종목`)
+  return parts.length <= 1
+    ? `시세 출처: ${parts[0] ?? '없음'} (한 실행은 한 소스만 쓴다 — 조용한 폴백 없음)`
+    : `⚠️ 시세 출처가 섞였다: ${parts.join(' · ')} — 보정 기준이 종목마다 다를 수 있으니 결과를 그대로 비교하지 마라`
 }
 
 const sleep = (ms: number): Promise<void> => new Promise<void>((r) => setTimeout(() => r(), ms))
@@ -1825,6 +2043,10 @@ export function limitsSection(opts: {
   pboMaxCombos: number
   pboExhaustive: boolean
   basis: ReturnBasis
+  /** 이 실행이 어느 시세 소스로 돌았나 — 한계 문단이 소스별로 달라진다. */
+  priceSource?: UsPriceSource
+  /** 시세 출처 한 줄(어느 봉이 어느 소스에서 왔나). */
+  sourceMix?: string
   synthetic?: boolean
   mappingByYear: string
 }): void {
@@ -1841,7 +2063,9 @@ export function limitsSection(opts: {
     opts.uni.estimated
       ? `**🔴 [추정] 유니버스가 가장 큰 한계다.** ${opts.uni.sourceNote}. ` +
           '국장에서 같은 결함이 33차에 알파를 **+21.9%p → +2.6%p**로 무너뜨렸다 — 목록이 틀리면 이 회차의 수치도 틀린다. ' +
-          '실측 목록이 준비되는 대로 `US_UNIVERSES`에 한 줄 추가하고 `US_UNIVERSE_KEY_DEFAULT`만 바꿔 재실행한다.'
+          '실측 목록으로 다시 돌리려면 `US_UNIVERSE=real`(커밋된 `public/data/us-pit/universe.json`)이다. ' +
+          '다만 실측 목록은 **지수 구성종목**이라 시총 상위 N [추정]과 **의미가 다르므로** 두 수치를 나란히 놓고 ' +
+          '"좋아졌다/나빠졌다"로 읽으면 거짓이다 — 새 기준선으로 읽어라.'
       : `✅ **실측 유니버스로 돌았다** — ${opts.uni.sourceNote}.`,
   )
   items.push(
@@ -1849,7 +2073,7 @@ export function limitsSection(opts: {
       '그 구간 성적은 **살아남은 종목 위주라 실제보다 후하다**(규칙 1-7). 티커 재사용은 차단(`US_BLOCKED_TICKERS`)해 ' +
       '"정직한 매핑 실패"로 계수했다 — 엉뚱한 소형주 시계열이 상폐 대형주 자리에 들어오는 조용한 오염보다 낫다.',
   )
-  items.push(compareBasisNote(opts.basis).replace(/^⚖️ /, '**배당 기준.** '))
+  items.push(compareBasisNote(opts.basis, opts.priceSource ?? 'yahoo').replace(/^⚖️ /, '**배당 기준.** '))
   items.push(
     '**환율 미반영.** 전 구간 USD 기준 수익률이다. 원화 환산 시 원/달러 변동이 그대로 더해진다 — ' +
       '국장 표(원화)와 절대 수익률을 나란히 놓으면 안 된다.',
@@ -1885,9 +2109,17 @@ export function limitsSection(opts: {
     '**미국 대형주는 서로 상관이 매우 높다**(같은 지수·같은 매크로). 분위를 갈랐다고 분산까지 좋아지는 것은 아니다.',
   )
   items.push(
-    `**야후는 비공식 엔드포인트다.** 정확성 미보증 · 호출 한도 문서 없음 \`[미검증]\` · 예고 없이 스키마가 바뀔 수 있다. ` +
-      '실패는 삼키지 않고 성공 카운터로 드러낸다(규칙 4).',
+    (opts.priceSource ?? 'yahoo') === 'tiingo'
+      ? '**시세 소스 = tiingo.** 2026-08-04 실사에서 **상폐를 주는 유일한 무료 소스**로 확인됐다(상폐 8종 중 회사일치 3 · ' +
+          '대조군 4/4). 그래도 **전량은 아니다** — WorldCom·Enron은 404, LEH·BSC·TYC는 빈 배열이라 ' +
+          '**생존편향은 줄어들 뿐 사라지지 않는다.** 무료 티어 호출 한도 수치와 빈 배열의 의미(티어 제한 vs 데이터 부재)는 ' +
+          '`[미검증]`이다. 보정 기준(배당 반영 여부)은 **실행 중 실측 감사**로 확정했고, 미반영으로 판정되면 실행을 중단한다.'
+      : '**시세 소스 = 야후(비공식 엔드포인트).** 정확성 미보증 · 호출 한도 문서 없음 `[미검증]` · 예고 없이 스키마가 바뀔 수 있다. ' +
+          '무엇보다 **죽은 종목을 주지 않는다** — 상폐사가 통째로 빠져 성적이 후해진다(41차 2000년 매핑률 56/80). ' +
+          '`US_PRICE_SOURCE=tiingo`로 그 구멍을 얼마나 메우는지 잴 수 있다.',
   )
+  if (opts.sourceMix) items.push(`**시세 출처 기록.** ${opts.sourceMix}`)
+  items.push('실패는 삼키지 않고 성공 카운터로 드러낸다 — 전량 실패는 비정상 종료다(규칙 4).')
   items.forEach((t, i) => log(`${i + 1}. ${t}`))
 }
 
@@ -2235,13 +2467,29 @@ async function main(): Promise<void> {
   const uni = pickUniverse(process.env.US_UNIVERSE)
   log('')
   log(estimateBanner(uni))
-  log(`유니버스: ${uni.label} (연 ${uni.size}종목 · 조회 합집합 ${uni.union.length}티커 · ${US_PIT_YEARS.length}개 연도)`)
+  log(
+    `유니버스: ${uni.label} (연 ${uni.size}종목 · 조회 합집합 ${uni.union.length}티커 · ` +
+      `${uni.years.length}개 연도 ${uni.years[0]}~${uni.years[uni.years.length - 1]} · 전·후반 경계 ${uni.halfYear})`,
+  )
   log(`⚠️ ${uni.sourceNote}`)
 
-  // ---- 비교 기준(배당) — **한 곳에서** 정한다 ---------------------------
-  const basis = compareBasisFor('yahoo')
+  // ---- 시세 소스 · 비교 기준(배당) — **한 곳에서** 정한다 ---------------
+  const priceSource = pickPriceSource()
+  const basis = compareBasisFor(priceSource)
+  // 키는 loadSecret 하나로만 읽는다(규칙 2-1). 값은 출력하지 않고 loadSecret가 출처·길이만 찍는다.
+  const tiingoKey = priceSource === 'tiingo' ? loadTiingoKey() : null
+  if (priceSource === 'tiingo' && !tiingoKey?.value)
+    throw new Error(
+      `US_PRICE_SOURCE=tiingo인데 TIINGO_API_KEY가 없다 — 야후로 조용히 내려가지 않는다.\n${tiingoKey?.help ?? ''}`,
+    )
   log('')
-  log(compareBasisNote(basis))
+  log(`시세 소스: **${priceSource}** (US_PRICE_SOURCE · 기본 yahoo — 41차 수치와의 연속성)`)
+  if (priceSource === 'tiingo') {
+    log('   왜: 야후는 죽은 종목을 주지 않는다(41차 2000년 매핑률 56/80). 2026-08-04 실사에서')
+    log('   tiingo만 상폐를 줬다(상폐 8종 중 회사일치 3 · 대조군 4/4). 남는 생존편향은 매핑률로 잰다.')
+    for (const u of TIINGO_UNVERIFIED) log(`   · [미검증] ${u}`)
+  }
+  log(compareBasisNote(basis, priceSource))
 
   // ---- 격자 -------------------------------------------------------------
   const grids = gridsForMode(mode)
@@ -2251,15 +2499,19 @@ async function main(): Promise<void> {
   for (const g of grids)
     log(`· \`${g.id}\` ${g.label} — ${g.axes.map((a) => `${a.key}[${a.values.join(',')}]`).join(' × ')} = ${g.axes.reduce((s, a) => s * a.values.length, 1)}변형`)
 
-  // ---- 시세 (전량 야후 · 규칙 4) ----------------------------------------
-  const tally = newYahooTally()
+  // ---- 시세 (한 소스로만 · 규칙 4) --------------------------------------
+  const tally = newPriceTally()
   const delay = fetchDelayMs()
+  const token = tiingoKey?.value ?? null
+  const fetchOne = (sym: string): Promise<DailyBar[] | null> => tallyFetch(tally, sym, US_RANGE, 200, priceSource, token)
   log('')
-  log(`시세 수집 시작 — 야후 ${uni.union.length + 2}건(유니버스 ${uni.union.length} + 벤치 ${BENCH_US} + 벽 ${WALL_QQQ}) · 호출 간격 ${delay}ms`)
+  log(
+    `시세 수집 시작 — ${priceSource} ${uni.union.length + 2}건(유니버스 ${uni.union.length} + 벤치 ${BENCH_US} + 벽 ${WALL_QQQ}) · 호출 간격 ${delay}ms`,
+  )
   const histories: Record<string, DailyBar[]> = {}
   const fetchT0 = Date.now()
   for (const ticker of uni.union) {
-    const bars = await tallyFetch(tally, ticker, US_RANGE)
+    const bars = await fetchOne(ticker)
     if (bars) histories[ticker] = bars
     await sleep(delay)
   }
@@ -2275,9 +2527,17 @@ async function main(): Promise<void> {
       log('  ↑ 이들이 빠지는 것이 곧 잔존 생존편향이다 — 연도별 매핑률로 크기를 잰다(상폐 티커의 404는 정상적인 결과다).')
     }
   }
+  log(sourceMixLine(tally))
+  // 성공 카운터 — 유니버스가 **전량 실패**면 여기서 죽는다(항목별 try/catch가 오류를 삼켜
+  // "다 실패했는데 종료코드 0"이 되는 것을 막는다 · 규칙 4-2).
+  if (uni.union.length > 0 && Object.keys(histories).length === 0)
+    throw new Error(
+      `${priceSource} 시세를 한 종목도 받지 못했다(시도 ${tally.attempted}건 전량 실패) — 결과를 근거로 쓰지 마라. ` +
+        `첫 사유: ${tally.failed[0]?.reason ?? '없음'}`,
+    )
 
   // ---- 벤치 (실패하면 즉시 비정상 종료 — 규칙 4·5) ----------------------
-  const benchBars = await tallyFetch(tally, BENCH_US, US_RANGE)
+  const benchBars = await fetchOne(BENCH_US)
   if (!benchBars)
     throw new Error(
       `벤치(${BENCH_US}) 로드 실패 — 알파 판정(규칙 5)이 불가능하므로 실행을 중단한다. ` +
@@ -2285,16 +2545,41 @@ async function main(): Promise<void> {
     )
   const benchEq: Curve = benchBars.filter((b) => b.c > 0).map((b) => ({ date: b.date, equity: b.c }))
   const benchLabel = `${BENCH_US} (S&P 500 ETF)`
+
+  // ---- 🔴 배당·분할 기준 게이트 (tiingo 경로 전용) ----------------------
+  // 벤치(SPY)의 실제 응답으로 판정한다 — 27년이면 배당락 사건이 100건 남짓이라 표본이 넉넉하다.
+  // 여기서 막지 않으면 40차에서 제거한 배당 비대칭이 조용히 되살아난다.
+  if (priceSource === 'tiingo') {
+    const benchAudit = tally.audits.find((a) => a.symbol === BENCH_US)?.audit
+    if (!benchAudit) throw new Error(`벤치(${BENCH_US})의 tiingo 보정 감사 결과가 없다 — 기준을 확인하지 않은 채 돌지 않는다.`)
+    log('')
+    log(tiingoBasisGate(benchAudit))
+    const uniAudits = tally.audits.filter((a) => a.symbol !== BENCH_US)
+    const byVerdict = { total: 0, price: 0, unknown: 0 }
+    for (const a of uniAudits) byVerdict[a.audit.verdict]++
+    log(
+      `   유니버스 종목 감사 분포: 총수익 ${byVerdict.total} · 가격수익 ${byVerdict.price} · 판정불가 ${byVerdict.unknown}` +
+        `(배당 이력이 짧은 종목은 판정불가가 정상이다)`,
+    )
+    if (byVerdict.price > 0)
+      throw new Error(
+        `⛔ 유니버스 ${byVerdict.price}종목에서 tiingo adj*가 **배당 미반영**으로 판정됐다 — 종목마다 기준이 다르면 ` +
+          '횡단면 랭킹 자체가 거짓이 된다. 실행을 중단한다.',
+      )
+  }
+
   log('')
   log(
-    `벤치: ${benchLabel} ${benchBars.length}봉 (${benchBars[0].date} ~ ${benchBars[benchBars.length - 1].date}) · 총수익(adjclose 계수) — ` +
-      '알파는 이 구간과 겹치는 부분에서만 계산한다.',
+    `벤치: ${benchLabel} ${benchBars.length}봉 (${benchBars[0].date} ~ ${benchBars[benchBars.length - 1].date}) · ` +
+      `총수익(${priceSource} adjClose 계수) — 알파는 이 구간과 겹치는 부분에서만 계산한다.`,
   )
   log(`데이터 신선도: 벤치 최신 봉 **${benchBars[benchBars.length - 1].date}**. 여기서 멈췄다는 뜻이다.`)
 
   // ---- 연도 컨텍스트(파라미터 무관 — 한 번만 만든다) --------------------
   const resolve = (code: string) => resolveUsTicker(code, (s) => !!histories[s]?.length)
-  const ctxs = buildYearCtxs(histories, US_PIT_YEARS, uni.codesFor, resolve)
+  // 연도·경계는 **유니버스가 정한다** — [추정] 목록은 US_PIT_YEARS 고정(41차 연속성),
+  // 실측 목록은 되감기 신뢰구간(reliableFrom~)이 정한다.
+  const ctxs = buildYearCtxs(histories, uni.years, uni.codesFor, resolve)
   const usable = ctxs.filter((c) => c.symbols.length >= MIN_SYMBOLS)
   const mapping = mappingLine(ctxs)
   log('')
@@ -2312,11 +2597,11 @@ async function main(): Promise<void> {
   const inputs: RunInputs = {
     grids,
     ctxs,
-    years: US_PIT_YEARS,
+    years: uni.years,
     cost: COST_US,
     benchCurve: benchEq,
     benchLabel,
-    halfYear: US_HALF_YEAR,
+    halfYear: uni.halfYear,
   }
   const out = runGrids(inputs, (done, total, ms) => {
     if (done === 1) log(`1변형 실측 ${ms}ms → ${total}변형 예상 ${((ms * total) / 1000).toFixed(0)}초 (격자 실행분만)`)
@@ -2339,7 +2624,8 @@ async function main(): Promise<void> {
     log(estimateBanner(uni))
     log('')
     await sleep(delay)
-    const qqq = await tallyFetch(tally, WALL_QQQ, US_RANGE)
+    // 벽도 **같은 소스**로 받는다 — 벤치와 벽이 각자 다른 기준으로 로드된 것이 국장 40차 사고였다.
+    const qqq = await fetchOne(WALL_QQQ)
     const walls: WallStats[] = []
     const bw = wallOf(`${BENCH_US} 보유 (알파 판정 벤치)`, benchEq, span[0], span[1])
     if (bw) walls.push(bw)
@@ -2384,6 +2670,8 @@ async function main(): Promise<void> {
     pboMaxCombos: out.pbo.combinationsEvaluated,
     pboExhaustive: out.pbo.exhaustive,
     basis,
+    priceSource,
+    sourceMix: sourceMixLine(tally),
     mappingByYear: mapping,
   })
   for (const l of DISCLAIMER) log(l)
