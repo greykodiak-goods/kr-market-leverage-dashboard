@@ -898,6 +898,227 @@ async function sweepMode(token: string): Promise<void> {
   )
 }
 
+
+// ============================================================================
+// 5.7 MODE=dca — 매일 1만원 적립식 (2026-08-05 대표 지시)
+// ============================================================================
+//
+// 거치식(한 번에 넣고 두기)과 **계산이 다르다**. 원금이 매일 늘어나므로 곡선의 CAGR은
+// 의미가 없다 — 돈이 들어온 시점마다 굴러간 기간이 달라서다. 그래서 **IRR(내부수익률)**로
+// 잰다. 모든 납입을 현금흐름으로 놓고 최종 평가액과 맞추는 연환산 수익률이다.
+//
+// 적립식에서만 의미가 있는 지표를 같이 낸다:
+//   · **원금 대비 배수** — 넣은 돈이 몇 배가 됐나
+//   · **수중(underwater) 일수** — 평가액이 누적 원금 **아래**에 있던 날. 적립식은 계속
+//     사들이므로 낙폭이 가려진다. "몇 년 동안 마이너스였나"가 체감 위험에 더 가깝다.
+//   · **최장 연속 수중 기간** — 원금 회복까지 가장 오래 걸린 구간
+//
+// ⚠️ 환율 미반영(규칙 3 한계 그대로) — "매일 1만원어치를 그날 환율로 샀다"고 보되
+//    원화·달러 환율 변동 손익은 계산에 없다. 세금도 미반영이다.
+// ⚠️ 거래일 기준이다. 주말·휴장일에는 사지 않는다.
+
+const DCA_DAILY = 10_000
+
+interface DcaResult {
+  curve: Curve
+  days: number
+  contributed: number
+  finalValue: number
+  multiple: number
+  irrPct: number | null
+  mddPct: number
+  underwaterDays: number
+  longestUnderwater: { days: number; from: string; to: string }
+  firstDate: string
+  lastDate: string
+}
+
+/** 순현재가치 — 일별 납입 + 최종 평가액. 연이율 r에서 0이 되는 지점이 IRR이다. */
+function dcaNpv(bars: readonly DailyBar[], amount: number, finalValue: number, r: number): number {
+  const t0 = Date.parse(bars[0].date)
+  const yearOf = (d: string): number => (Date.parse(d) - t0) / (365.25 * 86400e3)
+  const base = 1 + r
+  let npv = 0
+  for (const b of bars) npv -= amount / Math.pow(base, yearOf(b.date))
+  npv += finalValue / Math.pow(base, yearOf(bars[bars.length - 1].date))
+  return npv
+}
+
+/** IRR을 이분법으로 푼다. 부호가 안 갈리면 null(추정치를 지어내지 않는다). */
+function dcaIrr(bars: readonly DailyBar[], amount: number, finalValue: number): number | null {
+  let lo = -0.95
+  let hi = 5
+  let fLo = dcaNpv(bars, amount, finalValue, lo)
+  let fHi = dcaNpv(bars, amount, finalValue, hi)
+  if (!Number.isFinite(fLo) || !Number.isFinite(fHi) || fLo * fHi > 0) return null
+  for (let i = 0; i < 200; i++) {
+    const mid = (lo + hi) / 2
+    const fMid = dcaNpv(bars, amount, finalValue, mid)
+    if (!Number.isFinite(fMid)) return null
+    if (fLo * fMid <= 0) {
+      hi = mid
+      fHi = fMid
+    } else {
+      lo = mid
+      fLo = fMid
+    }
+  }
+  return ((lo + hi) / 2) * 100
+}
+
+/**
+ * 매 거래일 시가에 고정 금액을 매수한다. 미래참조 없음 — 그날 시가만 쓴다.
+ */
+function runDca(bars: readonly DailyBar[], amount: number, cost: LadderCost): DcaResult {
+  if (bars.length < 2) throw new Error(`적립식을 잴 봉이 부족하다 (${bars.length}봉)`)
+  const side = (cost.feePct + cost.slippagePct) / 100
+  const curve: Curve = []
+  let shares = 0
+  let contributed = 0
+  let peak = 0
+  let mdd = 0
+  let underwaterDays = 0
+  let runStart = ''
+  let best = { days: 0, from: '', to: '' }
+  let runLen = 0
+
+  for (const b of bars) {
+    if (!(b.o > 0)) throw new Error(`${b.date} 시가가 유효하지 않다 (${b.o})`)
+    shares += (amount * (1 - side)) / b.o
+    contributed += amount
+    const value = shares * b.c
+    curve.push({ date: b.date, equity: value })
+    if (value > peak) peak = value
+    else if (peak > 0) mdd = Math.min(mdd, (value / peak - 1) * 100)
+    if (value < contributed) {
+      underwaterDays++
+      if (runLen === 0) runStart = b.date
+      runLen++
+      if (runLen > best.days) best = { days: runLen, from: runStart, to: b.date }
+    } else {
+      runLen = 0
+    }
+  }
+
+  const finalValue = curve[curve.length - 1].equity
+  return {
+    curve,
+    days: bars.length,
+    contributed,
+    finalValue,
+    multiple: finalValue / contributed,
+    irrPct: dcaIrr(bars, amount, finalValue),
+    mddPct: mdd,
+    underwaterDays,
+    longestUnderwater: best,
+    firstDate: bars[0].date,
+    lastDate: bars[bars.length - 1].date,
+  }
+}
+
+const won = (n: number): string => {
+  const eok = Math.floor(n / 100_000_000)
+  const man = Math.round((n - eok * 100_000_000) / 10_000)
+  return eok > 0 ? `${eok}억 ${man.toLocaleString()}만원` : `${man.toLocaleString()}만원`
+}
+
+function dcaRow(label: string, r: DcaResult): void {
+  const uwPct = (r.underwaterDays / r.days) * 100
+  log(
+    `| ${label} | ${r.days.toLocaleString()}일 | ${won(r.contributed)} | **${won(r.finalValue)}** | ` +
+      `${r.multiple.toFixed(2)}배 | ${r.irrPct === null ? '—' : `${f1(r.irrPct)}%`} | ${f1(r.mddPct)}% | ` +
+      `${f1(uwPct)}% | ${r.longestUnderwater.days.toLocaleString()}일 (${r.longestUnderwater.from}~${r.longestUnderwater.to}) |`,
+  )
+}
+
+const DCA_HEAD = '| 종목 | 거래일 | 누적 원금 | 최종 평가액 | 배수 | IRR(연) | 평가액 MDD | 수중일 비율 | 최장 연속 수중 |'
+const DCA_SEP = '|---|---|---|---|---|---|---|---|---|'
+
+async function dcaMode(token: string): Promise<void> {
+  log('')
+  log(`# MODE=dca — 매일 ${DCA_DAILY.toLocaleString()}원 적립식 (대표 지시)`)
+  log('')
+  log(
+    '거치식과 **계산이 다르다.** 원금이 매일 늘어나 곡선의 CAGR은 의미가 없으므로 ' +
+      '**IRR(내부수익률)**로 잰다. 적립식 고유 지표로 **수중일**(평가액이 누적 원금 아래였던 날)을 ' +
+      '같이 낸다 — 적립식은 계속 사들여 낙폭이 가려지기 때문에 "몇 년을 마이너스로 버텼나"가 ' +
+      '체감 위험에 더 가깝다.',
+  )
+  log('')
+  log('⚠️ **환율·세금 미반영**(규칙 3 한계). 거래일에만 매수한다(주말·휴장 제외).')
+
+  const loaded = new Map<string, Loaded>()
+  for (const sym of [...LADDER]) {
+    loaded.set(sym, await loadTicker(sym, token))
+    await sleep(200)
+  }
+  for (const sym of LADDER) log(basisGate(loaded.get(sym)!.audit, sym))
+
+  // ── 1) 공통 구간 — 사과 대 사과 ───────────────────────────────────────────
+  const aligned = alignBars(new Map([...loaded].map(([s, v]) => [s, v.bars])))
+  const common = aligned.get(LADDER_BASE)!
+  log('')
+  log(`## 1) 공통 구간 ${common[0].date} ~ ${common[common.length - 1].date} — 세 종목 같은 조건`)
+  log('')
+  log(DCA_HEAD)
+  log(DCA_SEP)
+  for (const sym of LADDER) dcaRow(sym, runDca(aligned.get(sym)!, DCA_DAILY, US_LADDER_COST))
+
+  // ── 2) 각 종목 전체 구간 ──────────────────────────────────────────────────
+  log('')
+  log('## 2) 각 종목이 존재한 전 구간 — **구간이 달라 직접 비교하면 거짓이다**')
+  log('')
+  log('상장일이 달라 시작점이 다르다. 같은 표에 있다고 나란히 비교하지 마라.')
+  log('')
+  log(DCA_HEAD)
+  log(DCA_SEP)
+  for (const sym of LADDER) {
+    const b = loaded.get(sym)!.bars
+    dcaRow(`${sym} (${b[0].date}~)`, runDca(b, DCA_DAILY, US_LADDER_COST))
+  }
+
+  // ── 3) 닷컴 직전 시작 — 적립식의 진짜 시험 ────────────────────────────────
+  log('')
+  log('## 3) 최악의 시작점 — QQQ를 상장 직후(닷컴 직전)부터 적립했다면')
+  log('')
+  const qqqAll = loaded.get(BENCH)!.bars
+  const q = runDca(qqqAll, DCA_DAILY, US_LADDER_COST)
+  log(
+    `1999-03-10부터 매일 ${DCA_DAILY.toLocaleString()}원씩 넣었다면 — ` +
+      `원금 ${won(q.contributed)} → 평가액 ${won(q.finalValue)} (${q.multiple.toFixed(2)}배 · IRR ${q.irrPct === null ? '—' : `${f1(q.irrPct)}%`}).`,
+  )
+  log('')
+  log(
+    `그러나 **원금 아래에 있던 날이 ${q.underwaterDays.toLocaleString()}일**(전체의 ${f1((q.underwaterDays / q.days) * 100)}%)이고, ` +
+      `가장 긴 연속 마이너스 구간은 **${q.longestUnderwater.days.toLocaleString()}거래일** ` +
+      `(${q.longestUnderwater.from} ~ ${q.longestUnderwater.to})이었다. ` +
+      '적립식이 거치식보다 안전해 보이는 이유는 낙폭이 신규 매수에 가려지기 때문이지 ' +
+      '위험이 사라져서가 아니다.',
+  )
+
+  // ── 4) 거치식과의 대조 ────────────────────────────────────────────────────
+  log('')
+  log('## 4) 같은 구간 거치식과 대조 — 적립식이 유리한가')
+  log('')
+  log('| 종목 | 적립식 IRR | 거치식 CAGR | 차이 | 읽는 법 |')
+  log('|---|---|---|---|---|')
+  for (const sym of LADDER) {
+    const d = runDca(aligned.get(sym)!, DCA_DAILY, US_LADDER_COST)
+    const lump = perfOf(buyHoldCurve(aligned.get(sym)!, US_LADDER_COST))
+    const gap = d.irrPct === null ? null : d.irrPct - lump.cagr
+    log(
+      `| ${sym} | ${d.irrPct === null ? '—' : `${f1(d.irrPct)}%`} | ${f1(lump.cagr)}% | ${pp(gap)} | ` +
+        `${gap !== null && gap > 0 ? '적립식이 높다' : '거치식이 높다 — 상승장에서는 일찍 넣을수록 유리하다'} |`,
+    )
+  }
+  log('')
+  log(
+    '⚠️ 이 대조는 **투입 금액이 다르다** — 거치식 CAGR은 첫날 목돈을 넣은 가정이고 적립식 IRR은 ' +
+      '돈이 나눠 들어간 가정이다. "어느 쪽이 더 벌었나"가 아니라 **"같은 돈이 시장에 머문 시간당 ' +
+      '수익률이 어땠나"**를 비교하는 표다.',
+  )
+}
+
 // ============================================================================
 // 6. MODE=selftest — 네트워크 없이 도는 자기검증
 // ============================================================================
@@ -961,7 +1182,8 @@ async function main(): Promise<void> {
   if (mode === 'synth' || mode === 'all') await synth(key.value)
   if (mode === 'prop' || mode === 'all') await prop(key.value)
   if (mode === 'sweep' || mode === 'all') await sweepMode(key.value)
-  if (!['real', 'synth', 'prop', 'sweep', 'all'].includes(mode)) throw new Error(`알 수 없는 MODE: ${mode}`)
+  if (mode === 'dca' || mode === 'all') await dcaMode(key.value)
+  if (!['real', 'synth', 'prop', 'sweep', 'dca', 'all'].includes(mode)) throw new Error(`알 수 없는 MODE: ${mode}`)
 
   log('')
   log('---')
@@ -981,3 +1203,4 @@ if (process.env.US_LEV_RUN === '1') {
 }
 
 export { perfOf, calmarOf, buyHoldCurve, runGrid, basisGate, splitDate, STEP_GRID, BUF_GRID, LADDER }
+export { runDca, dcaIrr, dcaNpv, DCA_DAILY, type DcaResult }
