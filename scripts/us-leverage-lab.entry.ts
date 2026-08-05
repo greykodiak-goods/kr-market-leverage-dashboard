@@ -690,6 +690,214 @@ async function prop(token: string): Promise<void> {
   }
 }
 
+
+// ============================================================================
+// 5.6 MODE=sweep — "10%"를 10~30까지 훑는다 (2026-08-05 대표 지시)
+// ============================================================================
+//
+//   지시 정본에는 10%가 **세 군데** 나온다. 어느 것을 물으신 건지 지시문에서
+//   하나로 좁혀지지 않으므로 **셋 다 각각** 훑고, 마지막에 전면 격자로 조합을 본다.
+//     A) 1단 진입 밴드(-10%)   — 2단은 비율을 유지해 2배(-20%)로 따라간다
+//     B) 익절 방아쇠(+10%마다)
+//     C) 익절 규모(레버리지의 10%)
+//     D) 전면 격자 — 위 셋 + 2단 밴드까지 동시에
+//
+// ⚠️ **다중검정 경고(규칙 5)**: 수백 변형을 돌려 1등을 고르는 것은 그 자체로 과최적화다.
+//    1등의 성적은 "이 구간에서 가장 운이 좋았던 조합"이고 미래 성적의 기댓값이 아니다.
+//    그래서 이 절은 **1등 숫자보다 축을 따라가는 추세**를 보는 데 쓴다 —
+//    이웃한 파라미터에서 성적이 급변하면 그 봉우리는 노이즈이고, 완만하면 실체가 있다.
+//    통과 판정은 여전히 관문 3개(알파·칼마·전후반)로만 한다.
+
+interface SweepRow {
+  label: string
+  p: ProportionalParams
+  perf: Perf
+  calmar: number | null
+  alpha: number | null
+  a1: number | null
+  a2: number | null
+  trades: number
+  pass: boolean
+}
+
+function scoreOne(
+  label: string,
+  p: ProportionalParams,
+  base: readonly DailyBar[],
+  assets: ReadonlyMap<string, readonly DailyBar[]>,
+  bench: Curve,
+  mid: string,
+  benchCalmar: number | null,
+): SweepRow {
+  const run = runProportionalLadder(base, assets, p, US_LADDER_COST)
+  const perf = perfOf(run.equity)
+  const calmar = calmarOf(perf)
+  const alpha = alphaOf(run.equity, bench, '', '9999-12-31')
+  const a1 = alphaOf(run.equity, bench, '', mid)
+  const a2 = alphaOf(run.equity, bench, mid, '9999-12-31')
+  const pass =
+    alpha !== null && alpha > 0 &&
+    calmar !== null && benchCalmar !== null && calmar > benchCalmar &&
+    a1 !== null && a2 !== null && a1 > 0 && a2 > 0
+  return { label, p, perf, calmar, alpha, a1, a2, trades: run.trades, pass }
+}
+
+function sweepTable(title: string, rows: SweepRow[], note: string): void {
+  log('')
+  log(`### ${title}`)
+  log('')
+  log(note)
+  log('')
+  log('| 값 | 총수익 | CAGR | MDD | 칼마 | 알파 | 전반 | 후반 | 매매 | 관문 |')
+  log('|---|---|---|---|---|---|---|---|---|---|')
+  const bestCalmar = Math.max(...rows.map((r) => r.calmar ?? -9))
+  const bestCagr = Math.max(...rows.map((r) => r.perf.cagr))
+  for (const r of rows) {
+    const mk = (r.calmar ?? -9) === bestCalmar ? ' 🥇칼마' : r.perf.cagr === bestCagr ? ' 🥇수익' : ''
+    log(
+      `| ${r.label}${mk} | ${f1(r.perf.total)}% | ${f1(r.perf.cagr)}% | ${f1(r.perf.mdd)}% | ${f2(r.calmar)} | ` +
+        `${pp(r.alpha)} | ${pp(r.a1)} | ${pp(r.a2)} | ${r.trades} | ${r.pass ? '✅' : '❌'} |`,
+    )
+  }
+}
+
+function topTable(title: string, rows: SweepRow[], by: (r: SweepRow) => number, n: number): void {
+  const sorted = [...rows].sort((a, b) => by(b) - by(a)).slice(0, n)
+  log('')
+  log(`### ${title}`)
+  log('')
+  log('| 순위 | 밴드1 | 밴드2 | 익절방아쇠 | 익절규모 | CAGR | MDD | 칼마 | 알파 | 전반 | 후반 | 관문 |')
+  log('|---|---|---|---|---|---|---|---|---|---|---|---|')
+  sorted.forEach((r, i) => {
+    log(
+      `| ${i + 1} | -${r.p.band1Pct}% | -${r.p.band2Pct}% | +${r.p.tpStepPct}% | ${r.p.tpFracPct}% | ` +
+        `${f1(r.perf.cagr)}% | ${f1(r.perf.mdd)}% | ${f2(r.calmar)} | ${pp(r.alpha)} | ${pp(r.a1)} | ${pp(r.a2)} | ` +
+        `${r.pass ? '✅ 통과' : '❌'} |`,
+    )
+  })
+}
+
+async function sweepMode(token: string): Promise<void> {
+  log('')
+  log('# MODE=sweep — "10%"를 10~30까지 훑기 (대표 지시)')
+  log('')
+  log(
+    '지시 정본의 10%는 **세 군데**(진입 밴드 · 익절 방아쇠 · 익절 규모)에 나온다. ' +
+      '어느 것인지 지시문에서 좁혀지지 않아 **셋 다 각각** 훑고 전면 격자로 조합까지 본다.',
+  )
+  log('')
+  log(
+    '⚠️ **다중검정 경고(규칙 5)** — 수백 변형 중 1등을 고르는 것은 그 자체로 과최적화다. ' +
+      '1등 숫자는 "이 구간에서 가장 운이 좋았던 조합"이지 미래 기댓값이 아니다. ' +
+      '**축을 따라가는 추세**로 읽어라 — 이웃 값에서 성적이 급변하면 노이즈, 완만하면 실체가 있다.',
+  )
+
+  const loaded = new Map<string, Loaded>()
+  for (const sym of [...LADDER]) {
+    loaded.set(sym, await loadTicker(sym, token))
+    await sleep(200)
+  }
+  for (const sym of LADDER) log(basisGate(loaded.get(sym)!.audit, sym))
+
+  const aligned = alignBars(new Map([...loaded].map(([s, v]) => [s, v.bars])))
+  const base = aligned.get(LADDER_BASE)!
+  const bench = buyHoldCurve(aligned.get(BENCH)!, US_LADDER_COST)
+  const benchPerf = perfOf(bench)
+  const benchCalmar = calmarOf(benchPerf)
+  const mid = splitDate(bench)
+
+  log('')
+  log(`**실측 구간: ${base[0].date} ~ ${base[base.length - 1].date}** (${base.length}봉)`)
+  log('')
+  log(
+    `**벤치(QQQ 단순보유): CAGR ${f1(benchPerf.cagr)}% · MDD ${f1(benchPerf.mdd)}% · 칼마 ${f2(benchCalmar)}** ` +
+      '— 칼마 관문은 이 값을 넘어야 한다.',
+  )
+
+  const S = (l: string, p: ProportionalParams): SweepRow => scoreOne(l, p, base, aligned, bench, mid, benchCalmar)
+  const base10 = SPEC_PROPORTIONAL
+
+  // ── A) 1단 진입 밴드 ──────────────────────────────────────────────────────
+  const A: SweepRow[] = []
+  for (let d = 10; d <= 30; d++)
+    A.push(S(`-${d}% (2단 -${d * 2}%)`, { ...base10, band1Pct: d, band2Pct: d * 2 }))
+  sweepTable(
+    'A) 1단 진입 밴드 -10% → -30%',
+    A,
+    '2단은 비율을 유지해 1단의 2배로 따라간다. 익절은 지시값 고정(+10%마다 10%).',
+  )
+
+  // ── B) 익절 방아쇠 ────────────────────────────────────────────────────────
+  const B: SweepRow[] = []
+  for (let t = 10; t <= 30; t++) B.push(S(`+${t}%마다`, { ...base10, tpStepPct: t }))
+  sweepTable('B) 익절 방아쇠 +10% → +30%', B, '밴드는 지시값 고정(-10% / -20%), 익절 규모 10% 고정.')
+
+  // ── C) 익절 규모 ──────────────────────────────────────────────────────────
+  const C: SweepRow[] = []
+  for (let f = 10; f <= 30; f++) C.push(S(`${f}%씩`, { ...base10, tpFracPct: f }))
+  sweepTable('C) 익절 규모 10% → 30%', C, '밴드는 지시값 고정(-10% / -20%), 방아쇠 +10% 고정.')
+
+  // ── D) 전면 격자 ──────────────────────────────────────────────────────────
+  const D: SweepRow[] = []
+  for (let b1 = 10; b1 <= 30; b1 += 2) {
+    for (const gap of [b1, 10, 15]) {
+      const b2 = b1 + gap
+      if (b2 <= b1) continue
+      for (let t = 10; t <= 30; t += 4) {
+        for (let f = 10; f <= 30; f += 5) {
+          D.push(
+            S(`${b1}/${b2}/${t}/${f}`, { band1Pct: b1, band2Pct: b2, stage1SwapPct: 50, tpStepPct: t, tpFracPct: f }),
+          )
+        }
+      }
+    }
+  }
+  log('')
+  log(`## D) 전면 격자 — **${D.length}변형** (밴드1 10~30 × 2단 간격 3종 × 방아쇠 10~30 × 규모 10~30)`)
+  topTable('D-1) 칼마 상위 15 — 관문 기준', D, (r) => r.calmar ?? -9, 15)
+  topTable('D-2) CAGR 상위 15 — 수익 기준', D, (r) => r.perf.cagr, 15)
+  topTable('D-3) 알파 상위 15', D, (r) => r.alpha ?? -99, 15)
+
+  const passed = D.filter((r) => r.pass)
+  log('')
+  log(`### 전면 격자 관문 통과: **${passed.length} / ${D.length}**`)
+  if (passed.length > 0) {
+    log('')
+    log('⚠️ 통과 변형이 나왔더라도 **다중검정을 통과한 것은 아니다**. ' + `${D.length}개를 돌렸으므로 우연히 관문을 넘는 변형이 나오는 것이 정상이다. ` +
+      '고원(plateau) 검사 — 이웃 파라미터도 같이 통과하는가 — 를 거쳐야 실체를 말할 수 있다.')
+    topTable('통과 변형 (칼마순)', passed, (r) => r.calmar ?? -9, Math.min(20, passed.length))
+  } else {
+    log('')
+    log('❌ 전면 격자에서도 관문 통과 0.')
+  }
+
+  // ── 요약 ──────────────────────────────────────────────────────────────────
+  const bestOf = (rows: SweepRow[], by: (r: SweepRow) => number): SweepRow =>
+    [...rows].sort((a, b) => by(b) - by(a))[0]
+  const spec = S('지시값', base10)
+  log('')
+  log('## 요약 — 축별 최고')
+  log('')
+  log('| 축 | 칼마 최고 | 값 | CAGR 최고 | 값 |')
+  log('|---|---|---|---|---|')
+  const rowOf = (name: string, rows: SweepRow[]): void => {
+    const bc = bestOf(rows, (r) => r.calmar ?? -9)
+    const bg = bestOf(rows, (r) => r.perf.cagr)
+    log(`| ${name} | ${bc.label} | ${f2(bc.calmar)} | ${bg.label} | ${f1(bg.perf.cagr)}% |`)
+  }
+  rowOf('A 진입 밴드', A)
+  rowOf('B 익절 방아쇠', B)
+  rowOf('C 익절 규모', C)
+  const dc = bestOf(D, (r) => r.calmar ?? -9)
+  const dg = bestOf(D, (r) => r.perf.cagr)
+  log(`| D 전면 격자 | ${dc.label} | ${f2(dc.calmar)} | ${dg.label} | ${f1(dg.perf.cagr)}% |`)
+  log('')
+  log(
+    `참고 — 지시값(10/20/+10/10): CAGR ${f1(spec.perf.cagr)}% · MDD ${f1(spec.perf.mdd)}% · ` +
+      `칼마 ${f2(spec.calmar)} · 알파 ${pp(spec.alpha)}`,
+  )
+}
+
 // ============================================================================
 // 6. MODE=selftest — 네트워크 없이 도는 자기검증
 // ============================================================================
@@ -752,7 +960,8 @@ async function main(): Promise<void> {
   if (mode === 'real' || mode === 'all') await real(key.value)
   if (mode === 'synth' || mode === 'all') await synth(key.value)
   if (mode === 'prop' || mode === 'all') await prop(key.value)
-  if (!['real', 'synth', 'prop', 'all'].includes(mode)) throw new Error(`알 수 없는 MODE: ${mode}`)
+  if (mode === 'sweep' || mode === 'all') await sweepMode(key.value)
+  if (!['real', 'synth', 'prop', 'sweep', 'all'].includes(mode)) throw new Error(`알 수 없는 MODE: ${mode}`)
 
   log('')
   log('---')
