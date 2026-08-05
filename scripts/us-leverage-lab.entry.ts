@@ -535,13 +535,17 @@ async function main(): Promise<void> {
   }
 
   const key = loadTiingoKey()
-  if (!key.token) throw new Error('TIINGO_API_KEY 없음 — 조용히 다른 소스로 내려가지 않고 실패로 끝낸다')
-  log(`시세 소스: tiingo (키 길이 ${key.token.length} · 출처 ${key.source})`)
+  if (!key.value)
+    throw new Error(
+      `TIINGO_API_KEY 없음 — 조용히 다른 소스로 내려가지 않고 실패로 끝낸다${key.help ? ` (${key.help})` : ''}`,
+    )
+  // 값은 어떤 경로로도 출력하지 않는다(규칙 2-1) — 길이만 남긴다.
+  log(`시세 소스: tiingo (키 길이 ${key.value.length})`)
   log('호출 종목 4개 — 무료 티어 한도(500 unique/월 · 50 req/시간)와 무관하다.')
   log('')
 
-  if (mode === 'real' || mode === 'all') await real(key.token)
-  if (mode === 'synth' || mode === 'all') await synth(key.token)
+  if (mode === 'real' || mode === 'all') await real(key.value)
+  if (mode === 'synth' || mode === 'all') await synth(key.value)
   if (mode !== 'real' && mode !== 'synth' && mode !== 'all') throw new Error(`알 수 없는 MODE: ${mode}`)
 
   log('')
