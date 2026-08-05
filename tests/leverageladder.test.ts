@@ -16,7 +16,10 @@ import {
   DEFAULT_LADDER_PARAMS,
   US_LADDER_COST,
   TRADING_DAYS,
+  runProportionalLadder,
+  SPEC_PROPORTIONAL,
   type LadderParams,
+  type ProportionalParams,
 } from '../src/features/backtest/leverageLadder'
 import type { DailyBar } from '../src/lib/history'
 
@@ -289,6 +292,125 @@ section('8. 비용이 실제로 빠지는가')
   )
   eq('비용 유무가 전환 횟수를 바꾸지는 않는다', paid.switches.length, free.switches.length)
   eq('보유일수 합 = 전체 봉 수', paid.daysInStep.reduce((a, b) => a + b, 0), base.length)
+}
+
+// ============================================================================
+section('9. 비중 분할 사다리 — 대표 지시 정본 (QQQ→50/50→QLD·TQQQ + 익절 래칫)')
+// ============================================================================
+
+const PP: ProportionalParams = { ...SPEC_PROPORTIONAL }
+
+{
+  // 지시대로 움직이는지 **결정적 계열**로 확인한다.
+  // 0~99 평평(고점 형성) → 100~199 -25%까지 하락 → 200~ 회복
+  const bars: DailyBar[] = []
+  let c = 100
+  for (let i = 0; i < 400; i++) {
+    if (i < 100) c = 100
+    else if (i < 200) c = 100 * (1 - 0.25 * ((i - 99) / 100))
+    else c = 75 * (1 + 0.6 * ((i - 199) / 200))
+    const d = new Date(Date.UTC(2010, 0, 4) + i * 86400e3)
+    bars.push({ date: d.toISOString().slice(0, 10), t: 0, o: c, h: c, l: c, c, v: 0 })
+  }
+  const assets = alignBars(makeLadderInput(bars))
+  const run = runProportionalLadder(bars, assets, PP, US_LADDER_COST)
+
+  const kinds = run.events.map((e) => e.kind)
+  check('1단 진입이 발생한다', kinds.includes('1단 진입'), kinds.join(','))
+  check('2단 진입이 발생한다', kinds.includes('2단 진입'))
+  check('익절이 발생한다', kinds.includes('익절'))
+
+  const e1 = run.events.find((e) => e.kind === '1단 진입')!
+  const e2 = run.events.find((e) => e.kind === '2단 진입')!
+  check(`1단 진입은 -10% 부근 (${e1.ddPct.toFixed(1)}%)`, e1.ddPct <= -10 && e1.ddPct > -11)
+  check(`2단 진입은 -20% 부근 (${e2.ddPct.toFixed(1)}%)`, e2.ddPct <= -20 && e2.ddPct > -21)
+
+  // 1단 직후 비중은 QQQ 50 / QLD 50 근처
+  check(
+    `1단 직후 QQQ≈50·QLD≈50 (${e1.weights.map((w) => w.toFixed(0)).join('/')})`,
+    Math.abs(e1.weights[0] - 50) < 2 && Math.abs(e1.weights[1] - 50) < 2 && e1.weights[2] === 0,
+  )
+  // 2단 직후 QQQ가 비고 TQQQ가 생긴다
+  check(
+    `2단 직후 QQQ≈0·TQQQ 보유 (${e2.weights.map((w) => w.toFixed(0)).join('/')})`,
+    e2.weights[0] < 1 && e2.weights[2] > 20,
+  )
+  check('전 구간 레버리지 보유일이 0이 아니다', run.daysLevered > 0, `${run.daysLevered}일`)
+}
+
+{
+  // 절단 불변성 — 이 엔진에도 규칙 1이 그대로 걸린다.
+  const base = makeBars(1200, 91, -0.0003, 0.025)
+  const full = runProportionalLadder(base, alignBars(makeLadderInput(base)), PP, US_LADDER_COST)
+  check('원본에 행동이 충분히 있다', full.events.length >= 5, `${full.events.length}건`)
+
+  for (const cut of [400, 700, 1000]) {
+    const cb = base.slice(0, cut)
+    const cr = runProportionalLadder(cb, alignBars(makeLadderInput(cb)), PP, US_LADDER_COST)
+    let same = cr.equity.length === cut
+    for (let i = 0; i < cr.equity.length && same; i++) {
+      if (cr.equity[i].date !== full.equity[i].date) same = false
+      else if (Math.abs(cr.equity[i].equity - full.equity[i].equity) > 1e-9) same = false
+    }
+    check(`[비중] 절단 ${cut}봉 — 자산곡선 동일`, same)
+
+    const lastDate = cb[cb.length - 1].date
+    const a = cr.events.filter((e) => e.date < lastDate)
+    const b = full.events.filter((e) => e.date < lastDate)
+    check(
+      `[비중] 절단 ${cut}봉 — 행동 이력 동일 (${a.length}건)`,
+      a.length === b.length && a.every((e, i) => e.date === b[i].date && e.kind === b[i].kind),
+      `절단 ${a.length} vs 원본 ${b.length}`,
+    )
+    check(`[비중] 절단 ${cut}봉 — 비교 대상이 비어있지 않다`, a.length > 0)
+  }
+}
+
+{
+  // 미래 조작 불변성
+  const base = makeBars(900, 93, -0.0003, 0.025)
+  const K = 500
+  const tampered = base.map((b, i) => (i < K ? b : { ...b, o: b.o * 3, h: b.h * 3, l: b.l * 3, c: b.c * 3 }))
+  const o = runProportionalLadder(base, alignBars(makeLadderInput(base)), PP, US_LADDER_COST)
+  const t = runProportionalLadder(tampered, alignBars(makeLadderInput(tampered)), PP, US_LADDER_COST)
+  let same = true
+  for (let i = 0; i < K; i++) if (Math.abs(o.equity[i].equity - t.equity[i].equity) > 1e-9) { same = false; break }
+  check('[비중] 봉 500 이후 조작해도 그 이전 불변', same)
+}
+
+{
+  // 마지막 봉 규율 + 방어
+  const base = makeBars(600, 95, -0.001, 0.03)
+  const run = runProportionalLadder(base, alignBars(makeLadderInput(base)), PP, US_LADDER_COST)
+  const lastDate = base[base.length - 1].date
+  check('[비중] 마지막 봉에 신규 행동 없음(규칙 1-6)', !run.events.some((e) => e.date === lastDate))
+
+  let threw = false
+  try {
+    runProportionalLadder(base, alignBars(makeLadderInput(base)), { ...PP, band1Pct: 20, band2Pct: 10 }, US_LADDER_COST)
+  } catch { threw = true }
+  check('[비중] 밴드 순서가 뒤집히면 던진다', threw)
+
+  const free = runProportionalLadder(base, alignBars(makeLadderInput(base)), PP, { initialCapital: 10_000, feePct: 0, slippagePct: 0 })
+  check('[비중] 비용을 물리면 최종 자산이 더 작다', run.equity[run.equity.length - 1].equity < free.equity[free.equity.length - 1].equity)
+  check('[비중] 평균 비중 합이 100 근처', Math.abs(run.avgWeights.reduce((a, b) => a + b, 0) - 100) < 0.5)
+}
+
+{
+  // 신고가 회복 시 QQQ 100%로 정리되는가
+  const bars: DailyBar[] = []
+  let c = 100
+  for (let i = 0; i < 300; i++) {
+    if (i < 50) c = 100
+    else if (i < 150) c = 100 * (1 - 0.25 * ((i - 49) / 100))
+    else c = 75 * (1 + 0.5 * ((i - 149) / 150)) // 최종 112.5 → 신고가 돌파
+    const d = new Date(Date.UTC(2010, 0, 4) + i * 86400e3)
+    bars.push({ date: d.toISOString().slice(0, 10), t: 0, o: c, h: c, l: c, c, v: 0 })
+  }
+  const run = runProportionalLadder(bars, alignBars(makeLadderInput(bars)), PP, US_LADDER_COST)
+  check('신고가 정리 이벤트가 있다', run.events.some((e) => e.kind === '신고가 정리'), run.events.map((e) => e.kind).join(','))
+  const last = run.events[run.events.length - 1]
+  check(`정리 후 QQQ 100% 근처 (${last.weights.map((w) => w.toFixed(0)).join('/')})`, last.weights[0] > 99)
 }
 
 finish()

@@ -53,7 +53,8 @@
 //
 //   실행: MODE=real  node scripts/us-leverage-lab.mjs   (실측 구간 격자 — 기본)
 //        MODE=synth node scripts/us-leverage-lab.mjs   (합성 스트레스 — 참고)
-//        MODE=all   node scripts/us-leverage-lab.mjs   (둘 다)
+//        MODE=prop  node scripts/us-leverage-lab.mjs   (비중 분할 사다리 — 대표 지시 정본)
+//        MODE=all   node scripts/us-leverage-lab.mjs   (전부)
 //        MODE=selftest                                  (네트워크 불필요 자기검증)
 
 import {
@@ -63,6 +64,9 @@ import {
   synthTrackingGap,
   US_LADDER_COST,
   LADDER_BASE,
+  runProportionalLadder,
+  SPEC_PROPORTIONAL,
+  type ProportionalParams,
   type Curve,
   type LadderParams,
   type LadderCost,
@@ -485,6 +489,207 @@ async function synth(token: string): Promise<void> {
   )
 }
 
+
+// ============================================================================
+// 5.5 MODE=prop — 비중 분할 사다리 (2026-08-05 대표 지시 정본)
+// ============================================================================
+//
+//   평시 QQQ 100% → -10%에서 절반을 QLD로 → -20%에서 남은 QQQ 전부를 TQQQ로
+//   → +10% 오를 때마다 레버리지의 10%를 QQQ로 되돌림 → 신고가 회복 시 QQQ 100% 초기화
+//
+// 앞의 `runLeverageLadder`(한 칸=한 종목 100%)와 **다른 전략**이다. 섞어 읽지 마라 —
+// 100% TQQQ는 3배를 통째로 맞지만 QLD 50 / TQQQ 50은 실효 2.5배라 낙폭 성격이 다르다.
+
+/** 격자 — 지시값 `(10,20)/step10/frac10`이 1행에 오도록 배열 순서를 잡는다. */
+const PROP_BANDS: [number, number][] = [
+  [10, 20],
+  [10, 25],
+  [15, 30],
+]
+const PROP_TP_STEP = [10, 5, 15]
+const PROP_TP_FRAC = [10, 25]
+
+interface PropRow {
+  key: string
+  spec: boolean
+  perf: Perf
+  calmar: number | null
+  alpha: number | null
+  a1: number | null
+  a2: number | null
+  trades: number
+  avgWeights: [number, number, number]
+  leveredPct: number
+  pass: boolean
+  why: string
+}
+
+function runPropGrid(
+  base: readonly DailyBar[],
+  assets: ReadonlyMap<string, readonly DailyBar[]>,
+  bench: Curve,
+  cost: typeof US_LADDER_COST,
+): PropRow[] {
+  const rows: PropRow[] = []
+  const mid = splitDate(bench)
+  const benchCalmar = calmarOf(perfOf(bench))
+  for (const [b1, b2] of PROP_BANDS) {
+    for (const step of PROP_TP_STEP) {
+      for (const frac of PROP_TP_FRAC) {
+        const p: ProportionalParams = {
+          band1Pct: b1,
+          band2Pct: b2,
+          stage1SwapPct: 50,
+          tpStepPct: step,
+          tpFracPct: frac,
+        }
+        const run = runProportionalLadder(base, assets, p, cost)
+        const perf = perfOf(run.equity)
+        const calmar = calmarOf(perf)
+        const alpha = alphaOf(run.equity, bench, '', '9999-12-31')
+        const a1 = alphaOf(run.equity, bench, '', mid)
+        const a2 = alphaOf(run.equity, bench, mid, '9999-12-31')
+        const g1 = alpha !== null && alpha > 0
+        const g2 = calmar !== null && benchCalmar !== null && calmar > benchCalmar
+        const g3 = a1 !== null && a2 !== null && a1 > 0 && a2 > 0
+        const why = [g1 ? '' : '알파≤0', g2 ? '' : '칼마≤벤치', g3 ? '' : '반쪽구간'].filter(Boolean).join('·')
+        const isSpec =
+          b1 === SPEC_PROPORTIONAL.band1Pct &&
+          b2 === SPEC_PROPORTIONAL.band2Pct &&
+          step === SPEC_PROPORTIONAL.tpStepPct &&
+          frac === SPEC_PROPORTIONAL.tpFracPct
+        rows.push({
+          key: `밴드${b1}/${b2} · 익절 +${step}%마다 ${frac}%`,
+          spec: isSpec,
+          perf,
+          calmar,
+          alpha,
+          a1,
+          a2,
+          trades: run.trades,
+          avgWeights: run.avgWeights,
+          leveredPct: (run.daysLevered / base.length) * 100,
+          pass: g1 && g2 && g3,
+          why: why || '통과',
+        })
+      }
+    }
+  }
+  return rows
+}
+
+function propTable(rows: PropRow[]): void {
+  log('')
+  log('| 변형 | 총수익 | CAGR | MDD | 칼마 | 알파 | 전반 | 후반 | 매매 | 평균비중 QQQ/QLD/TQQQ | 레버일% | 관문 |')
+  log('|---|---|---|---|---|---|---|---|---|---|---|---|')
+  for (const r of rows) {
+    const w = r.avgWeights.map((x) => x.toFixed(0)).join('/')
+    log(
+      `| ${r.spec ? '**⭐ ' : '`'}${r.key}${r.spec ? ' (지시값)**' : '`'} | ${f1(r.perf.total)}% | ${f1(r.perf.cagr)}% | ` +
+        `${f1(r.perf.mdd)}% | ${f2(r.calmar)} | ${pp(r.alpha)} | ${pp(r.a1)} | ${pp(r.a2)} | ${r.trades} | ${w} | ` +
+        `${f1(r.leveredPct)}% | ${r.pass ? '✅ 통과' : `❌ ${r.why}`} |`,
+    )
+  }
+}
+
+async function prop(token: string): Promise<void> {
+  log('')
+  log('# MODE=prop — 비중 분할 사다리 (대표 지시 정본)')
+  log('')
+  log('평시 QQQ 100% → **-10%**에서 절반을 QLD로 → **-20%**에서 남은 QQQ 전부를 TQQQ로')
+  log('→ **+10% 오를 때마다** 레버리지의 10%를 QQQ로 되돌림 → **신고가 회복 시** QQQ 100%로 초기화')
+  log('')
+  log(
+    '⚠️ 앞 절(`MODE=real`)의 사다리와는 **다른 전략**이다. 저쪽은 한 칸에 한 종목 100%였고 ' +
+      '이쪽은 비중을 섞는다 — QLD 50 / TQQQ 50은 실효 2.5배라 100% TQQQ와 낙폭 성격이 다르다.',
+  )
+
+  const loaded = new Map<string, Loaded>()
+  for (const sym of [...LADDER]) {
+    loaded.set(sym, await loadTicker(sym, token))
+    await sleep(200)
+  }
+  for (const sym of LADDER) log(basisGate(loaded.get(sym)!.audit, sym))
+
+  // ── 실측 구간 (판정) ──────────────────────────────────────────────────────
+  const aligned = alignBars(new Map([...loaded].map(([s, v]) => [s, v.bars])))
+  const base = aligned.get(LADDER_BASE)!
+  const bench = buyHoldCurve(aligned.get(BENCH)!, US_LADDER_COST)
+  log('')
+  log(`**실측 판정 구간: ${base[0].date} ~ ${base[base.length - 1].date}** (${base.length}봉)`)
+  log('')
+  log('## 기준선')
+  log('')
+  log('| 기준선 | 총수익 | CAGR | MDD | 칼마 |')
+  log('|---|---|---|---|---|')
+  benchLine(`${BENCH} 단순보유 (벤치)`, bench)
+  benchLine(`${RIVAL} 단순보유`, buyHoldCurve(aligned.get(RIVAL)!, US_LADDER_COST))
+  benchLine('TQQQ 단순보유', buyHoldCurve(aligned.get('TQQQ')!, US_LADDER_COST))
+
+  const rows = runPropGrid(base, aligned, bench, US_LADDER_COST)
+  log('')
+  log('## 실측 격자 — 밴드 × 익절 방아쇠 × 익절 규모')
+  propTable(rows)
+
+  const passed = rows.filter((r) => r.pass)
+  const specRow = rows.find((r) => r.spec)!
+  log('')
+  log(`관문 통과: **${passed.length} / ${rows.length}**`)
+  log('')
+  log(
+    `**지시값 그대로(밴드 10/20 · 익절 +10%마다 10%)**: CAGR ${f1(specRow.perf.cagr)}% · ` +
+      `MDD ${f1(specRow.perf.mdd)}% · 칼마 ${f2(specRow.calmar)} · 알파 ${pp(specRow.alpha)} → ` +
+      `${specRow.pass ? '✅ 통과' : `❌ ${specRow.why}`}`,
+  )
+  if (passed.length === 0) {
+    log('')
+    log('❌ **통과 0.** "가장 덜 나쁜 변형"을 승격시키는 경로는 없다.')
+  }
+
+  // ── 합성 스트레스 (참고) ──────────────────────────────────────────────────
+  const mk = (sym: string): DailyBar[] =>
+    synthLeveraged(loaded.get(BENCH)!.bars, {
+      leverage: SYNTH_LEVERAGE[sym],
+      expenseAnnualPct: SYNTH_EXPENSE[sym],
+      financingAnnualPct: SYNTH_FINANCING_PCT,
+    })
+  const sAssets = alignBars(
+    new Map<string, DailyBar[]>([
+      ['QQQ', loaded.get(BENCH)!.bars],
+      ['QLD', mk(RIVAL)],
+      ['TQQQ', mk('TQQQ')],
+    ]),
+  )
+  const sBase = sAssets.get(LADDER_BASE)!
+  const sBench = buyHoldCurve(sAssets.get(BENCH)!, US_LADDER_COST)
+  log('')
+  log(`## 합성 스트레스 [판정 근거 아님] — ${sBase[0].date} ~ ${sBase[sBase.length - 1].date}`)
+  log('')
+  log(`차입비용 연 ${SYNTH_FINANCING_PCT}% 고정 [미검증] — 고금리 구간 성적이 후하게 나온다.`)
+  propTable(runPropGrid(sBase, sAssets, sBench, US_LADDER_COST))
+
+  log('')
+  log('### 위기 구간별 — 지시값 변형')
+  log('')
+  const specRun = runProportionalLadder(sBase, sAssets, SPEC_PROPORTIONAL, US_LADDER_COST)
+  log('| 구간 | 기간 | QQQ 단순보유 MDD | 지시값 사다리 MDD | 사다리 총수익 |')
+  log('|---|---|---|---|---|')
+  for (const [name, from, to] of [
+    ['닷컴 붕괴', '2000-03-01', '2002-10-31'],
+    ['금융위기', '2007-10-01', '2009-03-31'],
+    ['코로나 급락', '2020-02-01', '2020-04-30'],
+    ['2022 긴축', '2022-01-01', '2022-12-31'],
+  ] as [string, string, string][]) {
+    const bq = perfOf(sBench, from, to)
+    const bl = perfOf(specRun.equity, from, to)
+    if (bq.years < 0.05) {
+      log(`| ${name} | ${from}~${to} | — | — | 구간 데이터 없음 |`)
+      continue
+    }
+    log(`| ${name} | ${from}~${to} | ${f1(bq.mdd)}% | ${f1(bl.mdd)}% | ${f1(bl.total)}% |`)
+  }
+}
+
 // ============================================================================
 // 6. MODE=selftest — 네트워크 없이 도는 자기검증
 // ============================================================================
@@ -546,7 +751,8 @@ async function main(): Promise<void> {
 
   if (mode === 'real' || mode === 'all') await real(key.value)
   if (mode === 'synth' || mode === 'all') await synth(key.value)
-  if (mode !== 'real' && mode !== 'synth' && mode !== 'all') throw new Error(`알 수 없는 MODE: ${mode}`)
+  if (mode === 'prop' || mode === 'all') await prop(key.value)
+  if (!['real', 'synth', 'prop', 'all'].includes(mode)) throw new Error(`알 수 없는 MODE: ${mode}`)
 
   log('')
   log('---')

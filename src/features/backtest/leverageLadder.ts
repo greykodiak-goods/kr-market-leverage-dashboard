@@ -260,3 +260,211 @@ export function synthTrackingGap(real: readonly DailyBar[], synth: readonly Dail
   const synthCagr = (Math.pow(sMap.get(last.date)!.c / sMap.get(first.date)!.c, 1 / years) - 1) * 100
   return synthCagr - realCagr
 }
+
+// ============================================================================
+// 비중 분할 사다리 (Proportional Ladder) — 2026-08-05 대표 지시 정본
+// ============================================================================
+//
+// 위 `runLeverageLadder`는 "한 칸 = 한 종목 100%"였다. 대표가 지시한 것은 **비중을
+// 쪼개서 섞는** 방식이고, 이쪽이 정본이다. 둘은 낙폭 성격이 근본적으로 다르다 —
+// 100% TQQQ는 3배를 통째로 맞지만 QLD 50 / TQQQ 50은 실효 2.5배다.
+//
+//   평시            QQQ 100%
+//   고점 대비 -10%  QQQ 절반을 팔아 QLD 매수      → QQQ 50 / QLD 50
+//   고점 대비 -20%  남은 QQQ 전부를 팔아 TQQQ 매수 → QLD 50 / TQQQ 50
+//   +10% 오를 때마다 레버리지 평가액의 10%를 팔아 QQQ 매수 (래칫 · 반복)
+//   신고가 회복      남은 레버리지를 전부 QQQ로 정리하고 사다리 초기화
+//
+// ── 🚫 규칙 1 준수 ──────────────────────────────────────────────────────────
+//   · 고점은 확장 러닝 맥스 `max(close[0..i])` (규칙 1-5)
+//   · 모든 판정은 봉 i 종가, 체결은 봉 i+1 **시가** (규칙 1-2)
+//   · 마지막 봉에서는 신규 행동을 만들지 않는다 (규칙 1-6)
+//
+// ── 트리거 재무장(re-arm) 설계 ───────────────────────────────────────────────
+//   고점이 확장 러닝 맥스라 낙폭이 오래 -10% 아래에 머문다. 진입 트리거를 "밴드 안에
+//   있으면 발동"으로 두면 되돌림마다 무한 재진입한다. 그래서 **한 하락 국면에서 각
+//   트리거는 1회만** 쓰고, **신고가를 새로 쓸 때 국면이 끝나며** 재무장한다.
+//   이것이 "평시에 QQQ 들고 있다가"라는 지시와도 맞는다(평시 = 신고가 근처).
+
+export interface ProportionalParams {
+  /** 1단 진입 낙폭(%, 양수로 적는다). 지시값 10 */
+  band1Pct: number
+  /** 2단 진입 낙폭(%, 양수). 지시값 20 */
+  band2Pct: number
+  /** 1단에서 QQQ 중 QLD로 바꿀 비율(%). 지시값 50 */
+  stage1SwapPct: number
+  /** 익절 방아쇠 — 직전 매매 시점 대비 기초지수가 이만큼(%) 오르면 1회 익절. 지시값 10 */
+  tpStepPct: number
+  /** 1회 익절 규모 — 레버리지 평가액 중 파는 비율(%). 지시값 10 */
+  tpFracPct: number
+}
+
+export const SPEC_PROPORTIONAL: ProportionalParams = {
+  band1Pct: 10,
+  band2Pct: 20,
+  stage1SwapPct: 50,
+  tpStepPct: 10,
+  tpFracPct: 10,
+}
+
+export interface ProportionalEvent {
+  date: string
+  kind: '1단 진입' | '2단 진입' | '익절' | '신고가 정리'
+  ddPct: number
+  /** 체결 직후 비중(%) — QQQ / QLD / TQQQ */
+  weights: [number, number, number]
+}
+
+export interface ProportionalRun {
+  equity: Curve
+  events: ProportionalEvent[]
+  /** 평균 비중(%) — 전 구간 일별 평균 */
+  avgWeights: [number, number, number]
+  /** 레버리지(QLD+TQQQ)를 조금이라도 들고 있던 일수 */
+  daysLevered: number
+  trades: number
+}
+
+type Holdings = { QQQ: number; QLD: number; TQQQ: number }
+const SYMS = ['QQQ', 'QLD', 'TQQQ'] as const
+type Sym = (typeof SYMS)[number]
+
+/**
+ * 비중 분할 사다리 시뮬레이션.
+ *
+ * @param base 기초지수(QQQ) 봉 — 낙폭·익절 판정 기준
+ * @param assets 세 종목 봉. **base와 날짜 축이 같아야 한다**(`alignBars`로 맞춰 넘긴다).
+ */
+export function runProportionalLadder(
+  base: readonly DailyBar[],
+  assets: ReadonlyMap<string, readonly DailyBar[]>,
+  p: ProportionalParams,
+  cost: LadderCost,
+): ProportionalRun {
+  for (const s of SYMS) {
+    const bars = assets.get(s)
+    if (!bars) throw new Error(`${s} 봉이 없다 — 없는 채로 돌면 그 칸이 조용히 사라진다`)
+    if (bars.length !== base.length)
+      throw new Error(`${s} 봉 수(${bars.length})가 기초지수(${base.length})와 다르다 — 날짜 축을 먼저 맞춰라`)
+  }
+  if (!(p.band2Pct > p.band1Pct)) throw new Error(`2단 밴드(${p.band2Pct})는 1단(${p.band1Pct})보다 깊어야 한다`)
+
+  const side = (cost.feePct + cost.slippagePct) / 100
+  const px = (s: Sym, i: number, field: 'o' | 'c'): number => assets.get(s)![i][field]
+
+  const h: Holdings = { QQQ: 0, QLD: 0, TQQQ: 0 }
+  const equity: Curve = []
+  const events: ProportionalEvent[] = []
+  const wSum: [number, number, number] = [0, 0, 0]
+  let daysLevered = 0
+  let trades = 0
+
+  // 첫 봉 시가에 QQQ 전량 진입
+  const first = px('QQQ', 0, 'o')
+  if (!(first > 0)) throw new Error(`QQQ 첫 봉 시가가 유효하지 않다 (${first})`)
+  h.QQQ = (cost.initialCapital * (1 - side)) / first
+
+  let peak = base[0].c
+  let stage = 0
+  let armed1 = true
+  let armed2 = true
+  /** 익절 기준가 — 마지막으로 매매한 시점의 기초지수 종가 */
+  let refPrice = base[0].c
+
+  type Action = '1단 진입' | '2단 진입' | '익절' | '신고가 정리'
+  let pending: Action[] = []
+
+  /** 한 종목의 보유분 중 frac(0~1)을 팔아 다른 종목을 산다. 시가 체결. */
+  const swap = (from: Sym, to: Sym, frac: number, i: number): void => {
+    const qty = h[from] * frac
+    if (qty <= 0) return
+    const sellPx = px(from, i, 'o')
+    const buyPx = px(to, i, 'o')
+    if (!(sellPx > 0) || !(buyPx > 0))
+      throw new Error(`${base[i].date} 시가가 유효하지 않다 (${from} ${sellPx} → ${to} ${buyPx})`)
+    const proceeds = qty * sellPx * (1 - side)
+    h[from] -= qty
+    h[to] += (proceeds * (1 - side)) / buyPx
+    trades++
+  }
+
+  for (let i = 0; i < base.length; i++) {
+    // ── 1) 체결 — 전 봉 종가에서 만든 행동을 오늘 시가에 집행 ────────────────
+    if (i > 0 && pending.length > 0) {
+      for (const act of pending) {
+        if (act === '1단 진입') {
+          swap('QQQ', 'QLD', p.stage1SwapPct / 100, i)
+        } else if (act === '2단 진입') {
+          swap('QQQ', 'TQQQ', 1, i)
+        } else if (act === '익절') {
+          swap('QLD', 'QQQ', p.tpFracPct / 100, i)
+          swap('TQQQ', 'QQQ', p.tpFracPct / 100, i)
+        } else {
+          swap('QLD', 'QQQ', 1, i)
+          swap('TQQQ', 'QQQ', 1, i)
+        }
+        const v = SYMS.map((s) => h[s] * px(s, i, 'o'))
+        const tot = v[0] + v[1] + v[2]
+        events.push({
+          date: base[i].date,
+          kind: act,
+          ddPct: (base[i - 1].c / peak - 1) * 100,
+          weights: tot > 0 ? [(v[0] / tot) * 100, (v[1] / tot) * 100, (v[2] / tot) * 100] : [0, 0, 0],
+        })
+      }
+      refPrice = base[i - 1].c
+      pending = []
+    }
+
+    // ── 2) 평가 ─────────────────────────────────────────────────────────────
+    const vals = SYMS.map((s) => h[s] * px(s, i, 'c'))
+    const total = vals[0] + vals[1] + vals[2]
+    equity.push({ date: base[i].date, equity: total })
+    if (total > 0) SYMS.forEach((_, k) => (wSum[k] += (vals[k] / total) * 100))
+    if (vals[1] + vals[2] > total * 1e-9) daysLevered++
+
+    // ── 3) 신호 — 오늘 종가까지만 보고 내일 행동을 정한다 ────────────────────
+    const c = base[i].c
+    const newPeak = c > peak
+    if (newPeak) peak = c
+    const dd = (c / peak - 1) * 100
+    const levered = h.QLD > 0 || h.TQQQ > 0
+
+    if (i === base.length - 1) {
+      pending = [] // 마지막 봉 — 체결할 다음 봉이 없다(규칙 1-6)
+      continue
+    }
+
+    const next: Action[] = []
+    if (newPeak) {
+      // 국면 종료 — 남은 레버리지를 정리하고 트리거 재무장
+      if (levered) next.push('신고가 정리')
+      stage = 0
+      armed1 = true
+      armed2 = true
+    } else {
+      if (armed1 && stage < 1 && dd <= -p.band1Pct) {
+        next.push('1단 진입')
+        stage = 1
+        armed1 = false
+      }
+      if (armed2 && stage < 2 && dd <= -p.band2Pct) {
+        next.push('2단 진입')
+        stage = 2
+        armed2 = false
+      }
+      // 익절 래칫 — 레버리지를 들고 있고 기준가 대비 tpStep만큼 올랐을 때
+      if (next.length === 0 && levered && c >= refPrice * (1 + p.tpStepPct / 100)) next.push('익절')
+    }
+    pending = next
+  }
+
+  const n = Math.max(1, equity.length)
+  return {
+    equity,
+    events,
+    avgWeights: [wSum[0] / n, wSum[1] / n, wSum[2] / n],
+    daysLevered,
+    trades,
+  }
+}
