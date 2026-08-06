@@ -12,9 +12,7 @@ import { MegaInvestorsBoard } from '../features/mega-investors/MegaInvestorsBoar
 import { SmartMoneyRadar } from '../features/mega-investors/SmartMoneyRadar'
 import { FlowRotation } from '../features/mega-investors/FlowRotation'
 import { MegaInvestorsNews } from '../features/mega-investors/MegaInvestorsNews'
-import { BacktestSection } from '../features/backtest/BacktestSection'
-import { UsLeveragePanel } from '../features/backtest/UsLeveragePanel'
-import { SpecSimulator } from '../features/backtest/SpecSimulator'
+import { SimWorkbench } from '../features/backtest/SimWorkbench'
 
 // ---- Tabs (topic grouping) ----------------------------------------------
 // NOTE: tab-ia-plan §6 capped tabs at 5; 'sim' was added as the 6th by 대표
@@ -66,11 +64,11 @@ export const SECTIONS: SectionDef[] = [
   { id: 'semiconductor', tab: 'semi', title: '반도체 업황 · 상대강도', Component: SemiconductorSection },
   { id: 'leverage', tab: 'market', title: '시장 온도 · 레버리지', Component: LeverageSection },
   { id: 'macro', tab: 'market', title: '매크로 위험 · 지수', Component: MacroSection },
-  // 조건식(영웅문 2차검증)을 모델 플랫폼 위에 — 대표의 현재 워크플로가 조건식 발굴이므로 먼저 보이게.
-  { id: 'spec-sim', tab: 'sim', title: '⚡ 조건식 시뮬레이터 (영웅문 2차검증)', Component: SpecSimulator },
-  { id: 'backtest', tab: 'sim', title: '🤖 투자봇 시뮬레이터 (백테스트)', Component: BacktestSection },
-  // 2026-08-06 대표 지시로 등재 — 43차 실측에서 관문 통과 0(990변형)이라 라벨이 탈락 사실을 먼저 말한다.
-  { id: 'us-leverage', tab: 'sim', title: '📊 QQQ 배수 전략 프리셋 (미장 · 사전계산)', Component: UsLeveragePanel },
+  // 2026-08-06 대표 지시로 통합 — 조건식·모델·사전계산 프리셋 3개 패널이 sim 탭에 나란히
+  // 쌓여 있었는데 셋 다 "전략을 과거에 굴려 성적을 본다"로 같은 기능이었다. 이제 보드 하나에서
+  // 카드로 갈라지고, 각 화면은 해시 하위 경로(#sim/spec · #sim/us-lev · #sim/<modelId>)로 열린다.
+  // 기획: ops/context/investing/시뮬탭-통합기획_2026-08-06.md
+  { id: 'sim', tab: 'sim', title: '🤖 전략 시뮬레이터', Component: SimWorkbench },
   { id: 'news', tab: 'news', title: '📰 시장 전반 뉴스', Component: NewsForecastSection },
   // 계산형(매일 바뀜)을 위, 정적 레퍼런스(분기 갱신)를 아래로 — 볼 것이 있는 순서.
   { id: 'smart-money-radar', tab: 'giants', title: '🎯 큰손 자금 레이더', Component: SmartMoneyRadar },

@@ -1,6 +1,10 @@
-// 모델 보드 — "가상 투자자" 목록. 카드 1장 = 모델 1개의 트랙레코드 요약.
-// 클릭하면 모델 상세(전용 조회 화면)로 들어간다.
+// 전략 보드 — 카드 1장 = 전략 1개. 클릭하면 그 전략 전용 화면으로 들어간다.
+//
+// 2026-08-06 통합(대표 지시): 모델이 아닌 입력(조건식 직접 작성·사전계산 프리셋)도
+// `leadingCards`로 **같은 그리드 안에** 놓는다. 그리드를 쪼개면 "왜 나눠져 있냐"가
+// 그대로 남으므로 슬롯 하나로 앞에 끼워 넣는다.
 
+import type { ReactNode } from 'react'
 import { MODEL_META, type BoardSummary, type ModelConfig } from './models'
 import { symbolLabel } from './UniverseEditor'
 import type { Enrollment } from './spec'
@@ -18,9 +22,11 @@ interface Props {
   progress: string | null
   onOpen: (id: string) => void
   onRunAll: () => void
+  /** 모델 카드 앞에 같은 그리드로 끼워 넣을 카드들(조건식·사전계산 등). */
+  leadingCards?: ReactNode
 }
 
-export function ModelBoard({ configs, board, enrollments, busy, progress, onOpen, onRunAll }: Props) {
+export function ModelBoard({ configs, board, enrollments, busy, progress, onOpen, onRunAll, leadingCards }: Props) {
   return (
     <div>
       <div className="bt-actions" style={{ marginTop: 0 }}>
@@ -28,11 +34,13 @@ export function ModelBoard({ configs, board, enrollments, busy, progress, onOpen
           {busy ? `⏳ ${progress ?? '실행 중…'}` : '▶ 전체 모델 일괄 평가 (각자 유니버스·세팅)'}
         </button>
         <span className="bt-chart-caption">
-          모델 1개 = 가상 투자자 1명. 카드를 누르면 해당 모델 전용 조회 화면이 열립니다.
+          카드 1장 = 전략 1개(모델 = 가상 투자자 1명). 누르면 해당 전략 전용 화면이 열립니다. 위 버튼은 모델
+          카드만 다시 평가합니다.
         </span>
       </div>
 
       <div className="bt-board">
+        {leadingCards}
         {MODEL_META.map((meta) => {
           const s = board[meta.id]
           const cfg = configs[meta.id]
