@@ -215,11 +215,11 @@ async function main(): Promise<void> {
     }),
     ...US_LEVERAGE_PRESETS.map((preset) => {
       const r = runProportionalLadderDca(base, aligned, preset.params, US_LADDER_COST, DCA_DAILY, 'weights')
-      // 같은 이름 4줄이 나란히 있으면 무엇이 무엇인지 알 수 없다 — 파라미터로 구분한다.
+      // 같은 이름이 나란히 있으면 무엇이 무엇인지 알 수 없다 — 파라미터로 전부 구분한다.
       const q = preset.params
-      const tp = q.tpFracPct !== 10 ? ` · 익절 ${q.tpFracPct}%` : ''
+      const frac = q.tpFracPct !== 10 ? ` · 규모 ${q.tpFracPct}%` : ''
       return {
-        label: `사다리 밴드 ${q.band1Pct}/${q.band2Pct}%${tp} 적립`,
+        label: `사다리 ${q.band1Pct}/${q.band2Pct} · 익절+${q.tpStepPct}%${frac} 적립`,
         contributed: r.contributed,
         finalValue: r.finalValue,
         multiple: +r.multiple.toFixed(2),
