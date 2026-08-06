@@ -193,7 +193,8 @@ async function main(): Promise<void> {
       curve: downsample(run.equity, bench),
       // 비중 변화 차트용(스키마 2) — 곡선과 같은 인덱스만 남겨 x축을 공유한다.
       weights: downsampleWeights(run.weightsDaily),
-      // 매매 사건 — "언제 발동했는지"를 차트에 점으로 찍는다. 수십 건이라 전량 싣는다.
+      // 매매 사건 목록 — **현재 화면은 아직 그리지 않는다**(산출물에만 싣는 참고 데이터).
+      // 점 찍기를 붙이려면 UsLeveragePanel의 WeightsChart에서 이 필드를 읽으면 된다. 수십 건이라 전량 싣는다.
       events: run.events.map((e) => ({ date: e.date, kind: e.kind, ddPct: +e.ddPct.toFixed(1) })),
     }
   })

@@ -181,6 +181,7 @@ function WeightsChart({ preset }: { preset: PresetRow }) {
   const w = preset.weights
   if (!w || w.length !== preset.curve.length || w.length < 2) return null
   const dates = preset.curve.map(([d]) => d)
+  // x축은 **숫자 시간축**(ts) — 문자열 카테고리 축에 ms 눈금을 꽂으면 눈금이 하나도 안 그려진다(검수 실측).
   const rows = preset.curve.map(([date], i) => ({
     date,
     ts: toTs(date),
@@ -219,9 +220,12 @@ function WeightsChart({ preset }: { preset: PresetRow }) {
         <AreaChart data={rows} margin={{ top: 4, right: 12, left: 4, bottom: 0 }} syncId="bt-sync">
           <CartesianGrid stroke="var(--border)" vertical={false} />
           <XAxis
-            dataKey="date"
-            ticks={ticks as unknown as string[]}
-            tickFormatter={fmt as unknown as (v: string) => string}
+            dataKey="ts"
+            type="number"
+            scale="time"
+            domain={['dataMin', 'dataMax']}
+            ticks={ticks}
+            tickFormatter={fmt}
             tickLine={false}
             axisLine={{ stroke: 'var(--border)' }}
           />
@@ -276,24 +280,36 @@ export function UsLeveragePanel() {
       })
     : []
 
-  // ── 칼마 관문 차트 데이터 — 이 화면의 결론(전부 벤치 아래)을 첫 그림으로 ────
-  const calmarRows = data.presets.map((p) => ({
-    name: tinyLabel(p.label),
-    calmar: p.calmar ?? 0,
-    pass: p.gatePass,
-  }))
+  // ── 칼마 관문 차트 데이터 — 이 화면의 결론을 첫 그림으로 ──────────────────
+  // 칼마 null(MDD≈0이라 정의 불가)을 0으로 그리면 없는 수치를 지어내는 것이다(규칙 3) — 차트에서 뺀다.
+  const calmarRows = data.presets
+    .filter((p) => p.calmar != null)
+    .map((p) => ({ name: tinyLabel(p.label), calmar: p.calmar as number, pass: p.gatePass }))
+  const calmarSkipped = data.presets.length - calmarRows.length
   const benchCalmar = data.bench.calmar
+  // 캡션 결론은 하드코딩하지 않는다 — 재베이크에서 통과가 나오면 화면이 자기모순이 된다(검수 지적).
+  const passCount = data.presets.filter((p) => p.gatePass).length
+  const allAlphaPositive = data.presets.length > 0 && data.presets.every((p) => (p.alphaCagrPct ?? 0) > 0)
 
   // ── 단순보유 벽 — CAGR(오른쪽)·MDD(왼쪽) 다이버징 ─────────────────────────
   const wallRows = data.walls.map((w) => ({ name: w.label.replace(' 단순보유', ''), cagr: w.cagrPct, mdd: w.mddPct }))
 
-  // ── 적립식 — 배수 막대. 단순 적립=파랑, 사다리=회색(이야기: 단순이 이긴다) ──
+  // ── 적립식 — 배수 막대. 단순 적립=파랑, 사다리=회색 ──────────────────────
   const dcaRows = data.dca.rows.map((r) => ({
     name: r.label.replace(/ 적립$/, ''),
     multiple: r.multiple,
     ladder: r.label.includes('사다리'),
     finalValue: r.finalValue,
   }))
+  // 결론 문구도 데이터에서 파생한다 — 하드코딩하면 재베이크에서 그림과 말이 어긋난다(검수 지적).
+  const bestSimple = Math.max(0, ...dcaRows.filter((r) => !r.ladder).map((r) => r.multiple))
+  const bestLadder = Math.max(0, ...dcaRows.filter((r) => r.ladder).map((r) => r.multiple))
+  const dcaVerdict =
+    bestLadder > 0 && bestSimple > 0
+      ? bestLadder < bestSimple
+        ? `사다리 최고 ${bestLadder.toFixed(1)}배 < 단순 적립 최고 ${bestSimple.toFixed(1)}배 — 이 실측에서 사다리는 최상위 단순 적립을 넘지 못했습니다.`
+        : `사다리 최고 ${bestLadder.toFixed(1)}배 ≥ 단순 적립 최고 ${bestSimple.toFixed(1)}배.`
+      : null
 
   return (
     <div className="panel">
@@ -323,7 +339,8 @@ export function UsLeveragePanel() {
         <ResponsiveContainer width="100%" height={40 + calmarRows.length * 36}>
           <BarChart data={calmarRows} layout="vertical" margin={{ top: 4, right: 44, left: 4, bottom: 4 }}>
             <CartesianGrid stroke="var(--border)" horizontal={false} />
-            <XAxis type="number" domain={[0, Math.max(0.7, (benchCalmar ?? 0) * 1.25)]} tickLine={false} axisLine={{ stroke: 'var(--border)' }} tickFormatter={(v) => v.toFixed(1)} />
+            {/* 상한은 벤치·프리셋 최대값 모두 덮는다 — 막대가 잘리면 그게 곧 거짓 그림이다 */}
+            <XAxis type="number" domain={[0, Math.max(0.7, (benchCalmar ?? 0) * 1.25, ...calmarRows.map((r) => r.calmar * 1.15))]} tickLine={false} axisLine={{ stroke: 'var(--border)' }} tickFormatter={(v) => v.toFixed(1)} />
             <YAxis type="category" dataKey="name" width={132} tickLine={false} axisLine={false} tick={{ fontSize: 11 }} />
             <Tooltip
               cursor={{ fill: 'var(--panel-2)' }}
@@ -339,8 +356,18 @@ export function UsLeveragePanel() {
         </ResponsiveContainer>
       </div>
       <p className="uslev-caption">
-        네 변형 전부 벤치 왼쪽 = <strong>관문 미통과</strong>. 알파(초과수익)는 양수지만 낙폭을 대가로 산 것이라
-        위험조정으로는 집니다.
+        {passCount === 0 ? (
+          <>
+            {data.presets.length}개 변형 전부 벤치 왼쪽 = <strong>관문 미통과</strong>.
+            {allAlphaPositive && ' 알파(초과수익)는 양수지만 낙폭을 대가로 산 것이라 위험조정으로는 집니다.'}
+          </>
+        ) : (
+          <>
+            {data.presets.length}개 변형 중 <strong>{passCount}개가 칼마 관문 통과</strong> — 카드의 판정 배지를
+            확인하세요.
+          </>
+        )}
+        {calmarSkipped > 0 && ` (칼마 정의 불가 ${calmarSkipped}종은 차트에서 제외 — 표에는 —로 표시)`}
       </p>
 
       {/* ── ② 프리셋 카드 ───────────────────────────────────────────────── */}
@@ -424,7 +451,8 @@ export function UsLeveragePanel() {
             />
             <ReferenceLine x={0} stroke="var(--text-faint)" />
             <Bar dataKey="cagr" barSize={13} radius={[0, 4, 4, 0]} fill="var(--uslev-x2)" isAnimationActive={false}>
-              <LabelList dataKey="cagr" position="right" formatter={(v: number) => `+${v.toFixed(1)}%`} className="uslev-bar-label" />
+              {/* 부호는 데이터에서 — '+' 하드코딩은 음수 재베이크에서 '+-12.3%'가 된다(검수 지적) */}
+              <LabelList dataKey="cagr" position="right" formatter={(v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`} className="uslev-bar-label" />
             </Bar>
             <Bar dataKey="mdd" barSize={13} radius={[4, 0, 0, 4]} fill="var(--danger)" isAnimationActive={false}>
               <LabelList dataKey="mdd" position="left" formatter={(v: number) => `${v.toFixed(1)}%`} className="uslev-bar-label" />
@@ -441,7 +469,7 @@ export function UsLeveragePanel() {
       {/* ── ⑤ 적립식 ────────────────────────────────────────────────────── */}
       <div className="uslev-chart-title">
         매일 {data.dca.dailyAmount.toLocaleString()}원 적립했다면 — 원금 대비 배수
-        <InfoTip text="구간 내내 매일 같은 금액을 사기만 했을 때의 최종 평가액 ÷ 누적 원금입니다. 파란 막대가 단순 적립, 회색 막대가 사다리 전략 적립입니다. 회색이 파랑 사이에 끼지 못하는 것이 이 실측의 결론입니다." />
+        <InfoTip text="구간 내내 매일 같은 금액을 사기만 했을 때의 최종 평가액 ÷ 누적 원금입니다. 파란 막대가 단순 적립, 회색 막대가 사다리 전략 적립입니다. 판정 문구는 아래 캡션에 데이터로부터 계산해 표시합니다." />
       </div>
       <div className="bt-chart-block">
         <ResponsiveContainer width="100%" height={40 + dcaRows.length * 34}>
@@ -454,8 +482,9 @@ export function UsLeveragePanel() {
               formatter={(v: number, _n, item) => [`${v.toFixed(2)}배 · 최종 ${won((item?.payload as { finalValue: number }).finalValue)}`, '원금 대비']}
             />
             <Bar dataKey="multiple" barSize={16} radius={[0, 4, 4, 0]} isAnimationActive={false}>
-              {dcaRows.map((r) => (
-                <Cell key={r.name} fill={r.ladder ? 'var(--text-faint)' : 'var(--uslev-x2)'} />
+              {/* 스키마 1 산출물은 사다리 라벨 4개가 동일하다 — key는 인덱스로 */}
+              {dcaRows.map((r, i) => (
+                <Cell key={`${i}-${r.name}`} fill={r.ladder ? 'var(--text-faint)' : 'var(--uslev-x2)'} />
               ))}
               <LabelList dataKey="multiple" position="right" formatter={(v: number) => `${v.toFixed(1)}배`} className="uslev-bar-label" />
             </Bar>
@@ -465,7 +494,7 @@ export function UsLeveragePanel() {
       <p className="uslev-caption">
         <i className="uslev-swatch" style={{ background: 'var(--uslev-x2)' }} /> 단순 적립 ·{' '}
         <i className="uslev-swatch" style={{ background: 'var(--text-faint)' }} /> 사다리 전략 적립 · 누적 원금{' '}
-        {won(data.dca.rows[0]?.contributed ?? 0)} 동일
+        {won(data.dca.rows[0]?.contributed ?? 0)} 동일{dcaVerdict && <> · {dcaVerdict}</>}
       </p>
 
       {/* ── 원자료 표 (접근성 표 뷰 · 예전 표 그대로) ────────────────────── */}
