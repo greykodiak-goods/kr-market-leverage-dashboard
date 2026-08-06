@@ -1,0 +1,34 @@
+{
+  "schema": 1,
+  "updatedAt": "2026-08-06T10:14:28.556Z",
+  "note": "테마 콜 대장 — 손으로 쓰는 원본. 채점 결과는 theme-calls-scored.json(기계가 굽는 곳)에 따로 있다. 여기에 점수를 적지 않는다. 소급 등재(retroactive)는 집계에서 제외된다 — 이미 오른 뒤에 적은 것은 실력의 증거가 아니기 때문이다.",
+  "calls": [
+    {
+      "id": "amzn-ai-infra-2026-08",
+      "recordedAt": "2026-08-06T10:14:28.556Z",
+      "noticedAt": null,
+      "thesis": "AI 바이브코딩이 퍼지면서 DB·클라우드 인프라 수요가 같이 늘 것 — 코드를 쓰는 사람이 늘면 그 코드가 돌 곳도 늘어난다. 수출입·매크로 지표로는 잡히지 않고 도구를 직접 쓰는 사람이 먼저 체감하는 종류의 변화.",
+      "source": "대표 본인 관찰(AI 코딩 도구 사용 경험) · 2026-08-06 세션 대화",
+      "targets": [
+        {
+          "symbol": "AMZN",
+          "market": "US",
+          "role": "primary"
+        },
+        {
+          "symbol": "MSFT",
+          "market": "US",
+          "role": "proxy"
+        }
+      ],
+      "benchmark": "QQQ",
+      "conviction": 3,
+      "acted": false,
+      "actedAt": null,
+      "notActedReason": "대표 확인: 안 샀음",
+      "retroactive": true,
+      "retroactiveNote": "주가가 이미 크게 오른 뒤에 적은 콜이다. 전진 검증이 아니므로 집계에서 제외한다 — 이 트랙의 첫 항목이자 \"이런 건 점수로 안 친다\"는 기준선 역할.",
+      "seal": "fnv1a:b9c456d4"
+    }
+  ]
+}
