@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'MODE (예: pit1010 / idea:seasonal — idea: 접두면 idea-lab.mjs / short:all — short: 접두면 shortterm-lab.mjs / overfit:overfit — overfit: 접두면 overfit-lab.mjs(과최적화 채점, 네트워크 불필요) / value:all — value: 접두면 value-lab.mjs(밸류·퀄리티 18변형, 시세·재무는 커밋된 정본·야후는 벤치만) / plateau:plateau — plateau: 접두면 plateau-lab.mjs(39차 고원 격자 405셀 · 시세는 KRX 커밋 정본·야후는 벤치·벽만 · plateau:quick 축소판 / plateau:offline 네트워크 불필요 / plateau:selftest 합성) / us:all — us: 접두면 us-lab.mjs(41차 미장 탐색 48변형: 27차 재현 8 + 다섯 계열 분위 격자 40 · 시세는 전량 야후 · us:xsmom 재현+모멘텀 분위 16 / us:quantile 계열 분위 40 / us:quick 스모크 4 / us:selftest 합성·네트워크 불필요) / dokkaebi:all — dokkaebi: 접두면 dokkaebi-lab.mjs(42차 유튜브 댓글 이평선 돌파 매매법 재측정 36변형: 기준이평 MA2·MA5 × 유니버스 40·80 × 진입필터 9종 · 시세는 KRX 커밋 정본·야후는 벤치(KODEX 200)만 · dokkaebi:ma2 MA2 축 18 / dokkaebi:quick 스모크 4 / dokkaebi:selftest 합성·네트워크 불필요) / lev:real — lev: 접두면 us-leverage-lab.mjs(43차 동적 레버리지 사다리 QQQ→QLD→TQQQ 12변형: 밴드 10·15·20·25% × 복귀버퍼 0·3·5%p · 시세는 tiingo 4종목 · lev:real 실측 구간 판정 / lev:synth 닷컴·금융위기 합성 스트레스(참고) / lev:dca 매일 1만원 적립식 QQQ·QLD·TQQQ(IRR·수중일) / lev:sweep 10~30 축별 훑기(진입밴드·익절방아쇠·익절규모 각 21 + 전면격자) / lev:prop 비중 분할 사다리(대표 지시 정본 · 밴드10|20 · +10%마다 10% 익절 래칫 · 18변형) / lev:all 전부 / lev:selftest 합성·네트워크 불필요) / presets = 프리셋 사전계산+커밋)'
+        description: 'MODE (예: pit1010 / idea:seasonal — idea: 접두면 idea-lab.mjs / short:all — short: 접두면 shortterm-lab.mjs / overfit:overfit — overfit: 접두면 overfit-lab.mjs(과최적화 채점, 네트워크 불필요) / value:all — value: 접두면 value-lab.mjs(밸류·퀄리티 18변형, 시세·재무는 커밋된 정본·야후는 벤치만) / plateau:plateau — plateau: 접두면 plateau-lab.mjs(39차 고원 격자 405셀 · 시세는 KRX 커밋 정본·야후는 벤치·벽만 · plateau:quick 축소판 / plateau:offline 네트워크 불필요 / plateau:selftest 합성) / us:all — us: 접두면 us-lab.mjs(41차 미장 탐색 48변형: 27차 재현 8 + 다섯 계열 분위 격자 40 · 시세는 전량 야후 · us:xsmom 재현+모멘텀 분위 16 / us:quantile 계열 분위 40 / us:quick 스모크 4 / us:selftest 합성·네트워크 불필요) / dokkaebi:all — dokkaebi: 접두면 dokkaebi-lab.mjs(42차 유튜브 댓글 이평선 돌파 매매법 재측정 36변형: 기준이평 MA2·MA5 × 유니버스 40·80 × 진입필터 9종 · 시세는 KRX 커밋 정본·야후는 벤치(KODEX 200)만 · dokkaebi:ma2 MA2 축 18 / dokkaebi:quick 스모크 4 / dokkaebi:selftest 합성·네트워크 불필요) / lev:real — lev: 접두면 us-leverage-lab.mjs(43차 동적 레버리지 사다리 QQQ→QLD→TQQQ 12변형: 밴드 10·15·20·25% × 복귀버퍼 0·3·5%p · 시세는 tiingo 4종목 · lev:real 실측 구간 판정 / lev:synth 닷컴·금융위기 합성 스트레스(참고) / lev:bake 화면용 프리셋 산출물 굽기+커밋(tiingo 키 필요) / lev:dca 매일 1만원 적립식 QQQ·QLD·TQQQ(IRR·수중일) / lev:sweep 10~30 축별 훑기(진입밴드·익절방아쇠·익절규모 각 21 + 전면격자) / lev:prop 비중 분할 사다리(대표 지시 정본 · 밴드10|20 · +10%마다 10% 익절 래칫 · 18변형) / lev:all 전부 / lev:selftest 합성·네트워크 불필요) / presets = 프리셋 사전계산+커밋)'
         type: string
         required: true
       grid:
@@ -76,6 +76,9 @@ jobs:
             plateau:*) SCRIPT="plateau-lab.mjs"; RUN_MODE="${RAW#plateau:}";;
             # `dokkaebi:`는 다른 접두와 겹치지 않는다(`us:` 함정과 다르다) — 위치 의존성 없음.
             dokkaebi:*) SCRIPT="dokkaebi-lab.mjs"; RUN_MODE="${RAW#dokkaebi:}";;
+            # `lev:bake`를 `lev:*`보다 **위에** 둔다 — case는 위에서부터 매칭이라 순서가 뒤바뀌면
+            # `lev:*`가 삼켜서 us-leverage-lab이 MODE=bake로 도는 조용한 오작동이 난다(uspit·ussrc에서 겪은 함정).
+            lev:bake) SCRIPT="us-leverage-precompute.mjs"; RUN_MODE="bake";;
             # `lev:`는 다른 접두와 겹치지 않는다 — 위치 의존성 없음.
             # 종목 4개(QQQ·QLD·TQQQ·SPY)만 부르므로 tiingo 무료 한도와 무관하다.
             lev:*) SCRIPT="us-leverage-lab.mjs"; RUN_MODE="${RAW#lev:}";;
@@ -111,6 +114,25 @@ jobs:
           fi
           git add "$DIR"
           git commit -m "data(us-pit): 미장 실측 PIT 유니버스 수집 [skip ci]"
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git push origin "HEAD:$GITHUB_REF_NAME"
+
+      # ---- lev:bake — QQQ 배수 전략 프리셋 산출물 커밋 ----
+      # 브라우저에서 tiingo를 부르면 키가 노출되므로(규칙 2-1) GHA에서 굽고 결과만 커밋한다.
+      # 스크립트는 키가 없거나 배당 기준이 총수익이 아니면 스스로 exit 1 한다 — 빈 파일이 커밋되지 않는다.
+      - name: QQQ 배수 프리셋 산출물 커밋
+        if: inputs.mode == 'lev:bake'
+        run: |
+          set -eu
+          FILE=public/data/us-leverage-precomputed.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -z "$(git status --porcelain -- "$FILE")" ]; then
+            echo "변경 없음 — 커밋 스킵"
+            exit 0
+          fi
+          git add "$FILE"
+          git commit -m "data(us-lev): QQQ 배수 전략 프리셋 사전계산 갱신 [skip ci]"
           git pull --rebase origin "$GITHUB_REF_NAME"
           git push origin "HEAD:$GITHUB_REF_NAME"
 

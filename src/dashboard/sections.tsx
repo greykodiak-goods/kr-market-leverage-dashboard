@@ -13,6 +13,7 @@ import { SmartMoneyRadar } from '../features/mega-investors/SmartMoneyRadar'
 import { FlowRotation } from '../features/mega-investors/FlowRotation'
 import { MegaInvestorsNews } from '../features/mega-investors/MegaInvestorsNews'
 import { BacktestSection } from '../features/backtest/BacktestSection'
+import { UsLeveragePanel } from '../features/backtest/UsLeveragePanel'
 import { SpecSimulator } from '../features/backtest/SpecSimulator'
 
 // ---- Tabs (topic grouping) ----------------------------------------------
@@ -68,6 +69,8 @@ export const SECTIONS: SectionDef[] = [
   // 조건식(영웅문 2차검증)을 모델 플랫폼 위에 — 대표의 현재 워크플로가 조건식 발굴이므로 먼저 보이게.
   { id: 'spec-sim', tab: 'sim', title: '⚡ 조건식 시뮬레이터 (영웅문 2차검증)', Component: SpecSimulator },
   { id: 'backtest', tab: 'sim', title: '🤖 투자봇 시뮬레이터 (백테스트)', Component: BacktestSection },
+  // 2026-08-06 대표 지시로 등재 — 43차 실측에서 관문 통과 0(990변형)이라 라벨이 탈락 사실을 먼저 말한다.
+  { id: 'us-leverage', tab: 'sim', title: '📊 QQQ 배수 전략 프리셋 (미장 · 사전계산)', Component: UsLeveragePanel },
   { id: 'news', tab: 'news', title: '📰 시장 전반 뉴스', Component: NewsForecastSection },
   // 계산형(매일 바뀜)을 위, 정적 레퍼런스(분기 갱신)를 아래로 — 볼 것이 있는 순서.
   { id: 'smart-money-radar', tab: 'giants', title: '🎯 큰손 자금 레이더', Component: SmartMoneyRadar },
