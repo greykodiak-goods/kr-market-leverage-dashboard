@@ -17,6 +17,7 @@ import {
   US_LADDER_COST,
   TRADING_DAYS,
   runProportionalLadder,
+  runProportionalLadderDca,
   SPEC_PROPORTIONAL,
   type LadderParams,
   type ProportionalParams,
@@ -411,6 +412,90 @@ const PP: ProportionalParams = { ...SPEC_PROPORTIONAL }
   check('신고가 정리 이벤트가 있다', run.events.some((e) => e.kind === '신고가 정리'), run.events.map((e) => e.kind).join(','))
   const last = run.events[run.events.length - 1]
   check(`정리 후 QQQ 100% 근처 (${last.weights.map((w) => w.toFixed(0)).join('/')})`, last.weights[0] > 99)
+}
+
+// ============================================================================
+section('10. 비중 분할 사다리 — 적립식(DCA) 판')
+// ============================================================================
+
+{
+  const base = makeBars(1200, 77, -0.0003, 0.025)
+  const assets = alignBars(makeLadderInput(base))
+  const AMT = 10_000
+
+  const w = runProportionalLadderDca(base, assets, PP, US_LADDER_COST, AMT, 'weights')
+  const q = runProportionalLadderDca(base, assets, PP, US_LADDER_COST, AMT, 'qqq')
+
+  eq('누적 원금 = 일수 × 납입액', w.contributed, base.length * AMT)
+  eq('배분 방식이 원금을 바꾸지는 않는다', q.contributed, w.contributed)
+  eq('곡선 길이 = 봉 수', w.curve.length, base.length)
+  check('행동이 발생한다', w.events.length > 0, `${w.events.length}건`)
+  check('평균 비중 합이 100 근처', Math.abs(w.avgWeights.reduce((a, b) => a + b, 0) - 100) < 0.5)
+  check(
+    'qqq 배분은 weights 배분보다 QQQ 평균 비중이 높다',
+    q.avgWeights[0] > w.avgWeights[0],
+    `qqq ${q.avgWeights[0].toFixed(1)}% vs weights ${w.avgWeights[0].toFixed(1)}%`,
+  )
+  check('두 배분 방식의 최종 평가액이 다르다(축이 실제로 작동)', Math.abs(q.finalValue - w.finalValue) > 1)
+
+  // 절단 불변성 — 적립식에도 규칙 1이 그대로 걸린다
+  for (const cut of [400, 700, 1000]) {
+    const cb = base.slice(0, cut)
+    const ca = alignBars(makeLadderInput(cb))
+    const cr = runProportionalLadderDca(cb, ca, PP, US_LADDER_COST, AMT, 'weights')
+    let same = cr.curve.length === cut
+    for (let i = 0; i < cr.curve.length && same; i++) {
+      if (cr.curve[i].date !== w.curve[i].date) same = false
+      else if (Math.abs(cr.curve[i].equity - w.curve[i].equity) > 1e-9) same = false
+    }
+    check(`[DCA] 절단 ${cut}봉 — 자산곡선 동일`, same)
+    const lastDate = cb[cb.length - 1].date
+    const a = cr.events.filter((e) => e.date < lastDate)
+    const b = w.events.filter((e) => e.date < lastDate)
+    check(
+      `[DCA] 절단 ${cut}봉 — 행동 이력 동일 (${a.length}건)`,
+      a.length === b.length && a.every((e, i) => e.date === b[i].date && e.kind === b[i].kind),
+    )
+    check(`[DCA] 절단 ${cut}봉 — 비교 대상이 비어있지 않다`, a.length > 0)
+  }
+
+  // 미래 조작 불변성
+  const K = 600
+  const tampered = base.map((b, i) => (i < K ? b : { ...b, o: b.o * 3, h: b.h * 3, l: b.l * 3, c: b.c * 3 }))
+  const t = runProportionalLadderDca(tampered, alignBars(makeLadderInput(tampered)), PP, US_LADDER_COST, AMT, 'weights')
+  let inv = true
+  for (let i = 0; i < K; i++) if (Math.abs(w.curve[i].equity - t.curve[i].equity) > 1e-9) { inv = false; break }
+  check('[DCA] 봉 600 이후 조작해도 그 이전 불변', inv)
+
+  // 마지막 봉 규율 — 납입은 계속되지만 신규 전환은 없다
+  const lastDate = base[base.length - 1].date
+  check('[DCA] 마지막 봉에 신규 전환 없음(규칙 1-6)', !w.events.some((e) => e.date === lastDate))
+}
+
+{
+  // 가격이 일정하면 비용만큼만 손실 — 적립식 회계가 새지 않는지 확인
+  const flat: DailyBar[] = []
+  for (let i = 0; i < 300; i++) {
+    const d = new Date(Date.UTC(2010, 0, 4) + i * 86400e3)
+    flat.push({ date: d.toISOString().slice(0, 10), t: 0, o: 100, h: 100, l: 100, c: 100, v: 0 })
+  }
+  const a = alignBars(makeLadderInput(flat))
+  const r = runProportionalLadderDca(flat, a, PP, { initialCapital: 0, feePct: 0, slippagePct: 0 }, 10_000, 'weights')
+  close('[DCA] 비용 0 · 가격 불변이면 평가액 = 원금', r.finalValue, r.contributed, 1e-6)
+  eq('[DCA] 전환 0건(낙폭 없음)', r.events.length, 0)
+  eq('[DCA] 수중일 0', r.underwaterDays, 0)
+}
+
+{
+  // 방어
+  const base = makeBars(300, 79)
+  const a = alignBars(makeLadderInput(base))
+  let threw = false
+  try { runProportionalLadderDca(base, a, PP, US_LADDER_COST, 0, 'weights') } catch { threw = true }
+  check('[DCA] 납입액 0이면 던진다', threw)
+  let threw2 = false
+  try { runProportionalLadderDca(base, a, { ...PP, band1Pct: 30, band2Pct: 10 }, US_LADDER_COST, 10_000, 'weights') } catch { threw2 = true }
+  check('[DCA] 밴드 순서가 뒤집히면 던진다', threw2)
 }
 
 finish()

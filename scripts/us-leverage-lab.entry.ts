@@ -65,7 +65,9 @@ import {
   US_LADDER_COST,
   LADDER_BASE,
   runProportionalLadder,
+  runProportionalLadderDca,
   SPEC_PROPORTIONAL,
+  type DcaAllocation,
   type ProportionalParams,
   type Curve,
   type LadderParams,
@@ -1094,6 +1096,65 @@ async function dcaMode(token: string): Promise<void> {
       `(${q.longestUnderwater.from} ~ ${q.longestUnderwater.to})이었다. ` +
       '적립식이 거치식보다 안전해 보이는 이유는 낙폭이 신규 매수에 가려지기 때문이지 ' +
       '위험이 사라져서가 아니다.',
+  )
+
+
+  // ── 5) 사다리 전략의 적립식 판 ────────────────────────────────────────────
+  log('')
+  log('## 5) 사다리 전략 적립식 — 단순 적립과 정면 비교')
+  log('')
+  log(
+    '지시문이 정하지 않은 축이 하나 있다: **새로 들어온 돈을 어디에 넣는가.** ' +
+      '하나를 골라 숨기면 그 선택이 성적을 만든 건지 전략이 만든 건지 구분할 수 없으므로 둘 다 잰다.',
+  )
+  log('')
+  log('· `현재비중` — 지금 보유 비중 그대로 산다. 2단(QLD 50/TQQQ 50)이면 새 돈도 레버리지로 들어간다.')
+  log('· `QQQ고정` — 새 돈은 항상 QQQ로만. 사다리 전환은 기존 보유분에만 적용된다.')
+  log('')
+  log(DCA_HEAD)
+  log(DCA_SEP)
+
+  const ladderRows: { label: string; r: ReturnType<typeof runProportionalLadderDca> }[] = []
+  const variants: { name: string; p: ProportionalParams }[] = [
+    { name: '지시값 10/20·+10%마다10%', p: SPEC_PROPORTIONAL },
+    { name: '익절30% 10/20·+10%마다30%', p: { ...SPEC_PROPORTIONAL, tpFracPct: 30 } },
+  ]
+  for (const v of variants) {
+    for (const alloc of ['weights', 'qqq'] as DcaAllocation[]) {
+      const r = runProportionalLadderDca(common, aligned, v.p, US_LADDER_COST, DCA_DAILY, alloc)
+      const label = `사다리 ${v.name} · ${alloc === 'weights' ? '현재비중' : 'QQQ고정'}`
+      ladderRows.push({ label, r })
+      const irr = dcaIrr(common, DCA_DAILY, r.finalValue)
+      const uwPct = (r.underwaterDays / r.days) * 100
+      log(
+        `| ${label} | ${r.days.toLocaleString()}일 | ${won(r.contributed)} | **${won(r.finalValue)}** | ` +
+          `${r.multiple.toFixed(2)}배 | ${irr === null ? '—' : `${f1(irr)}%`} | ${f1(r.mddPct)}% | ` +
+          `${f1(uwPct)}% | ${r.longestUnderwater.days.toLocaleString()}일 (${r.longestUnderwater.from}~${r.longestUnderwater.to}) |`,
+      )
+    }
+  }
+
+  // ── 6) 최종 순위 ──────────────────────────────────────────────────────────
+  log('')
+  log('## 6) 최종 순위 — 같은 구간·같은 납입액')
+  log('')
+  const all: { label: string; value: number; irr: number | null; mdd: number }[] = []
+  for (const sym of LADDER) {
+    const d = runDca(aligned.get(sym)!, DCA_DAILY, US_LADDER_COST)
+    all.push({ label: `${sym} 단순 적립`, value: d.finalValue, irr: d.irrPct, mdd: d.mddPct })
+  }
+  for (const { label, r } of ladderRows)
+    all.push({ label, value: r.finalValue, irr: dcaIrr(common, DCA_DAILY, r.finalValue), mdd: r.mddPct })
+  all.sort((a, b) => b.value - a.value)
+  log('| 순위 | 전략 | 최종 평가액 | IRR | MDD |')
+  log('|---|---|---|---|---|')
+  all.forEach((x, i) => log(`| ${i + 1} | ${x.label} | ${won(x.value)} | ${x.irr === null ? '—' : `${f1(x.irr)}%`} | ${f1(x.mdd)}% |`))
+  log('')
+  const ladderBest = all.find((x) => x.label.startsWith('사다리'))!
+  const qldRow = all.find((x) => x.label.startsWith('QLD'))!
+  log(
+    `사다리 최고(${ladderBest.label}) ${won(ladderBest.value)} vs QLD 단순 적립 ${won(qldRow.value)} → ` +
+      `**${ladderBest.value > qldRow.value ? '사다리가 앞선다' : `QLD가 ${(qldRow.value / ladderBest.value).toFixed(2)}배 앞선다`}**`,
   )
 
   // ── 4) 거치식과의 대조 ────────────────────────────────────────────────────

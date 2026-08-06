@@ -468,3 +468,214 @@ export function runProportionalLadder(
     trades,
   }
 }
+
+// ============================================================================
+// 비중 분할 사다리 — 적립식(DCA) 판 · 2026-08-05 대표 지시
+// ============================================================================
+//
+// 거치식(`runProportionalLadder`)은 첫날 목돈을 넣고 굴린다. 이쪽은 **매 거래일 고정
+// 금액을 새로 넣으면서** 같은 사다리 규칙을 돌린다.
+//
+// ── 새로 들어온 돈을 어디에 넣는가 ─────────────────────────────────────────
+//   지시문이 정하지 않은 축이라 **두 방식을 다 만들고 나란히 잰다.** 하나를 골라
+//   숨기면 그 선택이 성적을 만든 것인지 전략이 만든 것인지 구분할 수 없다.
+//
+//   · `weights` — **현재 보유 비중 그대로** 산다. 사다리가 2단(QLD 50/TQQQ 50)이면
+//     새 돈도 50:50으로 레버리지에 들어간다. "떨어질수록 공격적으로"라는 전략 취지에
+//     가장 충실하지만, **바닥에서 레버리지를 계속 사 모으는** 구조이기도 하다.
+//   · `qqq` — 새 돈은 **항상 QQQ로만** 넣는다. 사다리 전환은 기존 보유분에만 적용된다.
+//     보수적이며, 하락 구간에서 레버리지 비중이 자연히 희석된다.
+//
+// ── 🚫 규칙 1 준수 ──────────────────────────────────────────────────────────
+//   납입은 봉 i의 **시가**에 이뤄지고 그 시점까지의 정보만 쓴다. 신호·체결 분리는
+//   거치식과 동일하다(종가 판정 → 다음 봉 시가 체결). 마지막 봉에서는 신규 **전환**을
+//   만들지 않는다(규칙 1-6) — 납입은 신호가 아니므로 계속된다.
+
+export type DcaAllocation = 'weights' | 'qqq'
+
+export interface ProportionalDcaResult {
+  curve: Curve
+  events: ProportionalEvent[]
+  /** 누적 납입 원금 */
+  contributed: number
+  finalValue: number
+  /** 최종 평가액 ÷ 누적 원금 */
+  multiple: number
+  days: number
+  /** 평가액 기준 최대 낙폭(%) — 적립식에서는 신규 매수에 가려지므로 수중일과 함께 읽어라 */
+  mddPct: number
+  /** 평가액이 누적 원금 아래였던 날 수 */
+  underwaterDays: number
+  longestUnderwater: { days: number; from: string; to: string }
+  avgWeights: [number, number, number]
+  trades: number
+}
+
+/**
+ * 비중 분할 사다리 적립식.
+ *
+ * @param dailyAmount 매 거래일 납입액
+ * @param alloc 새 돈의 배분 방식 — 위 주석 참조
+ */
+export function runProportionalLadderDca(
+  base: readonly DailyBar[],
+  assets: ReadonlyMap<string, readonly DailyBar[]>,
+  p: ProportionalParams,
+  cost: LadderCost,
+  dailyAmount: number,
+  alloc: DcaAllocation,
+): ProportionalDcaResult {
+  for (const s of SYMS) {
+    const bars = assets.get(s)
+    if (!bars) throw new Error(`${s} 봉이 없다`)
+    if (bars.length !== base.length)
+      throw new Error(`${s} 봉 수(${bars.length})가 기초지수(${base.length})와 다르다 — 날짜 축을 먼저 맞춰라`)
+  }
+  if (!(p.band2Pct > p.band1Pct)) throw new Error(`2단 밴드(${p.band2Pct})는 1단(${p.band1Pct})보다 깊어야 한다`)
+  if (!(dailyAmount > 0)) throw new Error(`납입액은 양수여야 한다 (${dailyAmount})`)
+
+  const side = (cost.feePct + cost.slippagePct) / 100
+  const px = (s: Sym, i: number, field: 'o' | 'c'): number => assets.get(s)![i][field]
+
+  const h: Holdings = { QQQ: 0, QLD: 0, TQQQ: 0 }
+  const curve: Curve = []
+  const events: ProportionalEvent[] = []
+  const wSum: [number, number, number] = [0, 0, 0]
+  let trades = 0
+  let contributed = 0
+  let peak = 0
+  let mdd = 0
+  let underwaterDays = 0
+  let runStart = ''
+  let runLen = 0
+  let longest = { days: 0, from: '', to: '' }
+
+  let peakPrice = base[0].c
+  let stage = 0
+  let armed1 = true
+  let armed2 = true
+  let refPrice = base[0].c
+
+  type Action = '1단 진입' | '2단 진입' | '익절' | '신고가 정리'
+  let pending: Action[] = []
+
+  const swap = (from: Sym, to: Sym, frac: number, i: number): void => {
+    const qty = h[from] * frac
+    if (qty <= 0) return
+    const sellPx = px(from, i, 'o')
+    const buyPx = px(to, i, 'o')
+    if (!(sellPx > 0) || !(buyPx > 0)) throw new Error(`${base[i].date} 시가가 유효하지 않다`)
+    const proceeds = qty * sellPx * (1 - side)
+    h[from] -= qty
+    h[to] += (proceeds * (1 - side)) / buyPx
+    trades++
+  }
+
+  /** 매수 — 금액을 종목에 넣는다(시가 체결·편도 비용). */
+  const buy = (sym: Sym, amount: number, i: number): void => {
+    if (amount <= 0) return
+    const o = px(sym, i, 'o')
+    if (!(o > 0)) throw new Error(`${base[i].date} ${sym} 시가가 유효하지 않다 (${o})`)
+    h[sym] += (amount * (1 - side)) / o
+  }
+
+  for (let i = 0; i < base.length; i++) {
+    // ── 1) 체결 — 전 봉 종가 신호를 오늘 시가에 집행 ────────────────────────
+    if (i > 0 && pending.length > 0) {
+      for (const act of pending) {
+        if (act === '1단 진입') swap('QQQ', 'QLD', p.stage1SwapPct / 100, i)
+        else if (act === '2단 진입') swap('QQQ', 'TQQQ', 1, i)
+        else if (act === '익절') {
+          swap('QLD', 'QQQ', p.tpFracPct / 100, i)
+          swap('TQQQ', 'QQQ', p.tpFracPct / 100, i)
+        } else {
+          swap('QLD', 'QQQ', 1, i)
+          swap('TQQQ', 'QQQ', 1, i)
+        }
+        const v = SYMS.map((s) => h[s] * px(s, i, 'o'))
+        const tot = v[0] + v[1] + v[2]
+        events.push({
+          date: base[i].date,
+          kind: act,
+          ddPct: (base[i - 1].c / peakPrice - 1) * 100,
+          weights: tot > 0 ? [(v[0] / tot) * 100, (v[1] / tot) * 100, (v[2] / tot) * 100] : [0, 0, 0],
+        })
+      }
+      refPrice = base[i - 1].c
+      pending = []
+    }
+
+    // ── 2) 납입 — 오늘 시가에 고정 금액 매수 ────────────────────────────────
+    if (alloc === 'qqq') {
+      buy('QQQ', dailyAmount, i)
+    } else {
+      const v = SYMS.map((s) => h[s] * px(s, i, 'o'))
+      const tot = v[0] + v[1] + v[2]
+      if (tot <= 0) buy('QQQ', dailyAmount, i) // 첫 봉 — 아직 보유가 없으면 평시 자산으로
+      else SYMS.forEach((s, k) => buy(s, dailyAmount * (v[k] / tot), i))
+    }
+    contributed += dailyAmount
+
+    // ── 3) 평가 ─────────────────────────────────────────────────────────────
+    const vals = SYMS.map((s) => h[s] * px(s, i, 'c'))
+    const total = vals[0] + vals[1] + vals[2]
+    curve.push({ date: base[i].date, equity: total })
+    if (total > 0) SYMS.forEach((_, k) => (wSum[k] += (vals[k] / total) * 100))
+    if (total > peak) peak = total
+    else if (peak > 0) mdd = Math.min(mdd, (total / peak - 1) * 100)
+    if (total < contributed) {
+      underwaterDays++
+      if (runLen === 0) runStart = base[i].date
+      runLen++
+      if (runLen > longest.days) longest = { days: runLen, from: runStart, to: base[i].date }
+    } else runLen = 0
+
+    // ── 4) 신호 — 오늘 종가까지만 보고 내일 행동을 정한다 ───────────────────
+    const c = base[i].c
+    const newPeak = c > peakPrice
+    if (newPeak) peakPrice = c
+    const dd = (c / peakPrice - 1) * 100
+    const levered = h.QLD > 0 || h.TQQQ > 0
+
+    if (i === base.length - 1) {
+      pending = []
+      continue
+    }
+    const next: Action[] = []
+    if (newPeak) {
+      if (levered) next.push('신고가 정리')
+      stage = 0
+      armed1 = true
+      armed2 = true
+    } else {
+      if (armed1 && stage < 1 && dd <= -p.band1Pct) {
+        next.push('1단 진입')
+        stage = 1
+        armed1 = false
+      }
+      if (armed2 && stage < 2 && dd <= -p.band2Pct) {
+        next.push('2단 진입')
+        stage = 2
+        armed2 = false
+      }
+      if (next.length === 0 && levered && c >= refPrice * (1 + p.tpStepPct / 100)) next.push('익절')
+    }
+    pending = next
+  }
+
+  const n = Math.max(1, curve.length)
+  const finalValue = curve[curve.length - 1].equity
+  return {
+    curve,
+    events,
+    contributed,
+    finalValue,
+    multiple: finalValue / contributed,
+    days: base.length,
+    mddPct: mdd,
+    underwaterDays,
+    longestUnderwater: longest,
+    avgWeights: [wSum[0] / n, wSum[1] / n, wSum[2] / n],
+    trades,
+  }
+}
