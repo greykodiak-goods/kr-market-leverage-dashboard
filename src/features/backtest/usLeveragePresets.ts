@@ -19,8 +19,10 @@
 import { SPEC_PROPORTIONAL, type ProportionalParams } from './leverageLadder'
 
 /** 사전계산 산출물 스키마 — 화면이 모르는 버전이면 없는 셈 친다(우아한 강등). */
-export const US_LEV_SCHEMA = 1
-export const US_LEV_SUPPORTED_SCHEMAS: readonly number[] = [1]
+// 스키마 2 (2026-08-06): 프리셋에 `weights`(다운샘플 일별 비중)·`events`(매매 사건)가 추가됐다.
+// 화면은 1도 계속 읽는다 — 비중 차트만 데이터가 있을 때 그린다(없는 값을 지어내지 않는다).
+export const US_LEV_SCHEMA = 2
+export const US_LEV_SUPPORTED_SCHEMAS: readonly number[] = [1, 2]
 export const US_LEV_DATA_URL = 'data/us-leverage-precomputed.json'
 
 export interface UsLeveragePreset {

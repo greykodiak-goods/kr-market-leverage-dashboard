@@ -320,6 +320,12 @@ export interface ProportionalRun {
   events: ProportionalEvent[]
   /** 평균 비중(%) — 전 구간 일별 평균 */
   avgWeights: [number, number, number]
+  /**
+   * 일별 비중(%) — QQQ/QLD/TQQQ. `equity`와 같은 길이·같은 날짜 축이다.
+   * 그날 **종가 평가** 기준이라 매매가 없어도 가격 변동만큼 매일 조금씩 움직인다.
+   * (화면의 비중 변화 차트가 이걸 그대로 읽는다 — 평균만 보여주면 "언제 옮겼는지"가 안 보인다.)
+   */
+  weightsDaily: [number, number, number][]
   /** 레버리지(QLD+TQQQ)를 조금이라도 들고 있던 일수 */
   daysLevered: number
   trades: number
@@ -355,6 +361,7 @@ export function runProportionalLadder(
   const h: Holdings = { QQQ: 0, QLD: 0, TQQQ: 0 }
   const equity: Curve = []
   const events: ProportionalEvent[] = []
+  const weightsDaily: [number, number, number][] = []
   const wSum: [number, number, number] = [0, 0, 0]
   let daysLevered = 0
   let trades = 0
@@ -420,6 +427,9 @@ export function runProportionalLadder(
     const vals = SYMS.map((s) => h[s] * px(s, i, 'c'))
     const total = vals[0] + vals[1] + vals[2]
     equity.push({ date: base[i].date, equity: total })
+    weightsDaily.push(
+      total > 0 ? [(vals[0] / total) * 100, (vals[1] / total) * 100, (vals[2] / total) * 100] : [0, 0, 0],
+    )
     if (total > 0) SYMS.forEach((_, k) => (wSum[k] += (vals[k] / total) * 100))
     if (vals[1] + vals[2] > total * 1e-9) daysLevered++
 
@@ -464,6 +474,7 @@ export function runProportionalLadder(
     equity,
     events,
     avgWeights: [wSum[0] / n, wSum[1] / n, wSum[2] / n],
+    weightsDaily,
     daysLevered,
     trades,
   }

@@ -98,14 +98,28 @@ async function loadTicker(symbol: string, token: string): Promise<{ bars: DailyB
   return { bars, audit: res.audit }
 }
 
-/** 주 1점 다운샘플 — **마지막 점은 반드시 남긴다**(최신 값이 잘리면 라벨이 거짓이 된다). */
-function downsample(strat: Curve, bench: Curve): [string, number, number][] {
-  const out: [string, number, number][] = []
-  for (let i = 0; i < strat.length; i++) {
-    if (i % DOWNSAMPLE !== 0 && i !== strat.length - 1) continue
-    out.push([strat[i].date, Math.round(strat[i].equity), Math.round(bench[i].equity)])
-  }
+/** 다운샘플이 남기는 인덱스 — **마지막 점은 반드시 포함**(최신 값이 잘리면 라벨이 거짓이 된다). */
+function sampleIdx(n: number): number[] {
+  const out: number[] = []
+  for (let i = 0; i < n; i++) if (i % DOWNSAMPLE === 0 || i === n - 1) out.push(i)
   return out
+}
+
+/** 주 1점 다운샘플. */
+function downsample(strat: Curve, bench: Curve): [string, number, number][] {
+  return sampleIdx(strat.length).map((i) => [strat[i].date, Math.round(strat[i].equity), Math.round(bench[i].equity)])
+}
+
+/**
+ * 비중 시계열 다운샘플 — **곡선과 같은 인덱스**를 남긴다.
+ * 화면이 곡선과 비중을 같은 x축에 겹쳐 그리므로, 둘이 다른 점을 남기면 축이 어긋난다.
+ */
+function downsampleWeights(weights: readonly [number, number, number][]): [number, number, number][] {
+  return sampleIdx(weights.length).map((i) => [
+    +weights[i][0].toFixed(1),
+    +weights[i][1].toFixed(1),
+    +weights[i][2].toFixed(1),
+  ])
 }
 
 async function main(): Promise<void> {
@@ -177,6 +191,10 @@ async function main(): Promise<void> {
       gatePass: g1 && g2 && g3,
       gateWhy: why,
       curve: downsample(run.equity, bench),
+      // 비중 변화 차트용(스키마 2) — 곡선과 같은 인덱스만 남겨 x축을 공유한다.
+      weights: downsampleWeights(run.weightsDaily),
+      // 매매 사건 — "언제 발동했는지"를 차트에 점으로 찍는다. 수십 건이라 전량 싣는다.
+      events: run.events.map((e) => ({ date: e.date, kind: e.kind, ddPct: +e.ddPct.toFixed(1) })),
     }
   })
 
@@ -196,8 +214,11 @@ async function main(): Promise<void> {
     }),
     ...US_LEVERAGE_PRESETS.map((preset) => {
       const r = runProportionalLadderDca(base, aligned, preset.params, US_LADDER_COST, DCA_DAILY, 'weights')
+      // 같은 이름 4줄이 나란히 있으면 무엇이 무엇인지 알 수 없다 — 파라미터로 구분한다.
+      const q = preset.params
+      const tp = q.tpFracPct !== 10 ? ` · 익절 ${q.tpFracPct}%` : ''
       return {
-        label: `${preset.id === 'us-lev-spec' ? '사다리 지시값' : '사다리 방어형'} 적립`,
+        label: `사다리 밴드 ${q.band1Pct}/${q.band2Pct}%${tp} 적립`,
         contributed: r.contributed,
         finalValue: r.finalValue,
         multiple: +r.multiple.toFixed(2),

@@ -3130,3 +3130,94 @@ body {
   padding: 1px 4px; border-radius: 3px; font-size: 10.5px;
   background: color-mix(in srgb, var(--text) 9%, transparent);
 }
+
+/* ═══ QQQ 배수 전략 프리셋 (UsLeveragePanel) — 2026-08-06 모바일 개편 ═══════
+   배수 램프 ×1→×3: 한 색상(파랑) 밝기 순서. dataviz validate_palette --ordinal을
+   라이트(#fff)·다크(#161b22) 표면 각각에 대해 통과시킨 값 — 색만 바꾸려면 재검증할 것. */
+:root {
+  --uslev-x1: #86b6ef; /* QQQ ×1 (밝음) */
+  --uslev-x2: #2a78d6; /* QLD ×2 */
+  --uslev-x3: #104281; /* TQQQ ×3 (어두움) */
+  --uslev-warn: #b45309;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --uslev-x1: #86b6ef;
+    --uslev-x2: #3987e5;
+    --uslev-x3: #184f95; /* 다크 표면에서 2:1을 지키는 하한(600) */
+    --uslev-warn: #f2a65a;
+  }
+}
+
+.uslev-meta { font-size: 0.85em; opacity: 0.85; }
+.uslev-chart-title {
+  margin: 16px 0 4px; font-size: 13.5px; font-weight: 700; color: var(--text);
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+}
+.uslev-caption { font-size: 0.8em; color: var(--text-dim); margin: 2px 0 8px; }
+.uslev-bar-label { font-size: 11px; fill: var(--text-dim); }
+
+/* 프리셋 카드 — 표 대신. 모바일 1열, 넓으면 2열 */
+.uslev-cards {
+  display: grid; gap: 10px; margin-top: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+}
+.uslev-card {
+  display: block; text-align: left; width: 100%; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 10px; padding: 12px;
+  background: var(--panel-2); color: var(--text); font: inherit;
+}
+.uslev-card:hover { border-color: var(--accent); }
+.uslev-card.open { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.uslev-card-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 8px; font-size: 13.5px;
+}
+.uslev-verdict { font-size: 11px; font-weight: 700; white-space: nowrap; }
+.uslev-verdict.fail { color: var(--danger); }
+.uslev-verdict.pass { color: var(--uslev-x2); }
+.uslev-stats {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 10px;
+}
+.uslev-stat { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.uslev-stat .lbl { font-size: 10.5px; color: var(--text-faint); }
+.uslev-stat .val { font-size: 14.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.uslev-stat .val.neg { color: var(--danger); }
+.uslev-card-foot { margin-top: 8px; font-size: 11px; color: var(--text-dim); }
+
+/* 평균 비중 스택바 — 2px 패널색 간격이 띠를 가른다(테두리 금지) */
+.uslev-mixbar {
+  display: flex; gap: 2px; height: 12px; border-radius: 4px; overflow: hidden;
+  background: var(--panel);
+}
+.uslev-mixbar > span { display: block; height: 100%; min-width: 0; }
+.uslev-mixbar-caption {
+  display: flex; gap: 10px; flex-wrap: wrap; margin-top: 4px;
+  font-size: 10.5px; color: var(--text-dim);
+}
+.uslev-swatch {
+  display: inline-block; width: 9px; height: 9px; border-radius: 2px;
+  margin-right: 3px; vertical-align: baseline;
+}
+
+.uslev-detail {
+  border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-top: 10px;
+  background: var(--panel-2);
+}
+.uslev-note {
+  font-size: 0.85em; line-height: 1.6; padding: 10px; border-radius: 6px;
+  background: var(--danger-bg); color: var(--text);
+}
+
+.uslev-tables { margin-top: 16px; }
+.uslev-tables > summary {
+  cursor: pointer; font-size: 12.5px; color: var(--text-dim); padding: 6px 0;
+}
+.uslev-tables[open] > summary { color: var(--text); font-weight: 600; }
+.uslev-tables .tbl { margin-top: 8px; }
+
+@media (max-width: 560px) {
+  .uslev-cards { grid-template-columns: 1fr; }
+  .uslev-stats { grid-template-columns: repeat(4, 1fr); gap: 4px; }
+  .uslev-stat .val { font-size: 13px; }
+}

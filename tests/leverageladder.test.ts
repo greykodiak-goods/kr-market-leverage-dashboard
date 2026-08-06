@@ -355,6 +355,13 @@ const PP: ProportionalParams = { ...SPEC_PROPORTIONAL }
     }
     check(`[비중] 절단 ${cut}봉 — 자산곡선 동일`, same)
 
+    // 일별 비중 시계열도 절단 앞부분이 완전히 같아야 한다(새 출력도 규칙 1을 진다)
+    let wSame = cr.weightsDaily.length === cut
+    for (let i = 0; i < cr.weightsDaily.length && wSame; i++)
+      for (let k = 0; k < 3 && wSame; k++)
+        if (Math.abs(cr.weightsDaily[i][k] - full.weightsDaily[i][k]) > 1e-9) wSame = false
+    check(`[비중] 절단 ${cut}봉 — 일별 비중 시계열 동일`, wSame)
+
     const lastDate = cb[cb.length - 1].date
     const a = cr.events.filter((e) => e.date < lastDate)
     const b = full.events.filter((e) => e.date < lastDate)
@@ -395,6 +402,17 @@ const PP: ProportionalParams = { ...SPEC_PROPORTIONAL }
   const free = runProportionalLadder(base, alignBars(makeLadderInput(base)), PP, { initialCapital: 10_000, feePct: 0, slippagePct: 0 })
   check('[비중] 비용을 물리면 최종 자산이 더 작다', run.equity[run.equity.length - 1].equity < free.equity[free.equity.length - 1].equity)
   check('[비중] 평균 비중 합이 100 근처', Math.abs(run.avgWeights.reduce((a, b) => a + b, 0) - 100) < 0.5)
+
+  // 일별 비중 시계열 — 화면 차트가 읽는 값의 기본 무결성
+  check('[비중] 일별 비중 길이 = 자산곡선 길이', run.weightsDaily.length === run.equity.length)
+  check(
+    '[비중] 일별 비중 각 날 합이 100',
+    run.weightsDaily.every((w) => Math.abs(w[0] + w[1] + w[2] - 100) < 1e-6),
+  )
+  check(
+    '[비중] 일별 비중 전 성분이 0~100 범위',
+    run.weightsDaily.every((w) => w.every((x) => x >= -1e-9 && x <= 100 + 1e-9)),
+  )
 }
 
 {
