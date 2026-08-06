@@ -127,6 +127,22 @@ npm run build   # 타입체크 + 프로덕션 빌드
 
 배포: `main` 빌드 산출물(`dist/`)을 `gh-pages` 브랜치에 올려 GitHub Pages로 서빙한다.
 
+**배포는 검증까지가 한 세트다.** gh-pages에 push한 직후 `pages-verify` 워크플로를 호출하고
+결과를 확인한 뒤에만 "배포 완료"라고 말한다(규칙 3 — 라이브 실동작 확인).
+
+```
+gh api -X POST .../actions/workflows/pages-verify.yml/dispatches -f ref=main
+# 또는 MCP: actions_run_trigger(run_workflow, workflow_id='pages-verify.yml', ref='main')
+```
+
+이 워크플로가 필요한 이유: **AI 세션 컨테이너는 `*.github.io` 계열이 이그레스 정책으로
+차단돼 있다**(프록시: `connect_rejected · gateway answered 403 to CONNECT`. 남의 Pages도
+동일하므로 우리 설정 문제가 아니다). `github.com`·`api.github.com`·`raw.githubusercontent.com`은
+열려 있어 커밋·산출물은 확인되지만 **서빙되는 페이지만** 확인이 안 된다. 정책 거부는
+우회하지 않고(`/root/.ccr/README.md`) 나갈 수 있는 GHA 러너에서 검증한다.
+검증기는 "200이 떴다"에 만족하지 않고 **서빙 자산 파일명이 방금 올린 gh-pages HEAD와
+같은지**까지 본다 — 옛 배포도 200을 주기 때문이다. 상세: `.github/scripts/verify-pages.mjs`.
+
 ## 실행 장소 규칙 (2026-08-02 대표 지시)
 
 **EC2(쿠팡 프록시 서버)는 국내 IP·고정 IP·키움 키가 필요한 작업 전용이다** — 모의투자 데몬,
