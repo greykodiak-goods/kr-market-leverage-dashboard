@@ -1,0 +1,63 @@
+# 라이브 배포 검증 — **실제로 서빙되는 것**을 확인한다.
+#
+# 왜 이게 워크플로로 있나 (2026-08-06):
+#   AI 세션 컨테이너의 이그레스 정책이 `*.github.io` 계열을 통째로 막는다
+#   (프록시 기록: connect_rejected · "gateway answered 403 to CONNECT" · 남의
+#   Pages도 동일하게 막힌다). github.com·api.github.com·raw.githubusercontent.com은
+#   열려 있어서 커밋·산출물은 확인되는데 **서빙되는 페이지만** 확인이 안 됐다.
+#   그래서 배포 보고가 매번 "[미검증] 대표님이 열어봐 주세요"로 끝났다.
+#   정책 거부는 우회하지 않는다(/root/.ccr/README.md). 대신 나갈 수 있는 곳
+#   —GHA 러너—에서 검증하고, 세션은 Actions API로 결과만 읽는다.
+#
+#   프로젝트 규칙 3: "완료는 빌드·테스트 통과 + 라이브 URL 실동작 확인까지."
+#   이 워크플로가 그 마지막 한 칸을 대표 손 없이 채운다.
+#
+# 트리거가 workflow_dispatch뿐인 이유:
+#   push 이벤트는 **푸시된 브랜치의** 워크플로 파일을 읽는데, gh-pages는 매 배포마다
+#   dist/ 내용으로 통째 교체되므로 그 브랜치에 워크플로를 둘 수 없다. 그래서
+#   gh-pages를 밀어 넣은 쪽이 배포 직후 이 워크플로를 호출한다.
+#
+# 무엇을 보는가 — "200이 떴다"로는 부족하다. 옛 빌드도 200을 준다.
+#   ① index.html 200
+#   ② index.html이 가리키는 자산 파일명이 **방금 올린 gh-pages HEAD와 같은가**
+#      (다르면 아직 옛 배포가 서빙 중이다)
+#   ③ 그 자산이 실제로 200으로 받아지는가
+#   ④ 사전계산 산출물이 서빙되고 기준시각·프리셋 id가 커밋본과 일치하는가
+#   ⑤ 커밋에 있는데 서빙에 없는 data 파일이 있는가
+#
+# Pages 퍼블리시는 즉시가 아니라서 ②가 어긋나면 백오프로 다시 본다. 끝까지
+# 어긋나면 **성공으로 넘기지 않고 실패**한다 — 조용한 통과가 이 검증의 유일한 실패 모드다.
+
+name: pages-verify
+
+on:
+  workflow_dispatch:
+    inputs:
+      attempts:
+        description: '재시도 횟수 (기본 10 · 지수 백오프 최대 60초)'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-verify
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      # 검증 스크립트는 기본 브랜치에 있고, 대조 대상(배포 산출물)은 gh-pages에 있다.
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: _live
+
+      - name: 라이브 URL 검증
+        env:
+          ATTEMPTS: ${{ inputs.attempts }}
+          LIVE_DIR: _live
+        run: node .github/scripts/verify-pages.mjs
