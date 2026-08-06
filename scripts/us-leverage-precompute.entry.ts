@@ -110,6 +110,61 @@ function downsample(strat: Curve, bench: Curve): [string, number, number][] {
   return sampleIdx(strat.length).map((i) => [strat[i].date, Math.round(strat[i].equity), Math.round(bench[i].equity)])
 }
 
+// ── 적립식 반원금 근사 (2026-08-07 대표 지정 방식) ──────────────────────────
+// 매일 같은 금액을 넣으면 투자원금이 0→C로 선형 증가하므로, 시간 적분한 평균
+// 투자원금은 **총 납입액의 절반(C/2)**이다. 대표 지시: 그 절반을 원금으로 보고
+// 수익률·CAGR을 계산한다. **근사다** — 정확한 값은 현금흐름 IRR이며 둘 다 싣는다.
+export interface DcaHalfBase {
+  /** (평가액 − 납입액) ÷ (납입액/2) — 반원금 기준 총수익률 % */
+  totalPct: number
+  /** (평가액 ÷ 반원금)^(1/년수) − 1 — 반원금을 기초에 넣은 셈 치는 연환산 % */
+  cagrPct: number
+}
+
+export function dcaHalfBase(contributed: number, finalValue: number, years: number): DcaHalfBase {
+  const half = contributed / 2
+  if (!(half > 0) || !(years > 0)) throw new Error('반원금 근사: 납입액·기간이 양수여야 한다')
+  return {
+    totalPct: ((finalValue - contributed) / half) * 100,
+    cagrPct: (Math.pow(Math.max(finalValue / half, 1e-9), 1 / years) - 1) * 100,
+  }
+}
+
+/**
+ * 적립식 IRR(연환산 %) — 이분법. 매 봉 시가에 -amount, 마지막에 +finalValue.
+ * NPV(r)=0인 r을 찾는다. 근사(반원금)와 나란히 실어 차이를 보이게 한다.
+ */
+export function dcaIrrPct(dates: readonly string[], amount: number, finalValue: number): number {
+  const t0 = Date.parse(dates[0])
+  const yr = (d: string): number => (Date.parse(d) - t0) / (365.25 * 86400e3)
+  const end = yr(dates[dates.length - 1])
+  const npv = (r: number): number => {
+    let v = 0
+    for (const d of dates) v -= amount / Math.pow(1 + r, yr(d))
+    return v + finalValue / Math.pow(1 + r, end)
+  }
+  let lo = -0.99
+  let hi = 10
+  if (npv(lo) * npv(hi) > 0) throw new Error('IRR 구간에 근이 없다 — 데이터를 의심하라')
+  for (let i = 0; i < 200; i++) {
+    const mid = (lo + hi) / 2
+    if (npv(lo) * npv(mid) <= 0) hi = mid
+    else lo = mid
+  }
+  return ((lo + hi) / 2) * 100
+}
+
+/** 곡선 최대낙폭(%) — 평가액 기준 러닝 피크 대비. */
+export function curveMddPct(values: readonly number[]): number {
+  let peak = -Infinity
+  let mdd = 0
+  for (const v of values) {
+    peak = Math.max(peak, v)
+    if (peak > 0) mdd = Math.min(mdd, (v / peak - 1) * 100)
+  }
+  return mdd
+}
+
 /**
  * 비중 시계열 다운샘플 — **곡선과 같은 인덱스**를 남긴다.
  * 화면이 곡선과 비중을 같은 x축에 겹쳐 그리므로, 둘이 다른 점을 남기면 축이 어긋난다.
@@ -200,19 +255,43 @@ async function main(): Promise<void> {
   })
 
   // ── 적립식 요약 — 매일 1만원 ──────────────────────────────────────────────
+  const windowYears = Math.max(
+    1 / 365,
+    (Date.parse(base[base.length - 1].date) - Date.parse(base[0].date)) / (365.25 * 86400e3),
+  )
+
+  // 단순 적립 3종은 일별 평가액 곡선까지 만들어 MDD·반원금 근사·IRR을 계산한다(대표 지정 방식).
+  const dcaHold = LADDER.map((sym) => {
+    const bars = aligned.get(sym)!
+    const side = (US_LADDER_COST.feePct + US_LADDER_COST.slippagePct) / 100
+    let shares = 0
+    let contributed = 0
+    const values: number[] = []
+    for (const b of bars) {
+      shares += (DCA_DAILY * (1 - side)) / b.o
+      contributed += DCA_DAILY
+      values.push(shares * b.c)
+    }
+    const finalValue = values[values.length - 1]
+    const half = dcaHalfBase(contributed, finalValue, windowYears)
+    const mddPct = curveMddPct(values)
+    return {
+      symbol: sym,
+      label: `${sym} 단순 적립`,
+      contributed,
+      finalValue,
+      multiple: +(finalValue / contributed).toFixed(2),
+      // 반원금 근사(대표 지정): 유효원금 = 납입액/2. 정확값은 irrPct.
+      halfBaseTotalPct: +half.totalPct.toFixed(1),
+      halfBaseCagrPct: +half.cagrPct.toFixed(1),
+      irrPct: +dcaIrrPct(bars.map((b) => b.date), DCA_DAILY, finalValue).toFixed(1),
+      mddPct: +mddPct.toFixed(1),
+      calmar: Math.abs(mddPct) > 0.01 ? +(half.cagrPct / Math.abs(mddPct)).toFixed(2) : null,
+    }
+  })
+
   const dcaRows = [
-    ...LADDER.map((sym) => {
-      const bars = aligned.get(sym)!
-      const side = (US_LADDER_COST.feePct + US_LADDER_COST.slippagePct) / 100
-      let shares = 0
-      let contributed = 0
-      for (const b of bars) {
-        shares += (DCA_DAILY * (1 - side)) / b.o
-        contributed += DCA_DAILY
-      }
-      const finalValue = shares * bars[bars.length - 1].c
-      return { label: `${sym} 단순 적립`, contributed, finalValue, multiple: +(finalValue / contributed).toFixed(2) }
-    }),
+    ...dcaHold.map((h) => ({ label: h.label, contributed: h.contributed, finalValue: h.finalValue, multiple: h.multiple })),
     ...US_LEVERAGE_PRESETS.map((preset) => {
       const r = runProportionalLadderDca(base, aligned, preset.params, US_LADDER_COST, DCA_DAILY, 'weights')
       // 같은 이름이 나란히 있으면 무엇이 무엇인지 알 수 없다 — 파라미터로 전부 구분한다.
@@ -248,6 +327,8 @@ async function main(): Promise<void> {
     walls,
     presets,
     dca: { dailyAmount: DCA_DAILY, rows: dcaRows },
+    // 스키마 3: 단순 적립 3종의 상세 지표 — 반원금 근사(대표 지정) + 정확 IRR + MDD.
+    dcaHold,
     limits: [
       '환율 미반영 — 원화 투자자 기준 손익이 아니다',
       '세금 미반영 — 미국 배당 원천징수 15% 포함',

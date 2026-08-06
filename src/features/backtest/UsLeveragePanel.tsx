@@ -81,6 +81,20 @@ interface PresetRow {
   events?: { date: string; kind: string; ddPct: number }[]
 }
 
+/** 스키마 3부터 — 단순 적립 상세. 반원금 근사(대표 지정 방식)와 정확 IRR을 나란히 든다. */
+interface DcaHoldRow {
+  symbol: string
+  label: string
+  contributed: number
+  finalValue: number
+  multiple: number
+  halfBaseTotalPct: number
+  halfBaseCagrPct: number
+  irrPct: number
+  mddPct: number
+  calmar: number | null
+}
+
 interface Artifact {
   schema: number
   asOf: string
@@ -94,6 +108,8 @@ interface Artifact {
   walls: Wall[]
   presets: PresetRow[]
   dca: { dailyAmount: number; rows: { label: string; contributed: number; finalValue: number; multiple: number }[] }
+  /** 스키마 3부터 — 없으면 관련 표시를 뺀다(지어내지 않는다). */
+  dcaHold?: DcaHoldRow[]
   limits: string[]
 }
 
@@ -281,12 +297,23 @@ export function UsLeveragePanel() {
     : []
 
   // ── 칼마 관문 차트 데이터 — 이 화면의 결론을 첫 그림으로 ──────────────────
+  // 사다리 9종 + 단순보유 3종 + 적립식 3종(대표 지시)을 **한 축**에 세운다.
   // 칼마 null(MDD≈0이라 정의 불가)을 0으로 그리면 없는 수치를 지어내는 것이다(규칙 3) — 차트에서 뺀다.
-  const calmarRows = data.presets
-    .filter((p) => p.calmar != null)
-    .map((p) => ({ name: tinyLabel(p.label), calmar: p.calmar as number, pass: p.gatePass }))
-  const calmarSkipped = data.presets.length - calmarRows.length
+  // 적립식 칼마는 반원금 근사 CAGR ÷ |MDD| — 근사임을 이름에 박는다.
+  const calmarRows = [
+    ...data.presets
+      .filter((p) => p.calmar != null)
+      .map((p) => ({ name: tinyLabel(p.label), calmar: p.calmar as number, cls: 'ladder' as const })),
+    ...data.walls
+      .filter((w) => w.calmar != null)
+      .map((w) => ({ name: `${w.symbol} 단순보유`, calmar: w.calmar as number, cls: 'hold' as const })),
+    ...(data.dcaHold ?? [])
+      .filter((h) => h.calmar != null)
+      .map((h) => ({ name: `${h.symbol} 적립 [근사]`, calmar: h.calmar as number, cls: 'dca' as const })),
+  ].sort((a, b) => b.calmar - a.calmar)
+  const calmarSkipped = data.presets.filter((p) => p.calmar == null).length
   const benchCalmar = data.bench.calmar
+  const CLS_COLOR = { ladder: 'var(--uslev-x2)', hold: 'var(--kosdaq)', dca: 'var(--text-faint)' } as const
   // 캡션 결론은 하드코딩하지 않는다 — 재베이크에서 통과가 나오면 화면이 자기모순이 된다(검수 지적).
   const passCount = data.presets.filter((p) => p.gatePass).length
   const allAlphaPositive = data.presets.length > 0 && data.presets.every((p) => (p.alphaCagrPct ?? 0) > 0)
@@ -347,7 +374,10 @@ export function UsLeveragePanel() {
               formatter={(v: number) => [v.toFixed(2), '칼마']}
               labelFormatter={(l) => String(l)}
             />
-            <Bar dataKey="calmar" barSize={18} radius={[0, 4, 4, 0]} fill="var(--uslev-x2)" isAnimationActive={false}>
+            <Bar dataKey="calmar" barSize={14} radius={[0, 4, 4, 0]} isAnimationActive={false}>
+              {calmarRows.map((r, i) => (
+                <Cell key={`${i}-${r.name}`} fill={CLS_COLOR[r.cls]} />
+              ))}
               <LabelList dataKey="calmar" position="right" formatter={(v: number) => v.toFixed(2)} className="uslev-bar-label" />
             </Bar>
             {/* 라벨은 제목·캡션이 이미 든다 — 여기 붙이면 상단에서 잘린다(모바일 실측) */}
@@ -356,17 +386,23 @@ export function UsLeveragePanel() {
         </ResponsiveContainer>
       </div>
       <p className="uslev-caption">
+        <i className="uslev-swatch" style={{ background: CLS_COLOR.ladder }} /> 사다리 전략 ·{' '}
+        <i className="uslev-swatch" style={{ background: CLS_COLOR.hold }} /> 단순보유 ·{' '}
+        <i className="uslev-swatch" style={{ background: CLS_COLOR.dca }} /> 매일 적립 [근사]
+        <br />
         {passCount === 0 ? (
           <>
-            {data.presets.length}개 변형 전부 벤치 왼쪽 = <strong>관문 미통과</strong>.
+            사다리 {data.presets.length}종 전부 벤치 왼쪽 = <strong>관문 미통과</strong>.
             {allAlphaPositive && ' 알파(초과수익)는 양수지만 낙폭을 대가로 산 것이라 위험조정으로는 집니다.'}
           </>
         ) : (
           <>
-            {data.presets.length}개 변형 중 <strong>{passCount}개가 칼마 관문 통과</strong> — 카드의 판정 배지를
+            사다리 {data.presets.length}종 중 <strong>{passCount}개가 칼마 관문 통과</strong> — 카드의 판정 배지를
             확인하세요.
           </>
         )}
+        {' '}적립식 칼마는 <strong>반원금 근사</strong>(유효원금 = 총 납입액 ÷ 2 · 대표 지정 방식) CAGR 기준이라
+        거치식과 눈금이 정확히 같지는 않습니다 — 정확값(IRR)은 아래 적립식 표에 있습니다.
         {calmarSkipped > 0 && ` (칼마 정의 불가 ${calmarSkipped}종은 차트에서 제외 — 표에는 —로 표시)`}
       </p>
 
@@ -496,6 +532,51 @@ export function UsLeveragePanel() {
         <i className="uslev-swatch" style={{ background: 'var(--text-faint)' }} /> 사다리 전략 적립 · 누적 원금{' '}
         {won(data.dca.rows[0]?.contributed ?? 0)} 동일{dcaVerdict && <> · {dcaVerdict}</>}
       </p>
+
+      {/* ── 단순 적립 상세 — 반원금 근사(대표 지정) + 정확 IRR (스키마 3+) ── */}
+      {data.dcaHold && data.dcaHold.length > 0 && (
+        <>
+          <div className="uslev-chart-title">
+            매일 적립 상세 — 반원금 근사 수익률
+            <InfoTip text="매일 같은 금액을 넣으면 투자원금이 0에서 총 납입액까지 선형으로 늘어나므로, 시간으로 적분한 평균 투자원금은 총 납입액의 절반입니다. 대표 지정 방식대로 그 절반을 원금으로 보고 수익률과 CAGR을 계산했습니다. 근사값이며, 현금흐름을 정확히 반영한 IRR을 오른쪽에 병기합니다." />
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>종목</th>
+                  <th>납입액</th>
+                  <th>최종 평가액</th>
+                  <th>수익률<br />(반원금)</th>
+                  <th>CAGR<br />(반원금)</th>
+                  <th>IRR<br />(정확)</th>
+                  <th>MDD</th>
+                  <th>칼마<br />[근사]</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.dcaHold.map((h) => (
+                  <tr key={h.symbol}>
+                    <td><strong>{h.symbol}</strong> 적립</td>
+                    <td>{won(h.contributed)}</td>
+                    <td><strong>{won(h.finalValue)}</strong></td>
+                    <td>{h.halfBaseTotalPct >= 0 ? '+' : ''}{h.halfBaseTotalPct.toLocaleString()}%</td>
+                    <td><strong>{f1(h.halfBaseCagrPct)}%</strong></td>
+                    <td>{f1(h.irrPct)}%</td>
+                    <td style={{ color: 'var(--danger)' }}>{f1(h.mddPct)}%</td>
+                    <td>{f2(h.calmar)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="uslev-caption">
+            반원금 근사(유효원금 = 납입액 ÷ 2)는 대표 지정 방식입니다. 정확한 연수익률은 IRR 열입니다 — 두 값의
+            차이가 근사 오차입니다. MDD는 일별 평가액 곡선의 고점 대비 최대낙폭이며, 적립 초기에 원금이 작아
+            거치식 MDD보다 체감이 다를 수 있습니다.
+          </p>
+        </>
+      )}
 
       {/* ── 원자료 표 (접근성 표 뷰 · 예전 표 그대로) ────────────────────── */}
       <details className="uslev-tables">
