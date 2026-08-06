@@ -1,6 +1,6 @@
 {
-  "schema": 2,
-  "asOf": "2026-08-06T23:22:49.320Z",
+  "schema": 3,
+  "asOf": "2026-08-06T23:50:01.094Z",
   "source": "tiingo",
   "basis": "total",
   "basisNote": "분할+배당(총수익) — 전 종목 응답으로 확정",
@@ -76421,6 +76421,44 @@
       }
     ]
   },
+  "dcaHold": [
+    {
+      "symbol": "QQQ",
+      "label": "QQQ 단순 적립",
+      "contributed": 41460000,
+      "finalValue": 257847851.0559909,
+      "multiple": 6.22,
+      "halfBaseTotalPct": 1043.8,
+      "halfBaseCagrPct": 16.5,
+      "irrPct": 19.7,
+      "mddPct": -33.8,
+      "calmar": 0.49
+    },
+    {
+      "symbol": "QLD",
+      "label": "QLD 단순 적립",
+      "contributed": 41460000,
+      "finalValue": 911007463.6376841,
+      "multiple": 21.97,
+      "halfBaseTotalPct": 4194.6,
+      "halfBaseCagrPct": 25.8,
+      "irrPct": 32.4,
+      "mddPct": -63.3,
+      "calmar": 0.41
+    },
+    {
+      "symbol": "TQQQ",
+      "label": "TQQQ 단순 적립",
+      "contributed": 41460000,
+      "finalValue": 2174568577.2197175,
+      "multiple": 52.45,
+      "halfBaseTotalPct": 10290,
+      "halfBaseCagrPct": 32.6,
+      "irrPct": 41.3,
+      "mddPct": -81.5,
+      "calmar": 0.4
+    }
+  ],
   "limits": [
     "환율 미반영 — 원화 투자자 기준 손익이 아니다",
     "세금 미반영 — 미국 배당 원천징수 15% 포함",
