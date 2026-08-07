@@ -1436,6 +1436,183 @@ async function vrGridMode(token: string): Promise<void> {
 }
 
 // ============================================================================
+// 5.10 MODE=mix — 두 전략(추세 스위칭 · VR) 최적 조합 + 혼합 배분 프런티어 (48차)
+// ============================================================================
+//
+// 대표 질문: "두 전략 중 칼마 최적 조합을 찾아라." 두 해석을 다 잰다:
+//  ① 각 전략의 견고 정점끼리 단독 비교 (47차 고원 채점의 승자들)
+//  ② 두 전략을 w:1-w로 섞은 포트폴리오 — 상관이 낮으면 혼합이 단독을 이길 수 있다.
+// 슬리브 간 리밸런스(월 1회=21거래일)는 수익률 결합으로 근사하고 그 비용은 [근사·미반영]
+// (회전율 월 수% × 편도 0.06% ≈ 월 0.01%p 미만이라 순위를 바꾸지 못한다).
+
+function trendSwitchCurve(qqq: readonly DailyBar[], up: readonly DailyBar[], L: number, cost: LadderCost): Curve {
+  if (qqq.length !== up.length) throw new Error(`스위칭 정렬 실패 ${qqq.length} vs ${up.length}`)
+  const side = (cost.feePct + cost.slippagePct) / 100
+  const n = qqq.length
+  const sma: (number | null)[] = new Array(n).fill(null)
+  let sum = 0
+  for (let i = 0; i < n; i++) {
+    sum += qqq[i].c
+    if (i >= L) sum -= qqq[i - L].c
+    if (i >= L - 1) sma[i] = sum / L
+  }
+  // 신호 = i-1 종가 vs SMA(i-1) → 체결 = i 시가 (규칙 1-2)
+  const start = L
+  let inUp = qqq[start - 1].c > (sma[start - 1] as number)
+  let units = (cost.initialCapital * (1 - side)) / (inUp ? up[start].o : qqq[start].o)
+  const eq: Curve = []
+  for (let i = start; i < n; i++) {
+    if (i > start) {
+      const wantUp = qqq[i - 1].c > (sma[i - 1] as number)
+      if (wantUp !== inUp) {
+        const cash = units * (inUp ? up[i].o : qqq[i].o) * (1 - side)
+        inUp = wantUp
+        units = cash / ((inUp ? up[i].o : qqq[i].o) * (1 + side))
+      }
+    }
+    eq.push({ date: qqq[i].date, equity: units * (inUp ? up[i].c : qqq[i].c) })
+  }
+  return eq
+}
+
+/** 두 곡선을 공통 날짜에서 w:1-w로 결합, 21거래일마다 재배분. 비용 [근사·미반영]. */
+function blendCurves(a: Curve, b: Curve, wA: number): Curve {
+  const bMap = new Map(b.map((e) => [e.date, e.equity]))
+  const common = a.filter((e) => bMap.has(e.date))
+  if (common.length < 100) throw new Error(`혼합 공통 구간이 너무 짧다: ${common.length}`)
+  let va = wA
+  let vb = 1 - wA
+  const eq: Curve = [{ date: common[0].date, equity: 1 }]
+  for (let i = 1; i < common.length; i++) {
+    va *= common[i].equity / common[i - 1].equity
+    vb *= (bMap.get(common[i].date) as number) / (bMap.get(common[i - 1].date) as number)
+    if (i % 21 === 0) {
+      const tot = va + vb
+      va = tot * wA
+      vb = tot * (1 - wA)
+    }
+    eq.push({ date: common[i].date, equity: va + vb })
+  }
+  return eq
+}
+
+/** 일간 수익률 상관계수 (공통 날짜) */
+function dailyCorr(a: Curve, b: Curve): number {
+  const bMap = new Map(b.map((e) => [e.date, e.equity]))
+  const ra: number[] = []
+  const rb: number[] = []
+  let prevA: { date: string; equity: number } | null = null
+  for (const e of a) {
+    if (!bMap.has(e.date)) continue
+    if (prevA && bMap.has(prevA.date)) {
+      ra.push(e.equity / prevA.equity - 1)
+      rb.push((bMap.get(e.date) as number) / (bMap.get(prevA.date) as number) - 1)
+    }
+    prevA = e
+  }
+  const n = ra.length
+  const ma = ra.reduce((s, x) => s + x, 0) / n
+  const mb = rb.reduce((s, x) => s + x, 0) / n
+  let cov = 0
+  let va = 0
+  let vb = 0
+  for (let i = 0; i < n; i++) {
+    cov += (ra[i] - ma) * (rb[i] - mb)
+    va += (ra[i] - ma) ** 2
+    vb += (rb[i] - mb) ** 2
+  }
+  return cov / Math.sqrt(va * vb)
+}
+
+async function mixMode(token: string): Promise<void> {
+  log('# MODE=mix — 두 전략 최적 조합 + 혼합 프런티어 (48차 · 대표 지시)')
+  log('')
+  const qqq = await loadTicker('QQQ', token)
+  await sleep(400)
+  const tqqq = await loadTicker('TQQQ', token)
+  await sleep(400)
+  const soxl = await loadTicker('SOXL', token)
+
+  // 3종목 교집합 정렬
+  const dSet = new Set(qqq.bars.map((b) => b.date))
+  const dSet2 = new Set(tqqq.bars.filter((b) => dSet.has(b.date)).map((b) => b.date))
+  const soxlB = soxl.bars.filter((b) => dSet2.has(b.date))
+  const dSet3 = new Set(soxlB.map((b) => b.date))
+  const qqqB = qqq.bars.filter((b) => dSet3.has(b.date))
+  const tqqqB = tqqq.bars.filter((b) => dSet3.has(b.date))
+  if (qqqB.length !== tqqqB.length || qqqB.length !== soxlB.length) {
+    throw new Error(`3종목 교집합 정렬 실패 ${qqqB.length}/${tqqqB.length}/${soxlB.length}`)
+  }
+  log(`구간 ${qqqB[0].date} ~ ${qqqB[qqqB.length - 1].date} (${qqqB.length}봉 · QQQ∩TQQQ∩SOXL) · tiingo 총수익`)
+  log('')
+
+  const settings = {
+    initialCapital: 100_000,
+    positionPct: 100,
+    commissionPct: 0.01,
+    sellTaxPct: 0,
+    slippagePct: 0.05,
+    stopLossPct: null,
+    takeProfitPct: null,
+  }
+  const row = (name: string, c: Curve, extra = ''): Perf => {
+    const p = perfOf(c)
+    log(`| ${name} | ${f1(p.cagr)}% | ${f1(p.mdd)}% | ${f2(calmarOf(p))} |${extra}`)
+    return p
+  }
+
+  // ① 단독 정점들 (47차 승자) — 같은 창에서 재확인
+  const SW_LS = [150, 160, 170, 180]
+  log('## ① 단독 — 같은 창 재확인')
+  log('| 전략 | CAGR | MDD | 칼마 |')
+  log('|---|---|---|---|')
+  const swCurves = new Map<number, Curve>()
+  for (const L of SW_LS) {
+    const c = trendSwitchCurve(qqqB, tqqqB, L, US_LADDER_COST)
+    swCurves.set(L, c)
+    row(`스위칭 TQQQ↔QQQ L${L}`, c)
+  }
+  const vrPlateauSoxl: VRParams = { periodDays: 20, growthPct: 2, bandPct: 20, initialStockPct: 50 }
+  const vrDefaultSoxl = DEFAULT_VR_PARAMS
+  const vrPlateauTqqq: VRParams = { periodDays: 30, growthPct: 2, bandPct: 15, initialStockPct: 90 }
+  const soxlVrPlateau: Curve = runValueRebalancing(soxlB, 1, vrPlateauSoxl, settings).equity
+  const soxlVrDefault: Curve = runValueRebalancing(soxlB, 1, vrDefaultSoxl, settings).equity
+  const tqqqVrPlateau: Curve = runValueRebalancing(tqqqB, 1, vrPlateauTqqq, settings).equity
+  row('SOXL VR 고원정점 (20d·2%·밴드20·초기50)', soxlVrPlateau)
+  row('SOXL VR 기본 (10d·1%·밴드15·초기75)', soxlVrDefault)
+  row('TQQQ VR 고원정점 (30d·2%·밴드15·초기90)', tqqqVrPlateau)
+  log('')
+
+  // ② 혼합 프런티어 — 스위칭 정점 × VR 3종, w = 스위칭 비중
+  const swBest = swCurves.get(170) as Curve
+  const pairs: [string, Curve][] = [
+    ['SOXL VR 고원정점', soxlVrPlateau],
+    ['SOXL VR 기본', soxlVrDefault],
+    ['TQQQ VR 고원정점', tqqqVrPlateau],
+  ]
+  log('## ② 혼합 — 스위칭 L170 w% + VR (1-w)% · 월 재배분 [비용 근사·미반영]')
+  for (const [name, vrC] of pairs) {
+    log(`상대: ${name} — 일간수익률 상관 ${dailyCorr(swBest, vrC).toFixed(2)}`)
+    log('| w(스위칭) | CAGR | MDD | 칼마 |')
+    log('|---|---|---|---|')
+    let best = { w: -1, calmar: -1 }
+    for (let w = 0; w <= 100; w += 10) {
+      const c = blendCurves(swBest, vrC, w / 100)
+      const p = perfOf(c)
+      const cal = calmarOf(p) ?? 0
+      if (cal > best.calmar) best = { w, calmar: cal }
+      row(`${w}%`, c)
+    }
+    log(`→ 최적 w=${best.w}% (칼마 ${best.calmar.toFixed(2)})`)
+    log('')
+  }
+  log(
+    '읽는 법: 혼합이 단독 최고 칼마를 넘으면 분산 효과가 실재하는 것. 상관이 1에 가까우면 ' +
+      '혼합은 중간값만 준다. 전부 2010~26 한 개 창 · 환율·세금 미반영 · 투자자문 아님(규칙 4).',
+  )
+}
+
+// ============================================================================
 // 6. MODE=selftest — 네트워크 없이 도는 자기검증
 // ============================================================================
 
@@ -1496,12 +1673,13 @@ async function main(): Promise<void> {
 
   if (mode === 'vr') await vrMode(key.value)
   if (mode === 'vrgrid') await vrGridMode(key.value)
+  if (mode === 'mix') await mixMode(key.value)
   if (mode === 'real' || mode === 'all') await real(key.value)
   if (mode === 'synth' || mode === 'all') await synth(key.value)
   if (mode === 'prop' || mode === 'all') await prop(key.value)
   if (mode === 'sweep' || mode === 'all') await sweepMode(key.value)
   if (mode === 'dca' || mode === 'all') await dcaMode(key.value)
-  if (!['real', 'synth', 'prop', 'sweep', 'dca', 'vr', 'vrgrid', 'all'].includes(mode)) throw new Error(`알 수 없는 MODE: ${mode}`)
+  if (!['real', 'synth', 'prop', 'sweep', 'dca', 'vr', 'vrgrid', 'mix', 'all'].includes(mode)) throw new Error(`알 수 없는 MODE: ${mode}`)
 
   log('')
   log('---')
