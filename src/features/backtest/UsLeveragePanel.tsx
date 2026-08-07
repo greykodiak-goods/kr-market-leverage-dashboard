@@ -124,10 +124,9 @@ function won(n: number): string {
   return eok > 0 ? `${eok}억 ${man.toLocaleString()}만원` : `${man.toLocaleString()}만원`
 }
 
-function fmtMoney(v: number): string {
-  if (Math.abs(v) >= 1e8) return `${(v / 1e8).toFixed(1)}억`
-  if (Math.abs(v) >= 1e4) return `${Math.round(v / 1e4).toLocaleString()}만`
-  return Math.round(v).toLocaleString()
+/** 달러 표기 — 원값 그대로 콤마. 만 단위로 뭉개면 2만까지 변화가 안 보인다(대표 지적). */
+function fmtUsd(v: number): string {
+  return `$${Math.round(v).toLocaleString()}`
 }
 
 /** 배너·note의 md 강조(**)를 화면에서 걷어낸다(문구는 그대로). */
@@ -382,8 +381,8 @@ function GeneralSimulator({ data }: { data: Artifact }) {
       <div className="recharts-default-tooltip">
         <div className="tooltip-label">{tsLong(p.ts)}</div>
         <div style={{ fontSize: 13 }}>
-          <div>내 조합: <strong>{fmtMoney(p.combo)}</strong></div>
-          <div>QQQ: {fmtMoney(p.qqq)} · QLD: {fmtMoney(p.qld)} · TQQQ: {fmtMoney(p.tqqq)}</div>
+          <div>내 조합: <strong>{fmtUsd(p.combo)}</strong></div>
+          <div>QQQ: {fmtUsd(p.qqq)} · QLD: {fmtUsd(p.qld)} · TQQQ: {fmtUsd(p.tqqq)}</div>
         </div>
       </div>
     )
@@ -430,7 +429,7 @@ function GeneralSimulator({ data }: { data: Artifact }) {
 
       {/* ── 자산곡선 — 기본 3종 위에 내 조합 ───────────────────────────── */}
       <div className="uslev-chart-title">
-        자산곡선 (초기 1만 달러 · 로그축)
+        자산곡선 (초기 $10,000 · 로그축)
         <InfoTip text="세로축은 로그 눈금입니다 — TQQQ와 QQQ의 규모 차이가 수십 배라 선형축에서는 비교가 안 됩니다. 로그축에서는 기울기가 수익률이고 같은 간격이 같은 배율입니다." />
       </div>
       <div className="bt-chart-block">
@@ -438,7 +437,7 @@ function GeneralSimulator({ data }: { data: Artifact }) {
           <LineChart data={rows} margin={{ top: 8, right: 12, left: 4, bottom: 0 }}>
             <CartesianGrid stroke="var(--border)" vertical={false} />
             <XAxis dataKey="ts" type="number" scale="time" domain={['dataMin', 'dataMax']} ticks={ticks} tickFormatter={fmt} tickLine={false} axisLine={{ stroke: 'var(--border)' }} />
-            <YAxis scale="log" domain={['auto', 'auto']} tickFormatter={fmtMoney} tickLine={false} axisLine={false} width={56} />
+            <YAxis scale="log" domain={['auto', 'auto']} tickFormatter={fmtUsd} tickLine={false} axisLine={false} width={78} />
             <Tooltip content={<STooltip />} cursor={{ stroke: 'var(--text-faint)', strokeDasharray: '3 3' }} />
             <Line type="monotone" dataKey="qqq" name="QQQ" stroke="var(--uslev-x1)" strokeWidth={1.3} dot={false} isAnimationActive={false} />
             <Line type="monotone" dataKey="qld" name="QLD" stroke="var(--uslev-x2)" strokeWidth={1.3} dot={false} isAnimationActive={false} />
