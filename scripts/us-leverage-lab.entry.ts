@@ -1285,6 +1285,157 @@ async function vrMode(token: string): Promise<void> {
 }
 
 // ============================================================================
+// 5.9 MODE=vrgrid — VR 4변수 전수 격자 + 고원 채점 (2026-08-07 대표 지시 · 47차)
+// ============================================================================
+//
+// 대표 질문: "SOXL VR 기본(10d·1%·15%·75%)이 특이케이스인가 고원인가, 세부 옵션 다
+// 검토하면 최적값인가?" — 43차 사다리 고원 채점과 같은 방법으로 판정한다:
+// 각 조합의 **이웃최소 칼마**(4개 축에서 ±1스텝 이웃 8개+자기 중 최솟값)를 점수로 쓴다.
+// 스파이크(운)는 이웃최소가 무너지고, 고원(실체)은 이웃최소가 버틴다.
+
+const VR_GRID = {
+  periodDays: [5, 10, 15, 20, 30],
+  growthPct: [0, 0.5, 1, 1.5, 2],
+  bandPct: [5, 10, 15, 20, 25],
+  initialStockPct: [50, 65, 75, 90],
+} as const
+
+async function vrGridMode(token: string): Promise<void> {
+  log('# MODE=vrgrid — VR 4변수 전수 격자 + 고원 채점 (47차 · 대표 지시)')
+  log('')
+  const tqqq = await loadTicker('TQQQ', token)
+  await sleep(400)
+  const soxl = await loadTicker('SOXL', token)
+
+  const common = new Set(tqqq.bars.map((b) => b.date))
+  const soxlB = soxl.bars.filter((b) => common.has(b.date))
+  const soxlSet = new Set(soxlB.map((b) => b.date))
+  const tqqqB = tqqq.bars.filter((b) => soxlSet.has(b.date))
+  if (tqqqB.length !== soxlB.length) throw new Error(`교집합 정렬 실패 ${tqqqB.length} vs ${soxlB.length}`)
+  log(`구간 ${tqqqB[0].date} ~ ${tqqqB[tqqqB.length - 1].date} (${tqqqB.length}봉 · 교집합) · tiingo 총수익`)
+  const axes = Object.entries(VR_GRID)
+    .map(([k, v]) => `${k}=[${v.join(',')}]`)
+    .join(' × ')
+  log(`격자: ${axes} → ${VR_GRID.periodDays.length * VR_GRID.growthPct.length * VR_GRID.bandPct.length * VR_GRID.initialStockPct.length}조합/종목`)
+  log('')
+
+  const settings = {
+    initialCapital: 100_000,
+    positionPct: 100,
+    commissionPct: 0.01,
+    sellTaxPct: 0,
+    slippagePct: 0.05,
+    stopLossPct: null,
+    takeProfitPct: null,
+  }
+
+  interface Cell {
+    pi: number
+    gi: number
+    bi: number
+    si: number
+    p: VRParams
+    cagr: number
+    mdd: number
+    calmar: number
+    nbMin: number
+  }
+
+  for (const [sym, bars] of [
+    ['TQQQ', tqqqB],
+    ['SOXL', soxlB],
+  ] as const) {
+    const hold = perfOf(buyHoldCurve(bars, US_LADDER_COST))
+    const holdCalmar = calmarOf(hold) ?? 0
+    log(`## ${sym} — 보유 벤치: CAGR ${f1(hold.cagr)}% · MDD ${f1(hold.mdd)}% · 칼마 ${f2(holdCalmar)}`)
+    log('')
+
+    // 4차원 격자 전수 실행
+    const grid: Cell[][][][] = []
+    const flat: Cell[] = []
+    let ran = 0
+    VR_GRID.periodDays.forEach((periodDays, pi) => {
+      grid[pi] = []
+      VR_GRID.growthPct.forEach((growthPct, gi) => {
+        grid[pi][gi] = []
+        VR_GRID.bandPct.forEach((bandPct, bi) => {
+          grid[pi][gi][bi] = []
+          VR_GRID.initialStockPct.forEach((initialStockPct, si) => {
+            const p: VRParams = { periodDays, growthPct, bandPct, initialStockPct }
+            const r = runValueRebalancing(bars, 1, p, settings)
+            const perf = perfOf(r.equity)
+            const cell: Cell = { pi, gi, bi, si, p, cagr: perf.cagr, mdd: perf.mdd, calmar: calmarOf(perf) ?? 0, nbMin: 0 }
+            grid[pi][gi][bi][si] = cell
+            flat.push(cell)
+            ran++
+          })
+        })
+      })
+    })
+    if (ran !== flat.length || ran === 0) throw new Error(`격자 실행 수 불일치 ${ran}`)
+
+    // 이웃최소 — 축별 ±1 (모서리는 있는 이웃만)
+    for (const c of flat) {
+      let min = c.calmar
+      const probe = (pi: number, gi: number, bi: number, si: number): void => {
+        const n = grid[pi]?.[gi]?.[bi]?.[si]
+        if (n) min = Math.min(min, n.calmar)
+      }
+      probe(c.pi - 1, c.gi, c.bi, c.si)
+      probe(c.pi + 1, c.gi, c.bi, c.si)
+      probe(c.pi, c.gi - 1, c.bi, c.si)
+      probe(c.pi, c.gi + 1, c.bi, c.si)
+      probe(c.pi, c.gi, c.bi - 1, c.si)
+      probe(c.pi, c.gi, c.bi + 1, c.si)
+      probe(c.pi, c.gi, c.bi, c.si - 1)
+      probe(c.pi, c.gi, c.bi, c.si + 1)
+      c.nbMin = min
+    }
+
+    const label = (c: Cell): string => `${c.p.periodDays}d·${c.p.growthPct}%·밴드${c.p.bandPct}%·초기${c.p.initialStockPct}%`
+    const line = (c: Cell): string =>
+      `| ${label(c)} | ${f1(c.cagr)}% | ${f1(c.mdd)}% | ${f2(c.calmar)} | ${f2(c.nbMin)} |`
+
+    const byCalmar = [...flat].sort((a, b) => b.calmar - a.calmar)
+    const byNbMin = [...flat].sort((a, b) => b.nbMin - a.nbMin)
+    const def = flat.find(
+      (c) =>
+        c.p.periodDays === DEFAULT_VR_PARAMS.periodDays &&
+        c.p.growthPct === DEFAULT_VR_PARAMS.growthPct &&
+        c.p.bandPct === DEFAULT_VR_PARAMS.bandPct &&
+        c.p.initialStockPct === DEFAULT_VR_PARAMS.initialStockPct,
+    )
+    if (!def) throw new Error('기본 파라미터가 격자에 없다 — 격자 축을 확인하라')
+
+    log('| 조합 | CAGR | MDD | 칼마 | 이웃최소 |')
+    log('|---|---|---|---|---|')
+    log(`상위 5 (칼마):`)
+    for (const c of byCalmar.slice(0, 5)) log(line(c))
+    log(`상위 5 (이웃최소 = 고원 점수):`)
+    for (const c of byNbMin.slice(0, 5)) log(line(c))
+    log(`기본값 위치:`)
+    log(line(def))
+    log('')
+    const defRankCalmar = byCalmar.indexOf(def) + 1
+    const defRankNb = byNbMin.indexOf(def) + 1
+    const overHold = flat.filter((c) => c.calmar > holdCalmar).length
+    const overTarget = flat.filter((c) => c.calmar > 0.61 && c.cagr >= 30).length
+    const nbOverHold = flat.filter((c) => c.nbMin > holdCalmar).length
+    log(
+      `기본값 순위: 칼마 ${defRankCalmar}/${flat.length} · 이웃최소 ${defRankNb}/${flat.length} — ` +
+        `벤치 초과 조합 ${overHold}/${flat.length} · 이웃최소까지 벤치 초과 ${nbOverHold}/${flat.length} · ` +
+        `목표(칼마>0.61 & CAGR≥30) 충족 ${overTarget}/${flat.length}`,
+    )
+    log('')
+  }
+  log(
+    '읽는 법: **이웃최소가 벤치를 넘는 조합이 넓게 깔려 있으면 고원(실체), 최고점만 높고 이웃최소가 ' +
+      '주저앉으면 스파이크(운)**다. 43차 사다리 채점과 같은 방법. 이 구간 성적은 2010~26 강세장 ' +
+      '한 개 창이며 매수 권유가 아니다(규칙 4).',
+  )
+}
+
+// ============================================================================
 // 6. MODE=selftest — 네트워크 없이 도는 자기검증
 // ============================================================================
 
@@ -1344,12 +1495,13 @@ async function main(): Promise<void> {
   log('')
 
   if (mode === 'vr') await vrMode(key.value)
+  if (mode === 'vrgrid') await vrGridMode(key.value)
   if (mode === 'real' || mode === 'all') await real(key.value)
   if (mode === 'synth' || mode === 'all') await synth(key.value)
   if (mode === 'prop' || mode === 'all') await prop(key.value)
   if (mode === 'sweep' || mode === 'all') await sweepMode(key.value)
   if (mode === 'dca' || mode === 'all') await dcaMode(key.value)
-  if (!['real', 'synth', 'prop', 'sweep', 'dca', 'vr', 'all'].includes(mode)) throw new Error(`알 수 없는 MODE: ${mode}`)
+  if (!['real', 'synth', 'prop', 'sweep', 'dca', 'vr', 'vrgrid', 'all'].includes(mode)) throw new Error(`알 수 없는 MODE: ${mode}`)
 
   log('')
   log('---')
