@@ -22,10 +22,12 @@ import { dirname, join } from 'node:path'
 import {
   runProportionalLadder,
   runProportionalLadderDca,
+  runGeneralLadder,
   alignBars,
   US_LADDER_COST,
   LADDER_BASE,
   type Curve,
+  type GeneralLadderParams,
 } from '../src/features/backtest/leverageLadder'
 import { US_LEVERAGE_PRESETS, US_LEV_SCHEMA } from '../src/features/backtest/usLeveragePresets'
 import {
@@ -306,6 +308,52 @@ async function main(): Promise<void> {
     }),
   ].sort((a, b) => b.finalValue - a.finalValue)
 
+  // ── 4변수 격자 전수 탐색 — 칼마 1위 (대표 지시 "젤 칼마값 좋은거") ─────────
+  // 하락폭 4~30(2 간격) × 매도횟수 1~5 × 상승폭 4~30(2 간격) × 매수등분 {1,2,3,5,10,20}
+  const DROPS = Array.from({ length: 14 }, (_, i) => 4 + i * 2)
+  const RISES = DROPS
+  const SELLS = [1, 2, 3, 4, 5]
+  const BUYS = [1, 2, 3, 5, 10, 20]
+  let gridBest: {
+    params: GeneralLadderParams
+    cagrPct: number
+    mddPct: number
+    calmar: number
+    alphaCagrPct: number
+    trades: number
+    gridSize: number
+  } | null = null
+  let gridCount = 0
+  const benchPerfFull = perfOf(bench)
+  for (const dropStepPct of DROPS)
+    for (const sellTranches of SELLS)
+      for (const riseStepPct of RISES)
+        for (const buyTranches of BUYS) {
+          gridCount++
+          const r = runGeneralLadder(base, aligned, { dropStepPct, sellTranches, riseStepPct, buyTranches }, US_LADDER_COST)
+          const pf = perfOf(r.equity)
+          const cal = calmarOf(pf)
+          if (cal == null) continue
+          if (!gridBest || cal > gridBest.calmar || (cal === gridBest.calmar && pf.cagr > gridBest.cagrPct)) {
+            gridBest = {
+              params: { dropStepPct, sellTranches, riseStepPct, buyTranches },
+              cagrPct: +pf.cagr.toFixed(1),
+              mddPct: +pf.mdd.toFixed(1),
+              calmar: +cal.toFixed(3),
+              alphaCagrPct: +(pf.cagr - benchPerfFull.cagr).toFixed(1),
+              trades: r.trades,
+              gridSize: 0,
+            }
+          }
+        }
+  if (!gridBest) throw new Error('격자 탐색이 후보 0개로 끝났다 — 비정상')
+  gridBest.gridSize = gridCount
+  console.log(
+    `격자 ${gridCount}조합 탐색 — 칼마 1위: 매도 ${gridBest.params.dropStepPct}%×${gridBest.params.sellTranches}회 · ` +
+      `매수 ${gridBest.params.riseStepPct}%×1/${gridBest.params.buyTranches} · 칼마 ${gridBest.calmar} ` +
+      `(벤치 ${calmarOf(benchPerfFull)?.toFixed(2)})`,
+  )
+
   const artifact = {
     schema: US_LEV_SCHEMA,
     asOf: new Date().toISOString(),
@@ -329,6 +377,20 @@ async function main(): Promise<void> {
     dca: { dailyAmount: DCA_DAILY, rows: dcaRows },
     // 스키마 3: 단순 적립 3종의 상세 지표 — 반원금 근사(대표 지정) + 정확 IRR + MDD.
     dcaHold,
+    // 스키마 4: 일봉(시가·종가)을 산출물에 싣는다 — 브라우저가 4변수 일반화 사다리를
+    // **직접 재계산**할 수 있게(대표 지시 "값 조정하면서"). 키가 아니라 데이터만 나간다(규칙 2-1 유지).
+    bars: {
+      dates: base.map((b) => b.date),
+      series: Object.fromEntries(
+        LADDER.map((sym) => {
+          const bs = aligned.get(sym)!
+          return [sym, { o: bs.map((b) => +b.o.toFixed(4)), c: bs.map((b) => +b.c.toFixed(4)) }]
+        }),
+      ),
+    },
+    // 스키마 4: 4변수 격자 전수 탐색의 칼마 1위 — 화면 "최적 보기" 버튼용.
+    // ⚠️ 격자 1위를 고르는 것 자체가 과최적화다 — 화면·보고 양쪽에 그 경고를 붙인다.
+    best: gridBest,
     limits: [
       '환율 미반영 — 원화 투자자 기준 손익이 아니다',
       '세금 미반영 — 미국 배당 원천징수 15% 포함',

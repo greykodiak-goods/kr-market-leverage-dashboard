@@ -18,6 +18,7 @@ import {
   TRADING_DAYS,
   runProportionalLadder,
   runProportionalLadderDca,
+  runGeneralLadder,
   SPEC_PROPORTIONAL,
   type LadderParams,
   type ProportionalParams,
@@ -514,6 +515,97 @@ section('10. 비중 분할 사다리 — 적립식(DCA) 판')
   let threw2 = false
   try { runProportionalLadderDca(base, a, { ...PP, band1Pct: 30, band2Pct: 10 }, US_LADDER_COST, 10_000, 'weights') } catch { threw2 = true }
   check('[DCA] 밴드 순서가 뒤집히면 던진다', threw2)
+}
+
+// ============================================================================
+section('11. 일반화 사다리 — 4변수 (분할매도 폭·횟수 × 분할매수 폭·등분)')
+// ============================================================================
+
+{
+  // ★ 상호 검증: (10%, 2회, 10%, 10등분) = 기존 정본(SPEC_PROPORTIONAL)과
+  //   자산곡선이 완전히 같아야 한다. 두 독립 구현이 같은 답을 내는지가 곧 검증이다.
+  const base = makeBars(1400, 91, -0.0003, 0.025)
+  const assets = alignBars(makeLadderInput(base))
+  const prop = runProportionalLadder(base, assets, SPEC_PROPORTIONAL, US_LADDER_COST)
+  const gen = runGeneralLadder(base, assets, { dropStepPct: 10, sellTranches: 2, riseStepPct: 10, buyTranches: 10 }, US_LADDER_COST)
+  let same = gen.equity.length === prop.equity.length
+  let maxDiff = 0
+  for (let i = 0; i < gen.equity.length && same; i++) {
+    const d = Math.abs(gen.equity[i].equity - prop.equity[i].equity)
+    maxDiff = Math.max(maxDiff, d)
+    if (d > 1e-6) same = false
+  }
+  check(`(10,2,10,10) = 정본과 자산곡선 동일 (최대 오차 ${maxDiff.toExponential(1)})`, same)
+  check('(10,2,10,10) 매매 수 동일', gen.trades === prop.trades, `${gen.trades} vs ${prop.trades}`)
+  check('상호검증 표본에 매매가 실제로 있다(공허 방지)', gen.trades > 0)
+
+  // 파라미터 방어
+  let threw = 0
+  try { runGeneralLadder(base, assets, { dropStepPct: 0, sellTranches: 2, riseStepPct: 10, buyTranches: 10 }, US_LADDER_COST) } catch { threw++ }
+  try { runGeneralLadder(base, assets, { dropStepPct: 10, sellTranches: 0, riseStepPct: 10, buyTranches: 10 }, US_LADDER_COST) } catch { threw++ }
+  try { runGeneralLadder(base, assets, { dropStepPct: 10, sellTranches: 2.5, riseStepPct: 10, buyTranches: 10 }, US_LADDER_COST) } catch { threw++ }
+  check('무효 파라미터 3종이 전부 던진다', threw === 3, `${threw}/3`)
+}
+
+{
+  // 절단 불변성 — 새 엔진에도 규칙 1이 그대로 걸린다.
+  const GP = { dropStepPct: 6, sellTranches: 3, riseStepPct: 8, buyTranches: 4 }
+  const base = makeBars(1200, 91, -0.0004, 0.03)
+  const full = runGeneralLadder(base, alignBars(makeLadderInput(base)), GP, US_LADDER_COST)
+  check('[일반화] 원본에 행동이 충분히 있다', full.events.length >= 5, `${full.events.length}건`)
+
+  for (const cut of [400, 800]) {
+    const cb = base.slice(0, cut)
+    const cr = runGeneralLadder(cb, alignBars(makeLadderInput(cb)), GP, US_LADDER_COST)
+    let same = cr.equity.length === cut
+    for (let i = 0; i < cr.equity.length && same; i++)
+      if (Math.abs(cr.equity[i].equity - full.equity[i].equity) > 1e-9) same = false
+    check(`[일반화] 절단 ${cut}봉 — 자산곡선 동일`, same)
+    let wSame = cr.weightsDaily.length === cut
+    for (let i = 0; i < cr.weightsDaily.length && wSame; i++)
+      for (let k = 0; k < 3 && wSame; k++)
+        if (Math.abs(cr.weightsDaily[i][k] - full.weightsDaily[i][k]) > 1e-9) wSame = false
+    check(`[일반화] 절단 ${cut}봉 — 일별 비중 동일`, wSame)
+    const lastDate = cb[cb.length - 1].date
+    const a = cr.events.filter((e) => e.date < lastDate)
+    const b = full.events.filter((e) => e.date < lastDate)
+    check(`[일반화] 절단 ${cut}봉 — 행동 이력 동일 (${a.length}건)`, a.length === b.length && a.every((e, i) => e.date === b[i].date && e.kind === b[i].kind))
+    check(`[일반화] 절단 ${cut}봉 — 비교가 공허하지 않다`, a.length > 0)
+  }
+
+  // 미래 조작 불변성
+  const K = 600
+  const tampered = base.map((b, i) => (i < K ? b : { ...b, o: b.o * 3, h: b.h * 3, l: b.l * 3, c: b.c * 3 }))
+  const t = runGeneralLadder(tampered, alignBars(makeLadderInput(tampered)), GP, US_LADDER_COST)
+  let sameT = true
+  for (let i = 0; i < K; i++) if (Math.abs(full.equity[i].equity - t.equity[i].equity) > 1e-9) { sameT = false; break }
+  check('[일반화] 봉 600 이후 조작해도 그 이전 불변', sameT)
+
+  // 마지막 봉 규율 + 기본 무결성
+  const lastDate = base[base.length - 1].date
+  check('[일반화] 마지막 봉에 신규 행동 없음(규칙 1-6)', !full.events.some((e) => e.date === lastDate))
+  check('[일반화] 일별 비중 합 100', full.weightsDaily.every((w) => Math.abs(w[0] + w[1] + w[2] - 100) < 1e-6))
+  check('[일반화] 비중 길이 = 곡선 길이', full.weightsDaily.length === full.equity.length)
+}
+
+{
+  // 결정적 계열로 분할 규칙 자체를 확인 — N=4, 8% 간격: −8/−16/−24/−32에서 1/4씩,
+  // 앞 두 번은 QLD, 뒤 두 번은 TQQQ. 마지막 회가 QQQ를 비우는지도 본다.
+  const bars: DailyBar[] = []
+  let c = 100
+  for (let i = 0; i < 300; i++) {
+    if (i < 50) c = 100
+    else if (i < 200) c = 100 * (1 - 0.36 * ((i - 49) / 150))
+    else c = 64 * (1 + 0.2 * ((i - 199) / 100))
+    const d = new Date(Date.UTC(2012, 0, 3) + i * 86400e3)
+    bars.push({ date: d.toISOString().slice(0, 10), t: 0, o: c, h: c, l: c, c, v: 0 })
+  }
+  const run = runGeneralLadder(bars, alignBars(makeLadderInput(bars)), { dropStepPct: 8, sellTranches: 4, riseStepPct: 10, buyTranches: 5 }, US_LADDER_COST)
+  const sells = run.events.filter((e) => e.kind.startsWith('분할매도'))
+  eq('분할매도가 정확히 4회', sells.length, 4)
+  check('1회차 목적지가 QLD (QLD 비중 증가)', sells[0].weights[1] > 5)
+  check('4회차 후 QQQ가 비었다', sells[3].weights[0] < 1, sells[3].weights.map((w) => w.toFixed(0)).join('/'))
+  check('4회차 후 TQQQ 보유', sells[3].weights[2] > 20)
 }
 
 finish()

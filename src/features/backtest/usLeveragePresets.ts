@@ -21,9 +21,10 @@ import { SPEC_PROPORTIONAL, type ProportionalParams } from './leverageLadder'
 /** 사전계산 산출물 스키마 — 화면이 모르는 버전이면 없는 셈 친다(우아한 강등). */
 // 스키마 2 (2026-08-06): 프리셋에 `weights`(다운샘플 일별 비중)·`events`(매매 사건)가 추가됐다.
 // 스키마 3 (2026-08-07): `dcaHold`(단순 적립 3종 상세 — 반원금 근사·IRR·MDD·칼마)가 추가됐다.
+// 스키마 4 (2026-08-07): `bars`(일봉 시가·종가 — 브라우저 재계산용)·`best`(4변수 격자 칼마 1위)가 추가됐다.
 // 화면은 하위 버전도 계속 읽는다 — 새 필드가 없으면 해당 표시만 뺀다(없는 값을 지어내지 않는다).
-export const US_LEV_SCHEMA = 3
-export const US_LEV_SUPPORTED_SCHEMAS: readonly number[] = [1, 2, 3]
+export const US_LEV_SCHEMA = 4
+export const US_LEV_SUPPORTED_SCHEMAS: readonly number[] = [1, 2, 3, 4]
 export const US_LEV_DATA_URL = 'data/us-leverage-precomputed.json'
 
 export interface UsLeveragePreset {
@@ -137,11 +138,12 @@ export const US_LEVERAGE_PRESETS: UsLeveragePreset[] = BANDS.flatMap((band) =>
 
 /** 목록 상단 상시 배너 — 왜 탈락한 것이 올라와 있는지 먼저 말한다. */
 export const US_LEV_BANNER =
-  '⛔ **아래 프리셋은 전부 판정에서 탈락한 조합입니다.** 43차 실측에서 파라미터 990변형 중 관문 통과가 ' +
+  '⛔ **이 계열은 판정에서 탈락한 전략입니다.** 43차 실측에서 파라미터 990변형 중 관문 통과가 ' +
   '0개였고, 같은 구간 **QLD를 그냥 사서 두는 것**(CAGR 33.2%)이 이 계열 최고(30.0%)보다 나았습니다. ' +
-  '대표 지시로 기록·비교용으로만 등재했습니다 — 실제 매매에 쓰지 마십시오.'
+  '아래 시뮬레이터는 기록·검증용입니다 — 실제 매매에 쓰지 마십시오.'
 
 /** 배너 아래 한 줄 — 무엇을 보라는 안내. */
 export const US_LEV_READ_HINT =
-  '이 표는 "무엇을 사라"가 아니라 **"레버리지를 규칙적으로 켜고 끄는 것이 단순 보유를 이기는가"에 ' +
-  '대한 실측 답**입니다. 답은 아니오였습니다. 칼마(= CAGR ÷ |MDD|)가 벤치를 넘는지를 먼저 보십시오.'
+  '이 화면은 "무엇을 사라"가 아니라 **"레버리지를 규칙적으로 켜고 끄는 것이 단순 보유를 이기는가"에 ' +
+  '대한 실측 답**입니다. 답은 아니오였습니다. 변수를 바꿔 볼 때는 칼마(= CAGR ÷ |MDD|)가 벤치를 ' +
+  '넘는지를 먼저 보십시오.'

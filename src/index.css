@@ -3221,3 +3221,31 @@ body {
   .uslev-stats { grid-template-columns: repeat(4, 1fr); gap: 4px; }
   .uslev-stat .val { font-size: 13px; }
 }
+
+/* ═══ 4변수 시뮬레이터 (2026-08-07 일반화) ═════════════════════════════════ */
+:root { --uslev-combo: #d33682; } /* 내 조합 강조 — 램프(파랑)와 확실히 다른 축 */
+@media (prefers-color-scheme: dark) {
+  :root { --uslev-combo: #f06292; }
+}
+.uslev-sim { margin-top: 12px; }
+.uslev-ctrls {
+  display: grid; gap: 10px 18px; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+  padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-2);
+}
+.uslev-ctrl { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center; }
+.uslev-ctrl-label { grid-column: 1 / -1; font-size: 12px; color: var(--text-dim); }
+.uslev-ctrl input[type='range'] { width: 100%; accent-color: var(--accent); min-height: 24px; }
+.uslev-ctrl-value {
+  font-size: 13.5px; font-weight: 700; font-variant-numeric: tabular-nums;
+  min-width: 52px; text-align: right;
+}
+.uslev-sim-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 4px; }
+.uslev-best-on { border-color: var(--uslev-warn); color: var(--uslev-warn); }
+.uslev-sim-stats {
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--panel-2); margin: 8px 0 4px;
+}
+@media (max-width: 560px) {
+  .uslev-sim-stats { grid-template-columns: repeat(3, 1fr); }
+}

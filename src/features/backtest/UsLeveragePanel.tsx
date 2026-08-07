@@ -1,31 +1,24 @@
-// QQQ 배수 전략 프리셋 화면 — **읽기 전용 패널**.
+// QQQ 배수 전략 — **4변수 인터랙티브 시뮬레이터** (읽기 전용 데이터 · 브라우저 재계산).
 //
-// 2026-08-06 대표 지시로 등재. 43차 실측에서 관문 통과 0(990변형)이었고 나는 등재에
-// 반대했으나 대표가 결과를 보고 확정했다. 그래서 **탈락 사실을 먼저 보여주는 형태**로 올린다.
+// 2026-08-07 대표 지시로 전면 개편: "15줄이 너무 많아, 값 조정하면서 볼 수 있게 일반화."
+// 고정 프리셋 카드·15줄 칼마 비교를 걷어내고, 변수 4개(분할매도 하락비중·횟수,
+// 분할매수 상승비중·등분)를 화면에서 조정하면 **그 자리에서 다시 계산**한다.
 //
-// 2026-08-06 모바일 개편(대표 지시): 열 11개짜리 표가 좁은 화면에서 셀마다 줄바꿈돼
-// 깨졌다. 기본 화면에서 표를 전부 걷어내고 ①칼마 관문 막대 ②프리셋 카드(스탯+평균
-// 비중 스택바) ③비중 변화 누적영역 차트 ④단순보유 CAGR/MDD 다이버징 막대 ⑤적립식
-// 배수 막대로 바꿨다. 원자료 표는 <details>(표로 보기)에 그대로 남긴다 — 차트는
-// 보조 수단이고 수치의 정본은 표·산출물이다(접근성 표 뷰 겸용).
-//
-// 색: QQQ→QLD→TQQQ는 **한 색상(파랑)의 밝기 순서 램프**다 — 레버리지 배수가 높을수록
-// 어둡다. 색약·흑백에서도 순서가 읽히도록 검증기(dataviz validate_palette --ordinal)를
-// 라이트·다크 표면 각각에 대해 통과시킨 값이며 index.css의 --uslev-x1·x2·x3에 있다.
-// 범례에 ×1/×2/×3을 병기해 정체가 색에만 실리지 않게 한다.
-//
-// ── 왜 "직접 다시 돌리기"가 없나 ────────────────────────────────────────────
-//   시세가 tiingo라 브라우저에서 부르면 API 키가 프런트엔드에 노출된다(규칙 2-1 위반).
-//   그래서 GHA에서 굽고(`scripts/us-leverage-precompute.entry.ts`) 여기서는 읽기만 한다.
-//   기능 누락이 아니라 **키를 안 내보내려는 설계**이며, 그 사실을 화면에 적는다.
+// ── 어떻게 브라우저에서 재계산이 가능한가 (규칙 2-1) ─────────────────────────
+//   금지된 것은 tiingo **키**가 프런트엔드에 노출되는 것이다. 그래서 GHA 베이크가
+//   일봉(시가·종가)을 산출물에 실어 주고(스키마 4), 브라우저는 그 **데이터**로
+//   엔진(runGeneralLadder — 절단 불변성 테스트가 덮는 동일 코드)을 돌린다.
+//   키는 여전히 GHA에만 있다. 데이터 신선도는 산출물 기준일에 묶인다.
 //
 // ── 우아한 강등 ─────────────────────────────────────────────────────────────
-//   산출물이 없거나 모르는 스키마면 **없는 셈 치고** 안내만 띄운다. 수치를 지어내지 않는다.
-//   비중 차트는 스키마 2부터 오는 데이터라, 구(舊) 산출물이면 그 차트만 조용히 뺀다.
-//   라벨의 숫자는 전부 산출물에서 온다 — 이 파일에 하드코딩된 성적은 하나도 없다(규칙 3).
+//   산출물이 없거나 모르는 스키마면 없는 셈 치고 안내만 띄운다. bars가 없는 구
+//   스키마면 시뮬레이터 대신 재베이크 안내를 띄운다. 수치를 지어내지 않는다(규칙 3).
 
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
+import { useEffect } from 'react'
 import {
+  Line,
+  LineChart,
   Area,
   AreaChart,
   Bar,
@@ -33,15 +26,19 @@ import {
   CartesianGrid,
   Cell,
   LabelList,
-  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts'
-import { EquityChart, type EquityRow } from './EquityChart'
 import { InfoTip } from '../../components/InfoTip'
 import { timeAxisTicks, timeTickFormatter, toTs, tsLong } from '../../components/chartUtils'
+import {
+  runGeneralLadder,
+  US_LADDER_COST,
+  type GeneralLadderParams,
+} from './leverageLadder'
+import type { DailyBar } from '../../lib/history'
 import {
   US_LEV_BANNER,
   US_LEV_DATA_URL,
@@ -61,8 +58,6 @@ interface Wall {
 interface PresetRow {
   id: string
   label: string
-  rule: string
-  note: string
   totalPct: number
   cagrPct: number
   mddPct: number
@@ -74,14 +69,8 @@ interface PresetRow {
   avgWeights: number[]
   gatePass: boolean
   gateWhy: string[]
-  curve: [string, number, number][]
-  /** 스키마 2부터 — 곡선과 같은 인덱스의 일별 비중(% · QQQ/QLD/TQQQ). 없으면 차트를 안 그린다. */
-  weights?: [number, number, number][]
-  /** 스키마 2부터 — 매매 사건 목록(참고). */
-  events?: { date: string; kind: string; ddPct: number }[]
 }
 
-/** 스키마 3부터 — 단순 적립 상세. 반원금 근사(대표 지정 방식)와 정확 IRR을 나란히 든다. */
 interface DcaHoldRow {
   symbol: string
   label: string
@@ -108,8 +97,19 @@ interface Artifact {
   walls: Wall[]
   presets: PresetRow[]
   dca: { dailyAmount: number; rows: { label: string; contributed: number; finalValue: number; multiple: number }[] }
-  /** 스키마 3부터 — 없으면 관련 표시를 뺀다(지어내지 않는다). */
   dcaHold?: DcaHoldRow[]
+  /** 스키마 4부터 — 브라우저 재계산용 일봉(시가·종가). */
+  bars?: { dates: string[]; series: Record<string, { o: number[]; c: number[] }> }
+  /** 스키마 4부터 — 4변수 격자 전수 탐색 칼마 1위(과최적화 경고와 함께 표시). */
+  best?: {
+    params: GeneralLadderParams
+    cagrPct: number
+    mddPct: number
+    calmar: number
+    alphaCagrPct: number
+    trades: number
+    gridSize: number
+  }
   limits: string[]
 }
 
@@ -124,20 +124,21 @@ function won(n: number): string {
   return eok > 0 ? `${eok}억 ${man.toLocaleString()}만원` : `${man.toLocaleString()}만원`
 }
 
-/** '❌ [탈락] QQQ 배수 사다리 — 밴드 10% (…)' → '밴드 10% (…)' — 카드 배지가 판정을 따로 들므로 짧게. */
-function shortLabel(label: string): string {
-  const m = label.match(/—\s*(.+)$/)
-  return m ? m[1] : label
+function fmtMoney(v: number): string {
+  if (Math.abs(v) >= 1e8) return `${(v / 1e8).toFixed(1)}억`
+  if (Math.abs(v) >= 1e4) return `${Math.round(v / 1e4).toLocaleString()}만`
+  return Math.round(v).toLocaleString()
 }
 
-/** 차트 축용 초단축 이름 — 괄호 상세를 떼어낸다('밴드 10% (…)' → '밴드 10%'). 겹침 방지. */
-function tinyLabel(label: string): string {
-  return shortLabel(label).split(' (')[0]
-}
-
-/** 배너·note는 md 강조(**)를 담고 있다 — 화면에서는 별표를 걷어낸다(문구는 그대로). */
+/** 배너·note의 md 강조(**)를 화면에서 걷어낸다(문구는 그대로). */
 function stripMd(s: string): string {
   return s.replaceAll('**', '')
+}
+
+/** '❌ [탈락] … — 진입 10% · 익절 +15% (…)' → '진입 10% · 익절 +15%' */
+function tinyLabel(label: string): string {
+  const m = label.match(/—\s*(.+)$/)
+  return (m ? m[1] : label).split(' (')[0]
 }
 
 /** 배수 램프 — index.css에서 라이트·다크 각각 검증된 값. ×1 밝음 → ×3 어두움. */
@@ -153,7 +154,6 @@ function useArtifact(): { data: Artifact | null; state: 'loading' | 'ready' | 'a
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((j: Artifact) => {
         if (!alive) return
-        // 모르는 스키마면 없는 셈 친다 — 잘못 읽어 거짓 수치를 띄우느니 안 띄운다.
         if (!US_LEV_SUPPORTED_SCHEMAS.includes(j?.schema)) {
           setState('absent')
           return
@@ -171,42 +171,72 @@ function useArtifact(): { data: Artifact | null; state: 'loading' | 'ready' | 'a
   return { data, state }
 }
 
-/** 평균 비중 스택바 — 카드 안에서 "평시 무엇을 들고 있었나"를 한 줄로 보여준다. */
-function MixBar({ weights }: { weights: number[] }) {
+// ── 성과 계산 (베이크 perfOf와 같은 정의) ────────────────────────────────────
+function perfOf(equity: readonly { date: string; equity: number }[]): {
+  totalPct: number
+  cagrPct: number
+  mddPct: number
+} {
+  const start = equity[0].equity
+  const end = equity[equity.length - 1].equity
+  let peak = start
+  let mdd = 0
+  for (const e of equity) {
+    if (e.equity > peak) peak = e.equity
+    else mdd = Math.min(mdd, (e.equity / peak - 1) * 100)
+  }
+  const years = Math.max(
+    1 / 365,
+    (Date.parse(equity[equity.length - 1].date) - Date.parse(equity[0].date)) / (365.25 * 86400e3),
+  )
+  const ratio = Math.max(end / start, 1e-9)
+  return { totalPct: (ratio - 1) * 100, cagrPct: (Math.pow(ratio, 1 / years) - 1) * 100, mddPct: mdd }
+}
+
+// ── 파라미터 컨트롤 ──────────────────────────────────────────────────────────
+function Ctrl({
+  label,
+  value,
+  min,
+  max,
+  step,
+  unit,
+  onChange,
+}: {
+  label: string
+  value: number
+  min: number
+  max: number
+  step: number
+  unit: string
+  onChange: (v: number) => void
+}) {
   return (
-    <div>
-      <div className="uslev-mixbar" role="img" aria-label={`평균 비중 ${MIX_LABELS.map((l, i) => `${l} ${Math.round(weights[i] ?? 0)}%`).join(', ')}`}>
-        {weights.slice(0, 3).map((w, i) => (
-          <span key={i} style={{ width: `${Math.max(0, w)}%`, background: MIX_COLORS[i] }} />
-        ))}
-      </div>
-      <div className="uslev-mixbar-caption">
-        {MIX_LABELS.map((l, i) => (
-          <span key={l}>
-            <i className="uslev-swatch" style={{ background: MIX_COLORS[i] }} />
-            {l} {Math.round(weights[i] ?? 0)}%
-          </span>
-        ))}
-      </div>
-    </div>
+    <label className="uslev-ctrl">
+      <span className="uslev-ctrl-label">{label}</span>
+      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} />
+      <span className="uslev-ctrl-value">
+        {value}
+        {unit}
+      </span>
+    </label>
   )
 }
 
-/** 비중 변화 누적영역 차트 — "언제 얼마나 옮겼는지"를 시간축으로 보여준다(스키마 2+). */
-function WeightsChart({ preset }: { preset: PresetRow }) {
-  const w = preset.weights
-  if (!w || w.length !== preset.curve.length || w.length < 2) return null
-  const dates = preset.curve.map(([d]) => d)
-  // x축은 **숫자 시간축**(ts) — 문자열 카테고리 축에 ms 눈금을 꽂으면 눈금이 하나도 안 그려진다(검수 실측).
-  const rows = preset.curve.map(([date], i) => ({
-    date,
-    ts: toTs(date),
-    q: w[i][0],
-    l: w[i][1],
-    t: w[i][2],
-  }))
-  const ticks = timeAxisTicks(dates)
-  const fmt = timeTickFormatter(dates)
+/** 비중 변화 누적영역 — 현재 조합의 일별 비중(엔진 출력 그대로, 다운샘플만). */
+function WeightsChartG({ dates, weights }: { dates: string[]; weights: [number, number, number][] }) {
+  const rows = useMemo(() => {
+    const out: { date: string; ts: number; q: number; l: number; t: number }[] = []
+    for (let i = 0; i < dates.length; i++) {
+      if (i % 5 !== 0 && i !== dates.length - 1) continue
+      out.push({ date: dates[i], ts: toTs(dates[i]), q: weights[i][0], l: weights[i][1], t: weights[i][2] })
+    }
+    return out
+  }, [dates, weights])
+  if (rows.length < 2) return null
+  const ds = rows.map((r) => r.date)
+  const ticks = timeAxisTicks(ds)
+  const fmt = timeTickFormatter(ds)
 
   const WTooltip = ({ active, payload }: any) => {
     if (!active || !payload?.length) return null
@@ -230,24 +260,14 @@ function WeightsChart({ preset }: { preset: PresetRow }) {
     <div className="bt-chart-block">
       <div className="uslev-chart-title">
         비중 변화 (QQQ ↔ QLD ↔ TQQQ)
-        <InfoTip text="그날 종가 평가 기준 보유 비중입니다. 계단처럼 꺾이는 곳이 매매(진입·익절·신고가 정리)이고, 완만한 변화는 가격 변동에 따른 자연 이동입니다. 어두운 파랑일수록 레버리지 배수가 높습니다." />
+        <InfoTip text="그날 종가 평가 기준 보유 비중입니다. 계단처럼 꺾이는 곳이 매매이고, 완만한 변화는 가격 변동에 따른 자연 이동입니다. 어두운 파랑일수록 레버리지 배수가 높습니다." />
       </div>
-      <ResponsiveContainer width="100%" height={150}>
-        <AreaChart data={rows} margin={{ top: 4, right: 12, left: 4, bottom: 0 }} syncId="bt-sync">
+      <ResponsiveContainer width="100%" height={140}>
+        <AreaChart data={rows} margin={{ top: 4, right: 12, left: 4, bottom: 0 }}>
           <CartesianGrid stroke="var(--border)" vertical={false} />
-          <XAxis
-            dataKey="ts"
-            type="number"
-            scale="time"
-            domain={['dataMin', 'dataMax']}
-            ticks={ticks}
-            tickFormatter={fmt}
-            tickLine={false}
-            axisLine={{ stroke: 'var(--border)' }}
-          />
+          <XAxis dataKey="ts" type="number" scale="time" domain={['dataMin', 'dataMax']} ticks={ticks} tickFormatter={fmt} tickLine={false} axisLine={{ stroke: 'var(--border)' }} />
           <YAxis domain={[0, 100]} ticks={[0, 50, 100]} tickFormatter={(v) => `${v}%`} tickLine={false} axisLine={false} width={40} />
           <Tooltip content={<WTooltip />} cursor={{ stroke: 'var(--text-faint)', strokeDasharray: '3 3' }} />
-          {/* 스택 순서: 아래부터 ×1 → ×3. 경계선은 패널색 1.5px — 띠 사이를 흰 여백이 가른다. */}
           <Area type="stepAfter" dataKey="q" stackId="w" name={MIX_LABELS[0]} fill="var(--uslev-x1)" fillOpacity={1} stroke="var(--panel)" strokeWidth={1.5} isAnimationActive={false} />
           <Area type="stepAfter" dataKey="l" stackId="w" name={MIX_LABELS[1]} fill="var(--uslev-x2)" fillOpacity={1} stroke="var(--panel)" strokeWidth={1.5} isAnimationActive={false} />
           <Area type="stepAfter" dataKey="t" stackId="w" name={MIX_LABELS[2]} fill="var(--uslev-x3)" fillOpacity={1} stroke="var(--panel)" strokeWidth={1.5} isAnimationActive={false} />
@@ -265,9 +285,188 @@ function WeightsChart({ preset }: { preset: PresetRow }) {
   )
 }
 
+// ── 4변수 시뮬레이터 ─────────────────────────────────────────────────────────
+function GeneralSimulator({ data }: { data: Artifact }) {
+  // 기본값 = 대표 지시 원 전략 (−10%마다 2회 · +10%마다 1/10)
+  const [dropStep, setDropStep] = useState(10)
+  const [sellN, setSellN] = useState(2)
+  const [riseStep, setRiseStep] = useState(10)
+  const [buyM, setBuyM] = useState(10)
+
+  const bars = data.bars
+  // 일봉 복원 + 단순보유 3종 곡선(한 번만). 엔진은 시가·종가만 쓴다.
+  const built = useMemo(() => {
+    if (!bars) return null
+    const mk = (sym: string): DailyBar[] =>
+      bars.dates.map((date, i) => {
+        const o = bars.series[sym].o[i]
+        const c = bars.series[sym].c[i]
+        return { date, t: 0, o, h: Math.max(o, c), l: Math.min(o, c), c, v: 0 }
+      })
+    const q = mk('QQQ')
+    const map = new Map<string, DailyBar[]>([
+      ['QQQ', q],
+      ['QLD', mk('QLD')],
+      ['TQQQ', mk('TQQQ')],
+    ])
+    const side = (US_LADDER_COST.feePct + US_LADDER_COST.slippagePct) / 100
+    const hold = (sym: string) => {
+      const bs = map.get(sym)!
+      const shares = (US_LADDER_COST.initialCapital * (1 - side)) / bs[0].o
+      return bs.map((b) => ({ date: b.date, equity: shares * b.c }))
+    }
+    const holds = { QQQ: hold('QQQ'), QLD: hold('QLD'), TQQQ: hold('TQQQ') }
+    return { map, base: q, holds, holdPerf: { QQQ: perfOf(holds.QQQ), QLD: perfOf(holds.QLD), TQQQ: perfOf(holds.TQQQ) } }
+  }, [bars])
+
+  const run = useMemo(() => {
+    if (!built) return null
+    return runGeneralLadder(
+      built.base,
+      built.map,
+      { dropStepPct: dropStep, sellTranches: sellN, riseStepPct: riseStep, buyTranches: buyM },
+      US_LADDER_COST,
+    )
+  }, [built, dropStep, sellN, riseStep, buyM])
+
+  if (!bars || !built || !run)
+    return (
+      <p className="uslev-caption">
+        이 산출물(스키마 {data.schema})에는 일봉 데이터가 없어 시뮬레이터를 켤 수 없습니다. GHA에서{' '}
+        <code>MODE=lev:bake</code>를 다시 돌리면 생깁니다. 수치를 추정해 채우지 않습니다.
+      </p>
+    )
+
+  const perf = perfOf(run.equity)
+  const calmar = Math.abs(perf.mddPct) > 0.01 ? perf.cagrPct / Math.abs(perf.mddPct) : null
+  const alphaPct = perf.cagrPct - built.holdPerf.QQQ.cagrPct
+  const benchCalmar =
+    Math.abs(built.holdPerf.QQQ.mddPct) > 0.01 ? built.holdPerf.QQQ.cagrPct / Math.abs(built.holdPerf.QQQ.mddPct) : null
+  const pass = calmar != null && benchCalmar != null && calmar > benchCalmar
+
+  // 차트 행 — 5거래일당 1점 + 마지막 점
+  const rows: { date: string; ts: number; combo: number; qqq: number; qld: number; tqqq: number }[] = []
+  for (let i = 0; i < run.equity.length; i++) {
+    if (i % 5 !== 0 && i !== run.equity.length - 1) continue
+    rows.push({
+      date: run.equity[i].date,
+      ts: toTs(run.equity[i].date),
+      combo: Math.round(run.equity[i].equity),
+      qqq: Math.round(built.holds.QQQ[i].equity),
+      qld: Math.round(built.holds.QLD[i].equity),
+      tqqq: Math.round(built.holds.TQQQ[i].equity),
+    })
+  }
+  const ds = rows.map((r) => r.date)
+  const ticks = timeAxisTicks(ds)
+  const fmt = timeTickFormatter(ds)
+
+  const applyBest = () => {
+    if (!data.best) return
+    setDropStep(data.best.params.dropStepPct)
+    setSellN(data.best.params.sellTranches)
+    setRiseStep(data.best.params.riseStepPct)
+    setBuyM(data.best.params.buyTranches)
+  }
+  const isBestApplied =
+    data.best != null &&
+    dropStep === data.best.params.dropStepPct &&
+    sellN === data.best.params.sellTranches &&
+    riseStep === data.best.params.riseStepPct &&
+    buyM === data.best.params.buyTranches
+
+  const STooltip = ({ active, payload }: any) => {
+    if (!active || !payload?.length) return null
+    const p = payload[0]?.payload as (typeof rows)[number]
+    return (
+      <div className="recharts-default-tooltip">
+        <div className="tooltip-label">{tsLong(p.ts)}</div>
+        <div style={{ fontSize: 13 }}>
+          <div>내 조합: <strong>{fmtMoney(p.combo)}</strong></div>
+          <div>QQQ: {fmtMoney(p.qqq)} · QLD: {fmtMoney(p.qld)} · TQQQ: {fmtMoney(p.tqqq)}</div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="uslev-sim">
+      {/* ── 컨트롤 4개 ─────────────────────────────────────────────────── */}
+      <div className="uslev-ctrls">
+        <Ctrl label="QQQ 분할매도 하락비중 (고점 대비 −X%마다 1회)" value={dropStep} min={2} max={30} step={1} unit="%" onChange={setDropStep} />
+        <Ctrl label="분할매도 횟수 (앞 절반 QLD → 뒤 절반 TQQQ)" value={sellN} min={1} max={6} step={1} unit="회" onChange={setSellN} />
+        <Ctrl label="QQQ 분할매수 상승비중 (직전 매매가 대비 +Y%마다 1회)" value={riseStep} min={2} max={30} step={1} unit="%" onChange={setRiseStep} />
+        <Ctrl label="분할매수 등분 (1회에 레버리지의 1/M)" value={buyM} min={1} max={20} step={1} unit="등분" onChange={setBuyM} />
+      </div>
+      <div className="uslev-sim-actions">
+        <button type="button" className="bt-btn-mini" onClick={() => { setDropStep(10); setSellN(2); setRiseStep(10); setBuyM(10) }}>
+          원 전략(10%·2회·10%·10등분)
+        </button>
+        {data.best && (
+          <button type="button" className={`bt-btn-mini${isBestApplied ? ' uslev-best-on' : ''}`} onClick={applyBest}>
+            칼마 1위 조합 적용 — 격자 {data.best.gridSize.toLocaleString()}개 중 칼마 {f2(data.best.calmar)}
+          </button>
+        )}
+      </div>
+      {isBestApplied && (
+        <p className="uslev-caption" style={{ color: 'var(--uslev-warn)' }}>
+          ⚠️ 격자 {data.best!.gridSize.toLocaleString()}조합 중 1등을 고르는 것 자체가 <strong>과최적화</strong>입니다 —
+          이 조합은 "이 구간에서 가장 운이 좋았던 값"이지 미래 기댓값이 아닙니다.
+        </p>
+      )}
+
+      {/* ── 결과 스탯 ─────────────────────────────────────────────────── */}
+      <div className="uslev-stats uslev-sim-stats">
+        <div className="uslev-stat"><span className="lbl">CAGR</span><span className="val">{f1(perf.cagrPct)}%</span></div>
+        <div className="uslev-stat"><span className="lbl">MDD</span><span className="val neg">{f1(perf.mddPct)}%</span></div>
+        <div className="uslev-stat"><span className="lbl">칼마</span><span className="val">{f2(calmar)}</span></div>
+        <div className="uslev-stat"><span className="lbl">알파(vs QQQ)</span><span className="val">{pp(alphaPct)}</span></div>
+        <div className="uslev-stat"><span className="lbl">매매</span><span className="val">{run.trades}회</span></div>
+        <div className="uslev-stat">
+          <span className="lbl">칼마 관문(벤치 {f2(benchCalmar)})</span>
+          <span className={`val ${pass ? '' : 'neg'}`}>{pass ? '✅ 통과' : '❌ 미달'}</span>
+        </div>
+      </div>
+
+      {/* ── 자산곡선 — 기본 3종 위에 내 조합 ───────────────────────────── */}
+      <div className="uslev-chart-title">
+        자산곡선 (초기 1만 달러 · 로그축)
+        <InfoTip text="세로축은 로그 눈금입니다 — TQQQ와 QQQ의 규모 차이가 수십 배라 선형축에서는 비교가 안 됩니다. 로그축에서는 기울기가 수익률이고 같은 간격이 같은 배율입니다." />
+      </div>
+      <div className="bt-chart-block">
+        <ResponsiveContainer width="100%" height={260}>
+          <LineChart data={rows} margin={{ top: 8, right: 12, left: 4, bottom: 0 }}>
+            <CartesianGrid stroke="var(--border)" vertical={false} />
+            <XAxis dataKey="ts" type="number" scale="time" domain={['dataMin', 'dataMax']} ticks={ticks} tickFormatter={fmt} tickLine={false} axisLine={{ stroke: 'var(--border)' }} />
+            <YAxis scale="log" domain={['auto', 'auto']} tickFormatter={fmtMoney} tickLine={false} axisLine={false} width={56} />
+            <Tooltip content={<STooltip />} cursor={{ stroke: 'var(--text-faint)', strokeDasharray: '3 3' }} />
+            <Line type="monotone" dataKey="qqq" name="QQQ" stroke="var(--uslev-x1)" strokeWidth={1.3} dot={false} isAnimationActive={false} />
+            <Line type="monotone" dataKey="qld" name="QLD" stroke="var(--uslev-x2)" strokeWidth={1.3} dot={false} isAnimationActive={false} />
+            <Line type="monotone" dataKey="tqqq" name="TQQQ" stroke="var(--uslev-x3)" strokeWidth={1.3} dot={false} isAnimationActive={false} />
+            <Line type="monotone" dataKey="combo" name="내 조합" stroke="var(--uslev-combo)" strokeWidth={2.4} dot={false} isAnimationActive={false} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+      <p className="uslev-caption">
+        <i className="uslev-swatch" style={{ background: 'var(--uslev-combo)' }} /> <strong>내 조합</strong> ·{' '}
+        {MIX_LABELS.map((l, i) => (
+          <span key={l}>
+            <i className="uslev-swatch" style={{ background: MIX_COLORS[i] }} />
+            {l}{' '}
+          </span>
+        ))}
+        — 단순보유 CAGR: QQQ {f1(built.holdPerf.QQQ.cagrPct)}% · QLD {f1(built.holdPerf.QLD.cagrPct)}% · TQQQ{' '}
+        {f1(built.holdPerf.TQQQ.cagrPct)}% (MDD {f1(built.holdPerf.QQQ.mddPct)} / {f1(built.holdPerf.QLD.mddPct)} /{' '}
+        {f1(built.holdPerf.TQQQ.mddPct)}%)
+      </p>
+
+      <WeightsChartG dates={run.equity.map((e) => e.date)} weights={run.weightsDaily} />
+    </div>
+  )
+}
+
 export function UsLeveragePanel() {
   const { data, state } = useArtifact()
-  const [openId, setOpenId] = useState<string | null>(null)
 
   if (state === 'loading') return <div className="panel">불러오는 중…</div>
 
@@ -275,7 +474,7 @@ export function UsLeveragePanel() {
     return (
       <div className="panel">
         <div className="panel-head">
-          <h2>📊 QQQ 배수 전략 프리셋</h2>
+          <h2>📊 QQQ 배수 전략 시뮬레이터</h2>
           <span className="badge sample">산출물 없음</span>
         </div>
         <p>
@@ -286,49 +485,12 @@ export function UsLeveragePanel() {
       </div>
     )
 
-  const open = data.presets.find((p) => p.id === openId) ?? null
-  // 곡선 아래 낙폭 밴드는 **다운샘플 곡선**에서 계산한다(표시용) — 카드의 MDD는 원곡선 기준이며 그 사실을 문구로 밝힌다.
-  let ddPeak = -Infinity
-  const rows: EquityRow[] = open
-    ? open.curve.map(([date, equity, benchmark]) => {
-        ddPeak = Math.max(ddPeak, equity)
-        return { date, equity, benchmark, drawdownPct: (equity / ddPeak - 1) * 100 }
-      })
-    : []
-
-  // ── 칼마 관문 차트 데이터 — 이 화면의 결론을 첫 그림으로 ──────────────────
-  // 사다리 9종 + 단순보유 3종 + 적립식 3종(대표 지시)을 **한 축**에 세운다.
-  // 칼마 null(MDD≈0이라 정의 불가)을 0으로 그리면 없는 수치를 지어내는 것이다(규칙 3) — 차트에서 뺀다.
-  // 적립식 칼마는 반원금 근사 CAGR ÷ |MDD| — 근사임을 이름에 박는다.
-  const calmarRows = [
-    ...data.presets
-      .filter((p) => p.calmar != null)
-      .map((p) => ({ name: tinyLabel(p.label), calmar: p.calmar as number, cls: 'ladder' as const })),
-    ...data.walls
-      .filter((w) => w.calmar != null)
-      .map((w) => ({ name: `${w.symbol} 단순보유`, calmar: w.calmar as number, cls: 'hold' as const })),
-    ...(data.dcaHold ?? [])
-      .filter((h) => h.calmar != null)
-      .map((h) => ({ name: `${h.symbol} 적립 [근사]`, calmar: h.calmar as number, cls: 'dca' as const })),
-  ].sort((a, b) => b.calmar - a.calmar)
-  const calmarSkipped = data.presets.filter((p) => p.calmar == null).length
-  const benchCalmar = data.bench.calmar
-  const CLS_COLOR = { ladder: 'var(--uslev-x2)', hold: 'var(--kosdaq)', dca: 'var(--text-faint)' } as const
-  // 캡션 결론은 하드코딩하지 않는다 — 재베이크에서 통과가 나오면 화면이 자기모순이 된다(검수 지적).
-  const passCount = data.presets.filter((p) => p.gatePass).length
-  const allAlphaPositive = data.presets.length > 0 && data.presets.every((p) => (p.alphaCagrPct ?? 0) > 0)
-
-  // ── 단순보유 벽 — CAGR(오른쪽)·MDD(왼쪽) 다이버징 ─────────────────────────
-  const wallRows = data.walls.map((w) => ({ name: w.label.replace(' 단순보유', ''), cagr: w.cagrPct, mdd: w.mddPct }))
-
-  // ── 적립식 — 배수 막대. 단순 적립=파랑, 사다리=회색 ──────────────────────
   const dcaRows = data.dca.rows.map((r) => ({
     name: r.label.replace(/ 적립$/, ''),
     multiple: r.multiple,
     ladder: r.label.includes('사다리'),
     finalValue: r.finalValue,
   }))
-  // 결론 문구도 데이터에서 파생한다 — 하드코딩하면 재베이크에서 그림과 말이 어긋난다(검수 지적).
   const bestSimple = Math.max(0, ...dcaRows.filter((r) => !r.ladder).map((r) => r.multiple))
   const bestLadder = Math.max(0, ...dcaRows.filter((r) => r.ladder).map((r) => r.multiple))
   const dcaVerdict =
@@ -342,10 +504,10 @@ export function UsLeveragePanel() {
     <div className="panel">
       <div className="panel-head">
         <h2>
-          📊 QQQ 배수 전략 프리셋
-          <InfoTip text="평시 QQQ를 들고 있다가 고점 대비 낙폭이 깊어지면 비중을 QLD·TQQQ로 옮기고 회복하면 되돌리는 전략입니다. 43차 실측에서 관문을 통과하지 못했으며 기록·비교용으로만 등재했습니다. 모의 시뮬레이션이며 실주문과 연결되지 않습니다." />
+          📊 QQQ 배수 전략 시뮬레이터
+          <InfoTip text="평시 QQQ를 들고 있다가 낙폭이 깊어지면 나눠서 레버리지로 갈아타고, 오르면 나눠서 되돌아오는 전략을 변수 4개로 조정하며 실측 데이터 위에서 바로 재계산합니다. 모의 시뮬레이션이며 실주문과 연결되지 않습니다." />
         </h2>
-        <span className="badge sample">사전계산 · 실주문 없음</span>
+        <span className="badge sample">실측 일봉 · 브라우저 재계산 · 실주문 없음</span>
       </div>
 
       <div className="panel-sub" style={{ color: 'var(--uslev-warn)', fontWeight: 600 }}>{stripMd(US_LEV_BANNER)}</div>
@@ -354,158 +516,15 @@ export function UsLeveragePanel() {
       <div className="panel-sub uslev-meta">
         구간 <strong>{data.window.from} ~ {data.window.to}</strong> ({data.window.bars.toLocaleString()}봉) · 시세{' '}
         <strong>{data.source}</strong> · {data.basisNote} · 비용 편도 {data.cost.feePct}% + 슬리피지{' '}
-        {data.cost.slippagePct}% · 기준일 {data.asOf.slice(0, 10)} · 곡선 {data.downsample}
+        {data.cost.slippagePct}% · 기준일 {data.asOf.slice(0, 10)}
       </div>
 
-      {/* ── ① 결론 먼저 — 칼마 관문 ─────────────────────────────────────── */}
-      <div className="uslev-chart-title">
-        칼마 관문 — 선(벤치 {data.bench.symbol} {f2(benchCalmar)})을 넘어야 통과
-        <InfoTip text="칼마 = 연수익률(CAGR) ÷ 최대낙폭(MDD). 같은 수익이라도 낙폭이 깊으면 낮아집니다. 규칙 5에 따라 절대 수익률이 아니라 벤치마크 대비 위험조정 성과로 판정합니다." />
-      </div>
-      <div className="bt-chart-block">
-        <ResponsiveContainer width="100%" height={40 + calmarRows.length * 36}>
-          <BarChart data={calmarRows} layout="vertical" margin={{ top: 4, right: 44, left: 4, bottom: 4 }}>
-            <CartesianGrid stroke="var(--border)" horizontal={false} />
-            {/* 상한은 벤치·프리셋 최대값 모두 덮는다 — 막대가 잘리면 그게 곧 거짓 그림이다 */}
-            <XAxis type="number" domain={[0, Math.max(0.7, (benchCalmar ?? 0) * 1.25, ...calmarRows.map((r) => r.calmar * 1.15))]} tickLine={false} axisLine={{ stroke: 'var(--border)' }} tickFormatter={(v) => v.toFixed(1)} />
-            <YAxis type="category" dataKey="name" width={132} tickLine={false} axisLine={false} tick={{ fontSize: 11 }} />
-            <Tooltip
-              cursor={{ fill: 'var(--panel-2)' }}
-              formatter={(v: number) => [v.toFixed(2), '칼마']}
-              labelFormatter={(l) => String(l)}
-            />
-            <Bar dataKey="calmar" barSize={14} radius={[0, 4, 4, 0]} isAnimationActive={false}>
-              {calmarRows.map((r, i) => (
-                <Cell key={`${i}-${r.name}`} fill={CLS_COLOR[r.cls]} />
-              ))}
-              <LabelList dataKey="calmar" position="right" formatter={(v: number) => v.toFixed(2)} className="uslev-bar-label" />
-            </Bar>
-            {/* 라벨은 제목·캡션이 이미 든다 — 여기 붙이면 상단에서 잘린다(모바일 실측) */}
-            {benchCalmar != null && <ReferenceLine x={benchCalmar} stroke="var(--danger)" strokeWidth={1.5} />}
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-      <p className="uslev-caption">
-        <i className="uslev-swatch" style={{ background: CLS_COLOR.ladder }} /> 사다리 전략 ·{' '}
-        <i className="uslev-swatch" style={{ background: CLS_COLOR.hold }} /> 단순보유 ·{' '}
-        <i className="uslev-swatch" style={{ background: CLS_COLOR.dca }} /> 매일 적립 [근사]
-        <br />
-        {passCount === 0 ? (
-          <>
-            사다리 {data.presets.length}종 전부 벤치 왼쪽 = <strong>관문 미통과</strong>.
-            {allAlphaPositive && ' 알파(초과수익)는 양수지만 낙폭을 대가로 산 것이라 위험조정으로는 집니다.'}
-          </>
-        ) : (
-          <>
-            사다리 {data.presets.length}종 중 <strong>{passCount}개가 칼마 관문 통과</strong> — 카드의 판정 배지를
-            확인하세요.
-          </>
-        )}
-        {' '}적립식 칼마는 <strong>반원금 근사</strong>(유효원금 = 총 납입액 ÷ 2 · 대표 지정 방식) CAGR 기준이라
-        거치식과 눈금이 정확히 같지는 않습니다 — 정확값(IRR)은 아래 적립식 표에 있습니다.
-        {calmarSkipped > 0 && ` (칼마 정의 불가 ${calmarSkipped}종은 차트에서 제외 — 표에는 —로 표시)`}
-      </p>
+      <GeneralSimulator data={data} />
 
-      {/* ── ② 프리셋 카드 ───────────────────────────────────────────────── */}
-      <div className="uslev-cards">
-        {data.presets.map((p) => (
-          <button
-            key={p.id}
-            type="button"
-            className={`uslev-card${openId === p.id ? ' open' : ''}`}
-            onClick={() => setOpenId(openId === p.id ? null : p.id)}
-          >
-            <div className="uslev-card-head">
-              <strong>{shortLabel(p.label)}</strong>
-              <span className={`uslev-verdict ${p.gatePass ? 'pass' : 'fail'}`}>
-                {p.gatePass ? '✅ 통과' : `❌ 탈락 · ${p.gateWhy.join('·')}`}
-              </span>
-            </div>
-            <div className="uslev-stats">
-              <div className="uslev-stat">
-                <span className="lbl">CAGR</span>
-                <span className="val">{f1(p.cagrPct)}%</span>
-              </div>
-              <div className="uslev-stat">
-                <span className="lbl">MDD</span>
-                <span className="val neg">{f1(p.mddPct)}%</span>
-              </div>
-              <div className="uslev-stat">
-                <span className="lbl">칼마</span>
-                <span className="val">{f2(p.calmar)}</span>
-              </div>
-              <div className="uslev-stat">
-                <span className="lbl">알파</span>
-                <span className="val">{pp(p.alphaCagrPct)}</span>
-              </div>
-            </div>
-            <MixBar weights={p.avgWeights} />
-            <div className="uslev-card-foot">
-              매매 {p.trades}회 · 전반 {pp(p.alphaFirstHalfPct)} · 후반 {pp(p.alphaSecondHalfPct)} ·{' '}
-              {openId === p.id ? '닫기 ▲' : '곡선·비중 보기 ▼'}
-            </div>
-          </button>
-        ))}
-      </div>
-
-      {/* ── ③ 상세 — 자산곡선 + 비중 변화 ───────────────────────────────── */}
-      {open && (
-        <div className="uslev-detail">
-          <h3 style={{ marginTop: 0 }}>{shortLabel(open.label)}</h3>
-          <p style={{ fontSize: '0.9em' }}>
-            <strong>규칙 —</strong> {open.rule}
-          </p>
-          {rows.length > 1 && (
-            <>
-              <div className="uslev-chart-title">자산곡선 (초기 1만 달러 기준 · 점선 = {data.bench.symbol} 단순보유)</div>
-              <EquityChart equity={rows} benchmarkLabel={`${data.bench.symbol} 단순보유`} />
-              <WeightsChart preset={open} />
-              <p style={{ fontSize: '0.8em', opacity: 0.7 }}>
-                곡선·비중은 {data.downsample}로 줄인 것이라 중간 고저점이 실제보다 완만해 보일 수 있습니다. 카드의
-                MDD는 <strong>다운샘플 전 원곡선</strong> 기준입니다. 전·후반 경계는 {data.splitDate}.
-              </p>
-            </>
-          )}
-          <p className="uslev-note">{stripMd(open.note)}</p>
-        </div>
-      )}
-
-      {/* ── ④ 단순보유 벽 ───────────────────────────────────────────────── */}
-      <div className="uslev-chart-title">
-        같은 구간 단순보유 — 옮겨 적은 값이 아니라 다시 잰 값
-        <InfoTip text="같은 구간·같은 비용으로 QQQ·QLD·TQQQ를 사서 들고만 있었을 때의 성적입니다. 오른쪽 막대가 연수익률(CAGR), 왼쪽 빨간 막대가 최대낙폭(MDD)입니다. 전략이 이 벽을 위험조정 기준으로 넘지 못하면 굴릴 이유가 없습니다." />
-      </div>
-      <div className="bt-chart-block">
-        <ResponsiveContainer width="100%" height={40 + wallRows.length * 44}>
-          <BarChart data={wallRows} layout="vertical" margin={{ top: 4, right: 44, left: 4, bottom: 4 }}>
-            <CartesianGrid stroke="var(--border)" horizontal={false} />
-            <XAxis type="number" tickLine={false} axisLine={{ stroke: 'var(--border)' }} tickFormatter={(v) => `${v}%`} />
-            <YAxis type="category" dataKey="name" width={52} tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
-            <Tooltip
-              cursor={{ fill: 'var(--panel-2)' }}
-              formatter={(v: number, name: string) => [`${v.toFixed(1)}%`, name === 'cagr' ? '연수익률 CAGR' : '최대낙폭 MDD']}
-            />
-            <ReferenceLine x={0} stroke="var(--text-faint)" />
-            <Bar dataKey="cagr" barSize={13} radius={[0, 4, 4, 0]} fill="var(--uslev-x2)" isAnimationActive={false}>
-              {/* 부호는 데이터에서 — '+' 하드코딩은 음수 재베이크에서 '+-12.3%'가 된다(검수 지적) */}
-              <LabelList dataKey="cagr" position="right" formatter={(v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`} className="uslev-bar-label" />
-            </Bar>
-            <Bar dataKey="mdd" barSize={13} radius={[4, 0, 0, 4]} fill="var(--danger)" isAnimationActive={false}>
-              <LabelList dataKey="mdd" position="left" formatter={(v: number) => `${v.toFixed(1)}%`} className="uslev-bar-label" />
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-      <p className="uslev-caption">
-        <i className="uslev-swatch" style={{ background: 'var(--uslev-x2)' }} /> 연수익률(CAGR) ·{' '}
-        <i className="uslev-swatch" style={{ background: 'var(--danger)' }} /> 최대낙폭(MDD) · 칼마 —{' '}
-        {data.walls.map((w) => `${w.symbol} ${f2(w.calmar)}`).join(' · ')}
-      </p>
-
-      {/* ── ⑤ 적립식 ────────────────────────────────────────────────────── */}
+      {/* ── 적립식 ─────────────────────────────────────────────────────── */}
       <div className="uslev-chart-title">
         매일 {data.dca.dailyAmount.toLocaleString()}원 적립했다면 — 원금 대비 배수
-        <InfoTip text="구간 내내 매일 같은 금액을 사기만 했을 때의 최종 평가액 ÷ 누적 원금입니다. 파란 막대가 단순 적립, 회색 막대가 사다리 전략 적립입니다. 판정 문구는 아래 캡션에 데이터로부터 계산해 표시합니다." />
+        <InfoTip text="구간 내내 매일 같은 금액을 사기만 했을 때의 최종 평가액 ÷ 누적 원금입니다. 파란 막대가 단순 적립, 회색 막대가 사다리 전략 적립(고정 격자 9종)입니다." />
       </div>
       <div className="bt-chart-block">
         <ResponsiveContainer width="100%" height={40 + dcaRows.length * 34}>
@@ -518,7 +537,6 @@ export function UsLeveragePanel() {
               formatter={(v: number, _n, item) => [`${v.toFixed(2)}배 · 최종 ${won((item?.payload as { finalValue: number }).finalValue)}`, '원금 대비']}
             />
             <Bar dataKey="multiple" barSize={16} radius={[0, 4, 4, 0]} isAnimationActive={false}>
-              {/* 스키마 1 산출물은 사다리 라벨 4개가 동일하다 — key는 인덱스로 */}
               {dcaRows.map((r, i) => (
                 <Cell key={`${i}-${r.name}`} fill={r.ladder ? 'var(--text-faint)' : 'var(--uslev-x2)'} />
               ))}
@@ -533,7 +551,7 @@ export function UsLeveragePanel() {
         {won(data.dca.rows[0]?.contributed ?? 0)} 동일{dcaVerdict && <> · {dcaVerdict}</>}
       </p>
 
-      {/* ── 단순 적립 상세 — 반원금 근사(대표 지정) + 정확 IRR (스키마 3+) ── */}
+      {/* ── 단순 적립 상세 — 반원금 근사(대표 지정) + 정확 IRR ─────────── */}
       {data.dcaHold && data.dcaHold.length > 0 && (
         <>
           <div className="uslev-chart-title">
@@ -572,20 +590,19 @@ export function UsLeveragePanel() {
           </div>
           <p className="uslev-caption">
             반원금 근사(유효원금 = 납입액 ÷ 2)는 대표 지정 방식입니다. 정확한 연수익률은 IRR 열입니다 — 두 값의
-            차이가 근사 오차입니다. MDD는 일별 평가액 곡선의 고점 대비 최대낙폭이며, 적립 초기에 원금이 작아
-            거치식 MDD보다 체감이 다를 수 있습니다.
+            차이가 근사 오차입니다. MDD는 일별 평가액 곡선의 고점 대비 최대낙폭입니다.
           </p>
         </>
       )}
 
-      {/* ── 원자료 표 (접근성 표 뷰 · 예전 표 그대로) ────────────────────── */}
+      {/* ── 원자료 표 (접근성 표 뷰) ────────────────────────────────────── */}
       <details className="uslev-tables">
-        <summary>표로 보기 (원자료 전체)</summary>
+        <summary>표로 보기 (고정 격자 9종·단순보유 원자료)</summary>
         <div style={{ overflowX: 'auto' }}>
           <table className="tbl">
             <thead>
               <tr>
-                <th>프리셋</th>
+                <th>조합</th>
                 <th>총수익</th>
                 <th>CAGR</th>
                 <th>MDD</th>
@@ -594,14 +611,13 @@ export function UsLeveragePanel() {
                 <th>전반</th>
                 <th>후반</th>
                 <th>매매</th>
-                <th>평균비중 QQQ/QLD/TQQQ</th>
                 <th>판정</th>
               </tr>
             </thead>
             <tbody>
               {data.presets.map((p) => (
                 <tr key={p.id}>
-                  <td style={{ maxWidth: 320 }}>{p.label}</td>
+                  <td>{tinyLabel(p.label)}</td>
                   <td>{f1(p.totalPct)}%</td>
                   <td>{f1(p.cagrPct)}%</td>
                   <td style={{ color: 'var(--danger)' }}>{f1(p.mddPct)}%</td>
@@ -610,7 +626,6 @@ export function UsLeveragePanel() {
                   <td>{pp(p.alphaFirstHalfPct)}</td>
                   <td>{pp(p.alphaSecondHalfPct)}</td>
                   <td>{p.trades}</td>
-                  <td>{p.avgWeights.map((w) => Math.round(w)).join(' / ')}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>{p.gatePass ? '✅ 통과' : `❌ ${p.gateWhy.join('·')}`}</td>
                 </tr>
               ))}
@@ -641,30 +656,6 @@ export function UsLeveragePanel() {
             </tbody>
           </table>
         </div>
-        <div style={{ overflowX: 'auto' }}>
-          <table className="tbl">
-            <thead>
-              <tr>
-                <th>순위</th>
-                <th>전략</th>
-                <th>누적 원금</th>
-                <th>최종 평가액</th>
-                <th>배수</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.dca.rows.map((r, i) => (
-                <tr key={r.label}>
-                  <td>{i + 1}</td>
-                  <td>{r.label}</td>
-                  <td>{won(r.contributed)}</td>
-                  <td><strong>{won(r.finalValue)}</strong></td>
-                  <td>{r.multiple.toFixed(2)}배</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
       </details>
 
       {/* ── 한계 ───────────────────────────────────────────────────────── */}
@@ -674,8 +665,12 @@ export function UsLeveragePanel() {
           <li key={l}>{l}</li>
         ))}
         <li>
-          화면에 <strong>"직접 다시 돌리기"가 없는 것은 의도</strong>입니다 — 시세가 tiingo라 브라우저에서
-          부르면 API 키가 노출됩니다. GHA에서 구운 산출물만 읽습니다.
+          시뮬레이터의 시세는 <strong>산출물에 실린 일봉</strong>(기준일 {data.asOf.slice(0, 10)})입니다 — 실시간이
+          아니며, tiingo <strong>키는 브라우저에 없습니다</strong>(데이터만 GHA가 굽습니다).
+        </li>
+        <li>
+          변수를 움직여 좋은 값을 찾는 행위 자체가 <strong>과최적화</strong>입니다 — 여기서 찾은 조합은 "이 구간에서
+          운이 좋았던 값"이지 미래 기댓값이 아닙니다(규칙 4). 매매를 붙이지 마십시오.
         </li>
       </ul>
       <p style={{ fontSize: '0.8em', opacity: 0.75 }}>
