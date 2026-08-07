@@ -82,6 +82,7 @@ import {
   type TiingoAdjAudit,
 } from './lib/tiingo'
 import type { DailyBar } from '../src/lib/history'
+import { runValueRebalancing, DEFAULT_VR_PARAMS, type VRParams } from '../src/features/backtest/algoEngine'
 
 // ============================================================================
 // 0. 상수 · 전제
@@ -1181,6 +1182,109 @@ async function dcaMode(token: string): Promise<void> {
 }
 
 // ============================================================================
+// 5.8 MODE=vr — SOXL VR vs TQQQ VR (2026-08-07 대표 지시 · 45차)
+// ============================================================================
+//
+// 라오어 VR 근사(algoEngine.runValueRebalancing · 추가입금 없음)를 두 3배 ETF에
+// 같은 조건으로 건다. SOXL은 반도체 3배(SOX 기초)라 기초지수가 다르다 — 같은
+// "3배 VR"이어도 기초의 성질(변동성·낙폭 깊이)이 결과를 지배한다는 것을 보인다.
+
+async function vrMode(token: string): Promise<void> {
+  log('# MODE=vr — SOXL VR vs TQQQ VR (45차 · 대표 지시)')
+  log('')
+  const tqqq = await loadTicker('TQQQ', token)
+  await sleep(400)
+  const soxl = await loadTicker('SOXL', token)
+  await sleep(400)
+  const qld = await loadTicker(RIVAL, token)
+
+  // 공통 구간: 둘 다 실재하는 날짜만 (SOXL 2010-03-11 상장 — 며칠 차이)
+  const common = new Set(tqqq.bars.map((b) => b.date))
+  const soxlB = soxl.bars.filter((b) => common.has(b.date))
+  const soxlSet = new Set(soxlB.map((b) => b.date))
+  const tqqqB = tqqq.bars.filter((b) => soxlSet.has(b.date))
+  const qldB = qld.bars.filter((b) => soxlSet.has(b.date))
+  if (tqqqB.length !== soxlB.length) throw new Error(`교집합 정렬 실패 ${tqqqB.length} vs ${soxlB.length}`)
+  log(`구간 ${tqqqB[0].date} ~ ${tqqqB[tqqqB.length - 1].date} (${tqqqB.length}봉 · 두 ETF 교집합) · tiingo 총수익`)
+  log('')
+
+  const settings = {
+    initialCapital: 100_000,
+    positionPct: 100,
+    commissionPct: 0.01,
+    sellTaxPct: 0,
+    slippagePct: 0.05,
+    stopLossPct: null,
+    takeProfitPct: null,
+  }
+  const mid = new Date((Date.parse(tqqqB[0].date) + Date.parse(tqqqB[tqqqB.length - 1].date)) / 2)
+    .toISOString()
+    .slice(0, 10)
+
+  const stat = (eq: { date: string; equity: number }[], from = '', to = '9999-12-31') => {
+    const c: Curve = eq.filter((e) => e.date >= from && e.date <= to).map((e) => ({ date: e.date, equity: e.equity }))
+    return perfOf(c)
+  }
+  const holdCurve = (bars: DailyBar[]): Curve => buyHoldCurve(bars)
+
+  const hT = holdCurve(tqqqB)
+  const hS = holdCurve(soxlB)
+  const hQ = holdCurve(qldB)
+  const row = (name: string, p: ReturnType<typeof perfOf>, extra = '') =>
+    log(
+      `| ${name} | ${(p.total / 100 + 1).toFixed(1)}배 | ${p.cagr.toFixed(1)}% | ${p.mdd.toFixed(1)}% | ` +
+        `${(calmarOf(p) ?? NaN).toFixed(2)} |${extra}`,
+    )
+
+  log('| 대상 | 총배수 | CAGR | MDD | 칼마 |')
+  log('|---|---|---|---|---|')
+  row('TQQQ 단순보유', perfOf(hT))
+  row('SOXL 단순보유', perfOf(hS))
+  row('QLD 단순보유(참고)', perfOf(hQ))
+  log('')
+
+  const variants: [string, VRParams][] = [
+    ['기본 (10d·1%·15%·75%)', DEFAULT_VR_PARAMS],
+    ['성장 0.5%', { ...DEFAULT_VR_PARAMS, growthPct: 0.5 }],
+    ['성장 1.5%', { ...DEFAULT_VR_PARAMS, growthPct: 1.5 }],
+    ['밴드 10%', { ...DEFAULT_VR_PARAMS, bandPct: 10 }],
+    ['밴드 20%', { ...DEFAULT_VR_PARAMS, bandPct: 20 }],
+    ['초기 90%', { ...DEFAULT_VR_PARAMS, initialStockPct: 90 }],
+  ]
+  log('| VR 변형 | TQQQ: 배수/CAGR/MDD/칼마 | SOXL: 배수/CAGR/MDD/칼마 |')
+  log('|---|---|---|')
+  for (const [name, P] of variants) {
+    const rT = runValueRebalancing(tqqqB, 1, P, settings)
+    const rS = runValueRebalancing(soxlB, 1, P, settings)
+    const pT = stat(rT.equity)
+    const pS = stat(rS.equity)
+    log(
+      `| ${name} | ${(pT.total / 100 + 1).toFixed(1)}배 / ${pT.cagr.toFixed(1)}% / ${pT.mdd.toFixed(1)}% / ${(calmarOf(pT) ?? NaN).toFixed(2)} ` +
+        `| ${(pS.total / 100 + 1).toFixed(1)}배 / ${pS.cagr.toFixed(1)}% / ${pS.mdd.toFixed(1)}% / ${(calmarOf(pS) ?? NaN).toFixed(2)} |`,
+    )
+  }
+  log('')
+  // 전·후반 일관성 (기본 변형)
+  const rT = runValueRebalancing(tqqqB, 1, DEFAULT_VR_PARAMS, settings)
+  const rS = runValueRebalancing(soxlB, 1, DEFAULT_VR_PARAMS, settings)
+  log(`전·후반 경계 ${mid} — CAGR(기본 변형):`)
+  log(
+    `  TQQQ VR 전반 ${stat(rT.equity, '', mid).cagr.toFixed(1)}% / 후반 ${stat(rT.equity, mid).cagr.toFixed(1)}% · ` +
+      `SOXL VR 전반 ${stat(rS.equity, '', mid).cagr.toFixed(1)}% / 후반 ${stat(rS.equity, mid).cagr.toFixed(1)}%`,
+  )
+  log(
+    `  리밸런스 횟수 — TQQQ ${rT.events.length}건 · SOXL ${rS.events.length}건 · ` +
+      `현금 최저 — TQQQ $${Math.round(Math.min(...rT.events.map((e) => e.cashAfter))).toLocaleString()} · ` +
+      `SOXL $${Math.round(Math.min(...rS.events.map((e) => e.cashAfter))).toLocaleString()}`,
+  )
+  log('')
+  log(
+    '읽는 법: VR 파라미터가 같아도 성패는 **기초지수의 성질**이 가른다. SOX(반도체)는 나스닥100보다 ' +
+      '변동성·낙폭이 크고 횡보 잠식이 깊다 — 같은 "3배 VR"이라는 이름에 속지 말 것(규칙 4).',
+  )
+}
+
+// ============================================================================
 // 6. MODE=selftest — 네트워크 없이 도는 자기검증
 // ============================================================================
 
@@ -1239,12 +1343,13 @@ async function main(): Promise<void> {
   log('호출 종목 4개 — 무료 티어 한도(500 unique/월 · 50 req/시간)와 무관하다.')
   log('')
 
+  if (mode === 'vr') await vrMode(key.value)
   if (mode === 'real' || mode === 'all') await real(key.value)
   if (mode === 'synth' || mode === 'all') await synth(key.value)
   if (mode === 'prop' || mode === 'all') await prop(key.value)
   if (mode === 'sweep' || mode === 'all') await sweepMode(key.value)
   if (mode === 'dca' || mode === 'all') await dcaMode(key.value)
-  if (!['real', 'synth', 'prop', 'sweep', 'dca', 'all'].includes(mode)) throw new Error(`알 수 없는 MODE: ${mode}`)
+  if (!['real', 'synth', 'prop', 'sweep', 'dca', 'vr', 'all'].includes(mode)) throw new Error(`알 수 없는 MODE: ${mode}`)
 
   log('')
   log('---')
