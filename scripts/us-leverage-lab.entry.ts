@@ -1225,7 +1225,7 @@ async function vrMode(token: string): Promise<void> {
     const c: Curve = eq.filter((e) => e.date >= from && e.date <= to).map((e) => ({ date: e.date, equity: e.equity }))
     return perfOf(c)
   }
-  const holdCurve = (bars: DailyBar[]): Curve => buyHoldCurve(bars)
+  const holdCurve = (bars: DailyBar[]): Curve => buyHoldCurve(bars, US_LADDER_COST)
 
   const hT = holdCurve(tqqqB)
   const hS = holdCurve(soxlB)
