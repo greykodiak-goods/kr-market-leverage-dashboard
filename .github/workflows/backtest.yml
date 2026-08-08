@@ -89,6 +89,8 @@ jobs:
             # us-lab이 MODE=src:free로 도는 조용한 오작동이 난다(uspit에서 겪은 그 함정).
             ussrc:*) SCRIPT="us-source-probe.mjs"; RUN_MODE="${RAW#ussrc:}";;
             us:*) SCRIPT="us-lab.mjs"; RUN_MODE="${RAW#us:}";;
+            # prices = 티커 목록 1개월 등락 스냅샷 (야후 · 키 불필요 · 컨테이너는 야후 차단이라 러너에서)
+            prices) SCRIPT="price-snapshot.mjs"; RUN_MODE="prices";;
           esac
           [ -n "${{ inputs.grid }}" ] && export PIT_GRID="${{ inputs.grid }}"
           # us-lab 축 2개. 비우면 러너 기본값(80 · yahoo)이라 41차 수치와의 연속성이 유지된다.
