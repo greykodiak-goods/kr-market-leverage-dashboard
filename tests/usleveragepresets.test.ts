@@ -14,7 +14,7 @@ import {
   US_LEV_SCHEMA,
   US_LEV_SUPPORTED_SCHEMAS,
 } from '../src/features/backtest/usLeveragePresets'
-import { downsample, DOWNSAMPLE } from '../scripts/us-leverage-precompute.entry'
+import { downsample, DOWNSAMPLE, dcaHalfBase, dcaIrrPct, curveMddPct } from '../scripts/us-leverage-precompute.entry'
 
 // ============================================================================
 section('1. 라벨·note가 탈락 사실을 먼저 말하는가')
@@ -74,6 +74,44 @@ section('3. 다운샘플 — 마지막 점을 잃지 않는가')
   const s = mk(97)
   const out = downsample(s, s)
   eq('마지막 점의 값이 원곡선 마지막 값과 같다', out[out.length - 1][1], Math.round(s[96].equity))
+}
+
+// ============================================================================
+section('4. 적립식 반원금 근사·IRR·MDD — 정답 아는 표본으로 자기검증')
+// ============================================================================
+
+{
+  // 반원금 근사: 납입 1,000 · 평가 1,500 · 2년 → 유효원금 500, 이익 500 → 수익률 +100%
+  const h = dcaHalfBase(1000, 1500, 2)
+  check('반원금 수익률 = (1500−1000)÷500 = +100%', Math.abs(h.totalPct - 100) < 1e-9, `${h.totalPct}%`)
+  // CAGR = (1500/500)^(1/2) − 1 = √3 − 1 ≈ 73.205%
+  check('반원금 CAGR = √3−1 ≈ 73.2%', Math.abs(h.cagrPct - (Math.sqrt(3) - 1) * 100) < 1e-6, `${h.cagrPct.toFixed(3)}%`)
+  const loss = dcaHalfBase(1000, 800, 2)
+  check('손실이면 반원금 수익률 음수', loss.totalPct < 0, `${loss.totalPct}%`)
+  let threw = false
+  try {
+    dcaHalfBase(0, 100, 1)
+  } catch {
+    threw = true
+  }
+  check('납입 0이면 던진다(0나눗셈 은닉 금지)', threw)
+}
+
+{
+  // IRR 자기검증 — 손으로 푼 표본과 대조한다.
+  // t0에 100, 1년 뒤 100 납입, 그 시점 평가 210 → 첫 납입만 1년 굴러 정확히 10%.
+  const irr10 = dcaIrrPct(['2020-01-01', '2020-12-31'], 100, 210)
+  check(`2회 납입 표본 IRR ≈ 10% (${irr10.toFixed(2)}%)`, Math.abs(irr10 - 10) < 0.2)
+  // 이익이 없으면 IRR 0
+  const irr0 = dcaIrrPct(['2020-01-01', '2020-12-31'], 100, 200)
+  check(`무이익 표본 IRR ≈ 0% (${irr0.toFixed(2)}%)`, Math.abs(irr0) < 0.1)
+}
+
+{
+  // MDD: 100 → 150 → 75 → 120이면 고점 150 대비 75 = −50%
+  const mdd = curveMddPct([100, 150, 75, 120])
+  check('MDD 표본 −50%', Math.abs(mdd - -50) < 1e-9, `${mdd}%`)
+  check('단조 상승이면 MDD 0', curveMddPct([1, 2, 3]) === 0)
 }
 
 finish()

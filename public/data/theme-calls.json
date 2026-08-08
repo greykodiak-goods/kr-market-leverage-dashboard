@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updatedAt": "2026-08-06T10:14:28.556Z",
+  "updatedAt": "2026-08-06T23:15:04.937Z",
   "note": "테마 콜 대장 — 손으로 쓰는 원본. 채점 결과는 theme-calls-scored.json(기계가 굽는 곳)에 따로 있다. 여기에 점수를 적지 않는다. 소급 등재(retroactive)는 집계에서 제외된다 — 이미 오른 뒤에 적은 것은 실력의 증거가 아니기 때문이다.",
   "calls": [
     {
@@ -29,6 +29,28 @@
       "retroactive": true,
       "retroactiveNote": "주가가 이미 크게 오른 뒤에 적은 콜이다. 전진 검증이 아니므로 집계에서 제외한다 — 이 트랙의 첫 항목이자 \"이런 건 점수로 안 친다\"는 기준선 역할.",
       "seal": "fnv1a:b9c456d4"
+    },
+    {
+      "id": "mdb-ai-default-stack-2026-08",
+      "recordedAt": "2026-08-06T23:15:04.923Z",
+      "noticedAt": "2026-08-06",
+      "thesis": "AI 코딩 어시스턴트(바이브코딩)의 기본 권장 스택 퍼널에 서비스 본체가 직접 걸리는 유일한 순수 상장사. 어시스턴트가 학습데이터·문서·무료티어 때문에 같은 스택을 반복 권장하는 루프가 유통망 역할을 하고, 그 1순위 목록(Vercel·Supabase·Stripe 등)이 전부 비상장이라 상장시장에서는 MDB(Atlas)로 수요가 수렴한다는 논지. 앱 수가 늘수록 DB 계정 수가 는다.",
+      "source": "2026-08-06 세션 대화 — AI 기본 권장 스택 분석에서 대표 채택. 대표 본인도 바이브코딩 중 Supabase·Cloudflare를 자연스럽게 쓰게 된 경험이 근거",
+      "targets": [
+        {
+          "symbol": "MDB",
+          "market": "US",
+          "role": "primary"
+        }
+      ],
+      "benchmark": "QQQ",
+      "conviction": 3,
+      "acted": false,
+      "actedAt": null,
+      "notActedReason": "등재 시점 실행 여부 대표 언급 없음",
+      "retroactive": false,
+      "retroactiveNote": null,
+      "seal": "fnv1a:950b965f"
     }
   ]
 }

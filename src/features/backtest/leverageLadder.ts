@@ -690,3 +690,181 @@ export function runProportionalLadderDca(
     trades,
   }
 }
+
+// ═══ 일반화 사다리 (2026-08-07 대표 지시) ══════════════════════════════════
+//
+// "값 조정하면서 볼 수 있게 일반화" — 변수 4개:
+//   ① dropStepPct  분할매도 하락비중: 고점 대비 −(step×i)%마다 i번째 매도
+//   ② sellTranches 분할매도 횟수 N: i번째 매도는 **현재 QQQ의 1/(N−i+1)**을 판다
+//                  (등간격 분할이면 회당 같은 양이고, 마지막 회는 남은 전부 —
+//                   N=2일 때 "절반 → 남은 전부"인 원 전략과 정확히 일치)
+//                  목적지: i ≤ ⌊N/2⌋ 는 QLD, 나머지는 TQQQ (N=2: QLD→TQQQ ✓)
+//   ③ riseStepPct  분할매수 상승비중: 직전 매매가 대비 +step%마다 1회 되돌림
+//   ④ buyTranches  분할매수 횟수 M: 1회에 **현재 레버리지의 1/M** — M은 등분
+//                  굵기다(원 전략의 "10%씩" = M=10). 신고가 전까지 횟수 제한 없음.
+//
+// (10, 2, 10, 10) = 기존 정본(SPEC_PROPORTIONAL)과 동작이 같아야 하며
+// tests/leverageladder.test.ts가 두 엔진의 자산곡선 일치로 이를 강제한다.
+// 규칙 1: 당일 종가 신호 → 익일 시가 체결 · 마지막 봉 신규 행동 금지 · 절단 불변.
+
+export interface GeneralLadderParams {
+  /** 분할매도 하락 간격(%, 양수) */
+  dropStepPct: number
+  /** 분할매도 횟수 (1~10) */
+  sellTranches: number
+  /** 분할매수 상승 간격(%, 양수) */
+  riseStepPct: number
+  /** 분할매수 등분 수 (1~20) — 1회에 레버리지의 1/M */
+  buyTranches: number
+}
+
+export interface GeneralLadderEvent {
+  date: string
+  kind: string
+  ddPct: number
+  weights: [number, number, number]
+}
+
+export interface GeneralLadderRun {
+  equity: Curve
+  events: GeneralLadderEvent[]
+  avgWeights: [number, number, number]
+  weightsDaily: [number, number, number][]
+  daysLevered: number
+  trades: number
+}
+
+export function runGeneralLadder(
+  base: readonly DailyBar[],
+  assets: ReadonlyMap<string, readonly DailyBar[]>,
+  p: GeneralLadderParams,
+  cost: LadderCost,
+): GeneralLadderRun {
+  for (const s of SYMS) {
+    const bars = assets.get(s)
+    if (!bars) throw new Error(`${s} 봉이 없다 — 없는 채로 돌면 그 칸이 조용히 사라진다`)
+    if (bars.length !== base.length)
+      throw new Error(`${s} 봉 수(${bars.length})가 기초지수(${base.length})와 다르다 — 날짜 축을 먼저 맞춰라`)
+  }
+  if (!(p.dropStepPct > 0) || !(p.riseStepPct > 0)) throw new Error('하락·상승 간격은 양수여야 한다')
+  if (!(Number.isInteger(p.sellTranches) && p.sellTranches >= 1 && p.sellTranches <= 10))
+    throw new Error(`분할매도 횟수는 1~10 정수 (${p.sellTranches})`)
+  if (!(Number.isInteger(p.buyTranches) && p.buyTranches >= 1 && p.buyTranches <= 20))
+    throw new Error(`분할매수 등분은 1~20 정수 (${p.buyTranches})`)
+
+  const side = (cost.feePct + cost.slippagePct) / 100
+  const px = (s: Sym, i: number, field: 'o' | 'c'): number => assets.get(s)![i][field]
+
+  const h: Holdings = { QQQ: 0, QLD: 0, TQQQ: 0 }
+  const equity: Curve = []
+  const events: GeneralLadderEvent[] = []
+  const weightsDaily: [number, number, number][] = []
+  const wSum: [number, number, number] = [0, 0, 0]
+  let daysLevered = 0
+  let trades = 0
+
+  const first = px('QQQ', 0, 'o')
+  if (!(first > 0)) throw new Error(`QQQ 첫 봉 시가가 유효하지 않다 (${first})`)
+  h.QQQ = (cost.initialCapital * (1 - side)) / first
+
+  let peak = base[0].c
+  let sold = 0 // 이번 하락 사이클에서 이미 나간 분할매도 횟수
+  let refPrice = base[0].c
+
+  type Action = { kind: 'sell'; idx: number } | { kind: 'buy' } | { kind: 'reset' }
+  let pending: Action[] = []
+
+  const swap = (from: Sym, to: Sym, frac: number, i: number): void => {
+    const qty = h[from] * frac
+    if (qty <= 0) return
+    const sellPx = px(from, i, 'o')
+    const buyPx = px(to, i, 'o')
+    if (!(sellPx > 0) || !(buyPx > 0))
+      throw new Error(`${base[i].date} 시가가 유효하지 않다 (${from} ${sellPx} → ${to} ${buyPx})`)
+    const proceeds = qty * sellPx * (1 - side)
+    h[from] -= qty
+    h[to] += (proceeds * (1 - side)) / buyPx
+    trades++
+  }
+
+  for (let i = 0; i < base.length; i++) {
+    // ── 1) 체결 — 전 봉 종가에서 만든 행동을 오늘 시가에 집행 ────────────────
+    if (i > 0 && pending.length > 0) {
+      for (const act of pending) {
+        if (act.kind === 'sell') {
+          // i번째 매도: 현재 QQQ의 1/(N−i+1) — 마지막 회는 전부. 목적지는 앞 절반 QLD, 뒤 절반 TQQQ.
+          const frac = 1 / (p.sellTranches - act.idx + 1)
+          const to: Sym = act.idx <= Math.floor(p.sellTranches / 2) ? 'QLD' : 'TQQQ'
+          swap('QQQ', to, frac, i)
+        } else if (act.kind === 'buy') {
+          swap('QLD', 'QQQ', 1 / p.buyTranches, i)
+          swap('TQQQ', 'QQQ', 1 / p.buyTranches, i)
+        } else {
+          swap('QLD', 'QQQ', 1, i)
+          swap('TQQQ', 'QQQ', 1, i)
+        }
+        const v = SYMS.map((s) => h[s] * px(s, i, 'o'))
+        const tot = v[0] + v[1] + v[2]
+        events.push({
+          date: base[i].date,
+          kind:
+            act.kind === 'sell'
+              ? `분할매도 ${act.idx}/${p.sellTranches}`
+              : act.kind === 'buy'
+                ? '분할매수'
+                : '신고가 정리',
+          ddPct: (base[i - 1].c / peak - 1) * 100,
+          weights: tot > 0 ? [(v[0] / tot) * 100, (v[1] / tot) * 100, (v[2] / tot) * 100] : [0, 0, 0],
+        })
+      }
+      refPrice = base[i - 1].c
+      pending = []
+    }
+
+    // ── 2) 평가 ─────────────────────────────────────────────────────────────
+    const vals = SYMS.map((s) => h[s] * px(s, i, 'c'))
+    const total = vals[0] + vals[1] + vals[2]
+    equity.push({ date: base[i].date, equity: total })
+    weightsDaily.push(
+      total > 0 ? [(vals[0] / total) * 100, (vals[1] / total) * 100, (vals[2] / total) * 100] : [0, 0, 0],
+    )
+    if (total > 0) SYMS.forEach((_, k) => (wSum[k] += (vals[k] / total) * 100))
+    if (vals[1] + vals[2] > total * 1e-9) daysLevered++
+
+    // ── 3) 신호 — 오늘 종가까지만 보고 내일 행동을 정한다 ────────────────────
+    const c = base[i].c
+    const newPeak = c > peak
+    if (newPeak) peak = c
+    const dd = (c / peak - 1) * 100
+    const levered = h.QLD > 0 || h.TQQQ > 0
+
+    if (i === base.length - 1) {
+      pending = [] // 마지막 봉 — 체결할 다음 봉이 없다(규칙 1-6)
+      continue
+    }
+
+    const next: Action[] = []
+    if (newPeak) {
+      if (levered) next.push({ kind: 'reset' })
+      sold = 0
+    } else {
+      // 갭으로 여러 단계를 관통하면 해당 회차를 한 번에 태운다(다음 시가에 순서대로 체결)
+      while (sold < p.sellTranches && dd <= -p.dropStepPct * (sold + 1)) {
+        sold++
+        next.push({ kind: 'sell', idx: sold })
+      }
+      if (next.length === 0 && levered && c >= refPrice * (1 + p.riseStepPct / 100)) next.push({ kind: 'buy' })
+    }
+    pending = next
+  }
+
+  const n = Math.max(1, equity.length)
+  return {
+    equity,
+    events,
+    avgWeights: [wSum[0] / n, wSum[1] / n, wSum[2] / n],
+    weightsDaily,
+    daysLevered,
+    trades,
+  }
+}
