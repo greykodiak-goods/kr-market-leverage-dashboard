@@ -1628,7 +1628,10 @@ async function mixMode(token: string): Promise<void> {
 // 환율: 야후 KRW=X 일봉(러너에서 수급 — 규칙 4 게이트: 부족하면 비정상 종료).
 
 async function fetchUsdKrw(): Promise<Map<string, number>> {
-  const url = 'https://query1.finance.yahoo.com/v8/finance/chart/KRW=X?range=max&interval=1d'
+  // range=max가 FX 심볼에서 269봉만 반환하는 것을 실측(run 31302490427) — 명시적 기간으로 요청한다.
+  const p1 = Math.floor(Date.UTC(2005, 0, 1) / 1000)
+  const p2 = Math.floor(Date.now() / 1000)
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/KRW=X?period1=${p1}&period2=${p2}&interval=1d`
   const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } })
   if (!res.ok) throw new Error(`환율 조회 실패 HTTP ${res.status}`)
   const j = (await res.json()) as {
