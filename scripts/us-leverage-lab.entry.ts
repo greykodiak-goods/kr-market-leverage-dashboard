@@ -1667,6 +1667,7 @@ function simulateKrwTax(
   wA: number,
   initialKrw: number,
   taxOn: boolean,
+  optimize = false,
 ): KrwTaxResult {
   const L = 170
   const VRP = { periodDays: 20, growthPct: 2, bandPct: 20, initialStockPct: 50 }
@@ -1838,6 +1839,54 @@ function simulateKrwTax(
       }
     }
 
+    // ⑤ 절세 오버레이 — 연말 마지막 거래일 종가에 실행 (거래소 달력은 사전 공지 정보라
+    //    "마지막 거래일" 판정은 미래 가격 참조가 아니다. 규칙 1 위반 아님)
+    if (taxOn && optimize && (i + 1 >= n || qqqB[i + 1].date.slice(0, 4) !== qqqB[i].date.slice(0, 4)) && i > start) {
+      // (a) 손실 수확: 평가손실 포지션을 팔고 즉시 재매수 — 실현손실로 이익 상계 (한국은 워시세일 규정 없음)
+      if (aUnits > 0 && aVal(i) * fx[i] < aBasisKrw) {
+        const proceeds = sellA(i, 1, 'c')
+        buyA(i, proceeds, 'c')
+      }
+      if (bQty > 0 && bQty * px('SOXL', i, 'c') * fx[i] < bBasisKrw) {
+        const cashBefore = bCashUsd
+        sellSoxl(i, bQty)
+        const proceeds = bCashUsd - cashBefore
+        const q = Math.floor(proceeds / (px('SOXL', i, 'c') * (1 + SIDE)))
+        if (q >= 1) {
+          const spend = q * px('SOXL', i, 'c') * (1 + SIDE)
+          bCashUsd -= spend
+          bQty += q
+          bBasisKrw += spend * fx[i]
+        }
+      }
+      // (b) 공제 소진 스텝업: 실현이익이 250만 미달이면 평가이익을 그만큼 실현하고 재매수 (취득가 상향)
+      let needGain = DEDUCT_KRW - realizedYear
+      if (needGain > 0 && aUnits > 0) {
+        const gA = aVal(i) * fx[i] - aBasisKrw
+        if (gA > 0) {
+          const frac = Math.min(1, needGain / gA)
+          const proceeds = sellA(i, frac, 'c')
+          buyA(i, proceeds, 'c')
+          needGain = DEDUCT_KRW - realizedYear
+        }
+      }
+      if (needGain > 0 && bQty > 0) {
+        const gB = bQty * px('SOXL', i, 'c') * fx[i] - bBasisKrw
+        if (gB > 0) {
+          const cashBefore = bCashUsd
+          sellSoxl(i, Math.min(bQty, Math.ceil((needGain / gB) * bQty)))
+          const proceeds = bCashUsd - cashBefore
+          const q = Math.floor(proceeds / (px('SOXL', i, 'c') * (1 + SIDE)))
+          if (q >= 1) {
+            const spend = q * px('SOXL', i, 'c') * (1 + SIDE)
+            bCashUsd -= spend
+            bQty += q
+            bBasisKrw += spend * fx[i]
+          }
+        }
+      }
+    }
+
     const usd = aVal(i) + bVal(i)
     curveUsd.push({ date: qqqB[i].date, equity: usd })
     curveKrw.push({ date: qqqB[i].date, equity: usd * fx[i] })
@@ -1897,19 +1946,69 @@ async function krwTaxMode(token: string): Promise<void> {
   log(`납부 합계 ${Math.round(taxSum / 10_000).toLocaleString()}만원`)
   log('')
 
-  // ② 규모·전략 비교 — 세후 CAGR
+  // ② 규모·전략 비교 — 세후 CAGR + 절세 오버레이(연말 손실수확+공제 소진 스텝업) + 보유 벤치
   log('## ② 규모·전략별 세후 성적 (원화 기준)')
-  log('| 시나리오 | 최종배수 | CAGR | MDD | 칼마 |')
-  log('|---|---|---|---|---|')
-  const scen: [string, number, number][] = [
-    ['혼합 50:50 · 200만', 0.5, 2_000_000],
-    ['혼합 50:50 · 1억', 0.5, 100_000_000],
-    ['스위칭 단독 · 1,000만', 1, 10_000_000],
-    ['SOXL VR 단독 · 1,000만', 0, 10_000_000],
-  ]
-  for (const [name, w, cap] of scen) {
-    perfRow(name, simulateKrwTax(qqqB, tqqqB, soxlB, fxMap, w, cap, true).curveKrw)
+  log('| 시나리오 | 최종배수 | CAGR | MDD | 칼마 | 납부합계(만) |')
+  log('|---|---|---|---|---|---|')
+  const row2 = (name: string, r: KrwTaxResult): void => {
+    const p = perfOf(r.curveKrw)
+    const taxSum = r.taxes.reduce((s, t) => s + Math.max(0, t.taxKrw), 0)
+    log(
+      `| ${name} | ${(p.total / 100 + 1).toFixed(1)}배 | ${f1(p.cagr)}% | ${f1(p.mdd)}% | ` +
+        `${f2(calmarOf(p))} | ${Math.round(taxSum / 10_000).toLocaleString()} |`,
+    )
   }
+  const scen: [string, number, number, boolean][] = [
+    ['혼합 50:50 · 200만', 0.5, 2_000_000, false],
+    ['혼합 50:50 · 1,000만', 0.5, 10_000_000, false],
+    ['혼합 50:50 · 1,000만 · 절세오버레이', 0.5, 10_000_000, true],
+    ['혼합 50:50 · 1억', 0.5, 100_000_000, false],
+    ['혼합 50:50 · 1억 · 절세오버레이', 0.5, 100_000_000, true],
+    ['스위칭 단독 · 1,000만', 1, 10_000_000, false],
+    ['스위칭 단독 · 1,000만 · 절세오버레이', 1, 10_000_000, true],
+    ['SOXL VR 단독 · 1,000만', 0, 10_000_000, false],
+  ]
+  for (const [name, w, cap, opt] of scen) {
+    row2(name, simulateKrwTax(qqqB, tqqqB, soxlB, fxMap, w, cap, true, opt))
+  }
+
+  // 보유 벤치 — 매매가 없으니 과세이연을 통째로 받는다: 청산 시 1회만 과세 (공제 1회 적용)
+  const fxArr: number[] = (() => {
+    const sorted = [...fxMap.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    const arr: number[] = new Array(qqqB.length)
+    let k = 0
+    let last = NaN
+    for (let i = 0; i < qqqB.length; i++) {
+      while (k < sorted.length && sorted[k][0] <= qqqB[i].date) {
+        last = sorted[k][1]
+        k++
+      }
+      arr[i] = last
+    }
+    return arr
+  })()
+  const holdEndTax = (name: string, bars: readonly DailyBar[], initialKrw: number): void => {
+    const start = 170 // 전략과 같은 시작점 (비교 가능성)
+    const side = 0.0006
+    const usd0 = (initialKrw * (1 - 0.005)) / fxArr[start]
+    const units = (usd0 * (1 - side)) / bars[start].c
+    const curve: Curve = []
+    for (let i = start; i < bars.length; i++) curve.push({ date: bars[i].date, equity: units * bars[i].c * fxArr[i] })
+    const basisKrw = usd0 * fxArr[start]
+    const finalKrw = curve[curve.length - 1].equity
+    const tax = Math.max(0, finalKrw * (1 - side) - basisKrw - 2_500_000) * 0.22
+    const afterTax = finalKrw - tax
+    const p = perfOf(curve)
+    const cagr = (Math.pow(afterTax / curve[0].equity, 1 / p.years) - 1) * 100
+    const calmar = Math.abs(p.mdd) > 0.01 ? cagr / Math.abs(p.mdd) : null
+    log(
+      `| ${name} 보유 · 1,000만 (청산 1회 과세) | ${(afterTax / curve[0].equity).toFixed(1)}배 | ${f1(cagr)}% | ` +
+        `${f1(p.mdd)}% | ${f2(calmar)} | ${Math.round(tax / 10_000).toLocaleString()} |`,
+    )
+  }
+  holdEndTax('QQQ', qqqB, 10_000_000)
+  holdEndTax('TQQQ', tqqqB, 10_000_000)
+  holdEndTax('SOXL', soxlB, 10_000_000)
   log('')
   log(
     '읽는 법: 원화 무세와 달러 무세의 차이 = 환율 효과, 원화 과세와 원화 무세의 차이 = 세금의 ' +
