@@ -1613,6 +1613,309 @@ async function mixMode(token: string): Promise<void> {
 }
 
 // ============================================================================
+// 5.11 MODE=krwtax — 원화 환산 + 해외주식 양도세 연단위 과세 실측 (49차)
+// ============================================================================
+//
+// 대표 지시(2026-08-08): "환율 변수랑 미국 직투 세금까지, 년단위 과세 납부금에 따른 분석."
+// 혼합(스위칭 L170 + SOXL VR 정점)을 **원화 기준**으로 다시 굴린다:
+//  · 매도할 때마다 원화 실현손익 기록(취득가·매도가 모두 그 시점 환율로 환산 — 환차익도 과세 대상)
+//  · 매년 첫 거래일에 전년 실현이익에 과세: (실현이익 − 기본공제 250만) × 22%, 손실 이월 없음
+//  · 세금은 포트폴리오에서 실제로 빼서(현금 우선, 부족하면 매도) 복리 손실을 실측
+// [근사] 목록: 원가는 이동평균법(선입선출 대신 — 국세청 인정 방식 중 하나) / 납부 시점을
+// 이듬해 5월이 아니라 연초로 앞당김(보수적) / 환전 스프레드 진입 시 0.5% 1회 / 배당은 총수익
+// 가격에 내재(배당소득세 미반영 — 3배 ETF 배당 미미) / A 슬리브 소수점 주식 허용 /
+// 공제 250만·세율 22%를 전 기간 고정(현행 기준 소급).
+// 환율: 야후 KRW=X 일봉(러너에서 수급 — 규칙 4 게이트: 부족하면 비정상 종료).
+
+async function fetchUsdKrw(): Promise<Map<string, number>> {
+  const url = 'https://query1.finance.yahoo.com/v8/finance/chart/KRW=X?range=max&interval=1d'
+  const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } })
+  if (!res.ok) throw new Error(`환율 조회 실패 HTTP ${res.status}`)
+  const j = (await res.json()) as {
+    chart?: { result?: { timestamp?: number[]; indicators?: { quote?: { close?: (number | null)[] }[] } }[] }
+  }
+  const r = j.chart?.result?.[0]
+  const ts = r?.timestamp ?? []
+  const close = r?.indicators?.quote?.[0]?.close ?? []
+  const m = new Map<string, number>()
+  for (let i = 0; i < ts.length; i++) {
+    const c = close[i]
+    if (typeof c === 'number' && Number.isFinite(c) && c > 500 && c < 3000) {
+      m.set(new Date(ts[i] * 1000).toISOString().slice(0, 10), c)
+    }
+  }
+  if (m.size < 2000) throw new Error(`환율 데이터 부족: ${m.size}봉 — 조용히 진행하지 않는다`)
+  return m
+}
+
+interface KrwTaxResult {
+  curveKrw: Curve
+  curveUsd: Curve
+  taxes: { year: number; realizedKrw: number; taxKrw: number }[]
+  fxFrom: number
+  fxTo: number
+}
+
+function simulateKrwTax(
+  qqqB: readonly DailyBar[],
+  tqqqB: readonly DailyBar[],
+  soxlB: readonly DailyBar[],
+  fxByDate: Map<string, number>,
+  wA: number,
+  initialKrw: number,
+  taxOn: boolean,
+): KrwTaxResult {
+  const L = 170
+  const VRP = { periodDays: 20, growthPct: 2, bandPct: 20, initialStockPct: 50 }
+  const REBAL_EVERY = 21
+  const SIDE = 0.0006
+  const FX_SPREAD = 0.005
+  const DEDUCT_KRW = 2_500_000
+  const TAX_RATE = 0.22
+  const n = qqqB.length
+
+  // 환율 정렬 — 미국 거래일에 환율이 없으면 직전값 승계(전일 이하만 — 미래참조 금지)
+  const fx: number[] = new Array(n)
+  {
+    const sorted = [...fxByDate.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    let k = 0
+    let last = NaN
+    for (let i = 0; i < n; i++) {
+      while (k < sorted.length && sorted[k][0] <= qqqB[i].date) {
+        last = sorted[k][1]
+        k++
+      }
+      if (!Number.isFinite(last)) throw new Error(`시작일 ${qqqB[i].date} 이전 환율 없음`)
+      fx[i] = last
+    }
+  }
+
+  // SMA(QQQ 종가, 당일 포함)
+  const sma: (number | null)[] = new Array(n).fill(null)
+  {
+    let sum = 0
+    for (let i = 0; i < n; i++) {
+      sum += qqqB[i].c
+      if (i >= L) sum -= qqqB[i - L].c
+      if (i >= L - 1) sma[i] = sum / L
+    }
+  }
+
+  const start = L
+  const initialUsd = (initialKrw * (1 - FX_SPREAD)) / fx[start]
+
+  // A 슬리브(스위칭): 소수점 단위 허용. B 슬리브(VR): 정수 주식 + 현금.
+  let aAsset: 'TQQQ' | 'QQQ' = qqqB[start - 1].c > (sma[start - 1] as number) ? 'TQQQ' : 'QQQ'
+  const px = (sym: 'TQQQ' | 'QQQ' | 'SOXL', i: number, kind: 'o' | 'c'): number =>
+    sym === 'TQQQ' ? tqqqB[i][kind] : sym === 'QQQ' ? qqqB[i][kind] : soxlB[i][kind]
+
+  const aBudget = initialUsd * wA
+  let aUnits = aBudget > 0 ? aBudget / (px(aAsset, start, 'c') * (1 + SIDE)) : 0
+  let aBasisKrw = aBudget * fx[start]
+
+  const bBudget = initialUsd * (1 - wA)
+  let bQty = 0
+  let bCashUsd = bBudget
+  let bBasisKrw = 0
+  {
+    const spend0 = bBudget * (VRP.initialStockPct / 100)
+    const q = Math.floor(spend0 / (px('SOXL', start, 'c') * (1 + SIDE)))
+    if (q >= 1 && bBudget > 0) {
+      const spent = q * px('SOXL', start, 'c') * (1 + SIDE)
+      bQty = q
+      bCashUsd -= spent
+      bBasisKrw = spent * fx[start]
+    }
+  }
+  let V = bQty * px('SOXL', start, 'c')
+
+  let realizedYear = 0
+  const taxes: KrwTaxResult['taxes'] = []
+  const curveKrw: Curve = []
+  const curveUsd: Curve = []
+
+  const aVal = (i: number): number => aUnits * px(aAsset, i, 'c')
+  const bVal = (i: number): number => bQty * px('SOXL', i, 'c') + bCashUsd
+
+  // A 슬리브 일부/전부 매도 — 원화 실현손익 기록 후 USD 현금 반환
+  const sellA = (i: number, frac: number, kind: 'o' | 'c'): number => {
+    const f = Math.min(1, Math.max(0, frac))
+    if (f <= 0 || aUnits <= 0) return 0
+    const units = aUnits * f
+    const proceeds = units * px(aAsset, i, kind) * (1 - SIDE)
+    realizedYear += proceeds * fx[i] - aBasisKrw * f
+    aBasisKrw *= 1 - f
+    aUnits -= units
+    return proceeds
+  }
+  const buyA = (i: number, usd: number, kind: 'o' | 'c'): void => {
+    if (usd <= 0) return
+    aUnits += usd / (px(aAsset, i, kind) * (1 + SIDE))
+    aBasisKrw += usd * fx[i]
+  }
+  const sellSoxl = (i: number, qty: number): number => {
+    const q = Math.min(qty, bQty)
+    if (q < 1) return 0
+    const proceeds = q * px('SOXL', i, 'c') * (1 - SIDE)
+    realizedYear += proceeds * fx[i] - bBasisKrw * (q / bQty)
+    bBasisKrw *= 1 - q / bQty
+    bQty -= q
+    bCashUsd += proceeds
+    return proceeds
+  }
+
+  for (let i = start; i < n; i++) {
+    // ① 연초 과세 — 전년 실현손익 정산 (첫 해 제외)
+    if (taxOn && i > start && qqqB[i].date.slice(0, 4) !== qqqB[i - 1].date.slice(0, 4)) {
+      const year = Number(qqqB[i - 1].date.slice(0, 4))
+      const taxable = Math.max(0, realizedYear - DEDUCT_KRW)
+      const taxKrw = taxable * TAX_RATE
+      taxes.push({ year, realizedKrw: realizedYear, taxKrw })
+      realizedYear = 0
+      if (taxKrw > 0) {
+        let needUsd = taxKrw / fx[i]
+        const fromCash = Math.min(bCashUsd, needUsd)
+        bCashUsd -= fromCash
+        needUsd -= fromCash
+        if (needUsd > 0 && aVal(i) > 0) {
+          const frac = Math.min(1, needUsd / (aVal(i) * (1 - SIDE)))
+          const proceeds = sellA(i, frac, 'c')
+          needUsd -= Math.min(needUsd, proceeds)
+        }
+        if (needUsd > 0) sellSoxl(i, Math.ceil(needUsd / (px('SOXL', i, 'c') * (1 - SIDE))))
+      }
+    }
+
+    // ② 시가: 스위칭 (신호 = 전일 종가 vs 전일 SMA)
+    if (i > start && wA > 0) {
+      const want: 'TQQQ' | 'QQQ' = qqqB[i - 1].c > (sma[i - 1] as number) ? 'TQQQ' : 'QQQ'
+      if (want !== aAsset) {
+        const proceeds = sellA(i, 1, 'o')
+        aAsset = want
+        buyA(i, proceeds, 'o')
+      }
+    }
+
+    // ③ 종가: VR 점검 (20거래일마다)
+    if (wA < 1 && i > start && (i - start) % VRP.periodDays === 0) {
+      V *= 1 + VRP.growthPct / 100
+      const stockVal = bQty * px('SOXL', i, 'c')
+      if (stockVal > V * (1 + VRP.bandPct / 100)) {
+        sellSoxl(i, Math.floor((stockVal - V) / px('SOXL', i, 'c')))
+      } else if (stockVal < V * (1 - VRP.bandPct / 100)) {
+        const budget = Math.min(bCashUsd, V - stockVal)
+        const q = Math.floor(budget / (px('SOXL', i, 'c') * (1 + SIDE)))
+        if (q >= 1) {
+          const spend = q * px('SOXL', i, 'c') * (1 + SIDE)
+          bCashUsd -= spend
+          bQty += q
+          bBasisKrw += spend * fx[i]
+        }
+      }
+    }
+
+    // ④ 종가: 월 재배분 (21거래일마다 · 목표 비중에서 1%p 이상 벗어날 때만)
+    if (wA > 0 && wA < 1 && i > start && (i - start) % REBAL_EVERY === 0) {
+      const total = aVal(i) + bVal(i)
+      const diff = aVal(i) - total * wA
+      if (Math.abs(diff) > total * 0.01) {
+        if (diff > 0) {
+          bCashUsd += sellA(i, diff / aVal(i), 'c')
+        } else {
+          let need = -diff
+          const fromCash = Math.min(bCashUsd, need)
+          bCashUsd -= fromCash
+          let raised = fromCash
+          need -= fromCash
+          if (need > 0) raised += sellSoxl(i, Math.ceil(need / (px('SOXL', i, 'c') * (1 - SIDE))))
+          // sellSoxl은 bCash로 넣으므로 그만큼 다시 꺼낸다
+          if (raised > fromCash) bCashUsd -= raised - fromCash
+          buyA(i, raised, 'c')
+        }
+      }
+    }
+
+    const usd = aVal(i) + bVal(i)
+    curveUsd.push({ date: qqqB[i].date, equity: usd })
+    curveKrw.push({ date: qqqB[i].date, equity: usd * fx[i] })
+  }
+  // 마지막 해 실현분 기록(과세는 이듬해 몫이라 차감 없이 표기만)
+  if (taxOn) taxes.push({ year: Number(qqqB[n - 1].date.slice(0, 4)), realizedKrw: realizedYear, taxKrw: -1 })
+
+  return { curveKrw, curveUsd, taxes, fxFrom: fx[start], fxTo: fx[n - 1] }
+}
+
+async function krwTaxMode(token: string): Promise<void> {
+  log('# MODE=krwtax — 원화 환산 + 양도세 연단위 과세 실측 (49차 · 대표 지시)')
+  log('')
+  const qqq = await loadTicker('QQQ', token)
+  await sleep(400)
+  const tqqq = await loadTicker('TQQQ', token)
+  await sleep(400)
+  const soxl = await loadTicker('SOXL', token)
+  const fxMap = await fetchUsdKrw()
+
+  const dSet = new Set(qqq.bars.map((b) => b.date))
+  const dSet2 = new Set(tqqq.bars.filter((b) => dSet.has(b.date)).map((b) => b.date))
+  const soxlB = soxl.bars.filter((b) => dSet2.has(b.date))
+  const dSet3 = new Set(soxlB.map((b) => b.date))
+  const qqqB = qqq.bars.filter((b) => dSet3.has(b.date))
+  const tqqqB = tqqq.bars.filter((b) => dSet3.has(b.date))
+  if (qqqB.length !== tqqqB.length || qqqB.length !== soxlB.length) throw new Error('3종목 교집합 정렬 실패')
+  log(`구간 ${qqqB[0].date} ~ ${qqqB[qqqB.length - 1].date} (${qqqB.length}봉) · tiingo 총수익 · 환율 야후 KRW=X ${fxMap.size}봉`)
+  log('')
+
+  const perfRow = (name: string, c: Curve): void => {
+    const p = perfOf(c)
+    log(`| ${name} | ${(p.total / 100 + 1).toFixed(1)}배 | ${f1(p.cagr)}% | ${f1(p.mdd)}% | ${f2(calmarOf(p))} |`)
+  }
+
+  // ① 환율·세금 없음(달러) vs 원화 무세 vs 원화 과세 — 혼합 50:50, 초기 1,000만원
+  const base = simulateKrwTax(qqqB, tqqqB, soxlB, fxMap, 0.5, 10_000_000, false)
+  const taxed = simulateKrwTax(qqqB, tqqqB, soxlB, fxMap, 0.5, 10_000_000, true)
+  log(`환율: 시작 ${base.fxFrom.toFixed(0)}원 → 끝 ${base.fxTo.toFixed(0)}원 (달러 ${((base.fxTo / base.fxFrom - 1) * 100).toFixed(0)}% 절상)`)
+  log('')
+  log('## ① 혼합 50:50 · 초기 1,000만원')
+  log('| 기준 | 최종배수 | CAGR | MDD | 칼마 |')
+  log('|---|---|---|---|---|')
+  perfRow('달러 · 무세', base.curveUsd)
+  perfRow('원화 · 무세 (환율만)', base.curveKrw)
+  perfRow('원화 · 연단위 과세', taxed.curveKrw)
+  log('')
+  log('연도별 실현이익·세금 (원화 과세 시나리오 · 만원):')
+  log('| 연도 | 실현이익 | 납부세금 |')
+  log('|---|---|---|')
+  let taxSum = 0
+  for (const t of taxed.taxes) {
+    const paid = t.taxKrw >= 0 ? `${Math.round(t.taxKrw / 10_000).toLocaleString()}` : '(이듬해 납부분)'
+    if (t.taxKrw > 0) taxSum += t.taxKrw
+    log(`| ${t.year} | ${Math.round(t.realizedKrw / 10_000).toLocaleString()} | ${paid} |`)
+  }
+  log(`납부 합계 ${Math.round(taxSum / 10_000).toLocaleString()}만원`)
+  log('')
+
+  // ② 규모·전략 비교 — 세후 CAGR
+  log('## ② 규모·전략별 세후 성적 (원화 기준)')
+  log('| 시나리오 | 최종배수 | CAGR | MDD | 칼마 |')
+  log('|---|---|---|---|---|')
+  const scen: [string, number, number][] = [
+    ['혼합 50:50 · 200만', 0.5, 2_000_000],
+    ['혼합 50:50 · 1억', 0.5, 100_000_000],
+    ['스위칭 단독 · 1,000만', 1, 10_000_000],
+    ['SOXL VR 단독 · 1,000만', 0, 10_000_000],
+  ]
+  for (const [name, w, cap] of scen) {
+    perfRow(name, simulateKrwTax(qqqB, tqqqB, soxlB, fxMap, w, cap, true).curveKrw)
+  }
+  log('')
+  log(
+    '읽는 법: 원화 무세와 달러 무세의 차이 = 환율 효과, 원화 과세와 원화 무세의 차이 = 세금의 ' +
+      '복리 손실. 공제 250만은 고정액이라 **원금이 작을수록 세부담이 급감**한다(200만 vs 1억 비교). ' +
+      '납부를 연초로 앞당긴 보수적 근사라 실제(5월 납부)는 이보다 아주 약간 낫다. 투자자문 아님(규칙 4).',
+  )
+}
+
+// ============================================================================
 // 6. MODE=selftest — 네트워크 없이 도는 자기검증
 // ============================================================================
 
@@ -1674,12 +1977,13 @@ async function main(): Promise<void> {
   if (mode === 'vr') await vrMode(key.value)
   if (mode === 'vrgrid') await vrGridMode(key.value)
   if (mode === 'mix') await mixMode(key.value)
+  if (mode === 'krwtax') await krwTaxMode(key.value)
   if (mode === 'real' || mode === 'all') await real(key.value)
   if (mode === 'synth' || mode === 'all') await synth(key.value)
   if (mode === 'prop' || mode === 'all') await prop(key.value)
   if (mode === 'sweep' || mode === 'all') await sweepMode(key.value)
   if (mode === 'dca' || mode === 'all') await dcaMode(key.value)
-  if (!['real', 'synth', 'prop', 'sweep', 'dca', 'vr', 'vrgrid', 'mix', 'all'].includes(mode)) throw new Error(`알 수 없는 MODE: ${mode}`)
+  if (!['real', 'synth', 'prop', 'sweep', 'dca', 'vr', 'vrgrid', 'mix', 'krwtax', 'all'].includes(mode)) throw new Error(`알 수 없는 MODE: ${mode}`)
 
   log('')
   log('---')
