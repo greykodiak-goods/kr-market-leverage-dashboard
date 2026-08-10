@@ -2018,6 +2018,186 @@ async function krwTaxMode(token: string): Promise<void> {
 }
 
 // ============================================================================
+// 5.12 MODE=beat — 챔피언(스위칭+SOXL VR 반반)을 이기는 배분이 있는가 (50차)
+// ============================================================================
+//
+// 대표 지시(2026-08-10): "반반 혼합보다 성과 좋은 거 찾아줘."
+// 부품 5개로 배분 공간을 전수 탐색한다: ①TQQQ↔QQQ 스위칭(L170) ②SOXL↔QQQ 스위칭
+// (SOXL 자기 150일선 — 반도체 쪽도 VR 대신 추세 게이트를 시험) ③SOXL VR 고원정점
+// ④TQQQ VR 고원정점 ⑤금 GLD 보유(32차 국장에서 금 슬리브가 칼마를 올린 이력).
+// 배분은 10%p 단위 심플렉스 전수(1,001조합), 월 재배분. **48차와 같은 자**(달러·무세·
+// 재배분 비용 [근사·미반영])로 재서 챔피언 0.81과 직접 비교 가능하게 한다.
+// 상위 후보는 이웃최소(인접 배분으로 10%p 옮긴 모든 변형의 최소 칼마)로 고원 여부까지 판정.
+
+function trendSwitchCurveBy(
+  signalB: readonly DailyBar[],
+  upB: readonly DailyBar[],
+  downB: readonly DailyBar[],
+  L: number,
+  cost: LadderCost,
+): Curve {
+  if (signalB.length !== upB.length || signalB.length !== downB.length) throw new Error('스위칭 정렬 실패')
+  const side = (cost.feePct + cost.slippagePct) / 100
+  const n = signalB.length
+  const sma: (number | null)[] = new Array(n).fill(null)
+  let sum = 0
+  for (let i = 0; i < n; i++) {
+    sum += signalB[i].c
+    if (i >= L) sum -= signalB[i - L].c
+    if (i >= L - 1) sma[i] = sum / L
+  }
+  const start = L
+  let inUp = signalB[start - 1].c > (sma[start - 1] as number)
+  let units = (cost.initialCapital * (1 - side)) / (inUp ? upB[start].o : downB[start].o)
+  const eq: Curve = []
+  for (let i = start; i < n; i++) {
+    if (i > start) {
+      const wantUp = signalB[i - 1].c > (sma[i - 1] as number)
+      if (wantUp !== inUp) {
+        const cash = units * (inUp ? upB[i].o : downB[i].o) * (1 - side)
+        inUp = wantUp
+        units = cash / ((inUp ? upB[i].o : downB[i].o) * (1 + side))
+      }
+    }
+    eq.push({ date: signalB[i].date, equity: units * (inUp ? upB[i].c : downB[i].c) })
+  }
+  return eq
+}
+
+/** N개 곡선을 고정 비중으로 결합, 21거래일마다 재배분. 비용 [근사·미반영] — 48차와 같은 자. */
+function blendN(curves: Curve[], weights: number[]): Curve {
+  const maps = curves.map((c) => new Map(c.map((e) => [e.date, e.equity])))
+  const dates = curves[0].filter((e) => maps.every((m) => m.has(e.date))).map((e) => e.date)
+  if (dates.length < 500) throw new Error(`혼합 공통 구간 부족: ${dates.length}`)
+  let vals = [...weights]
+  const eq: Curve = [{ date: dates[0], equity: 1 }]
+  for (let i = 1; i < dates.length; i++) {
+    for (let k = 0; k < vals.length; k++) {
+      if (vals[k] > 0) vals[k] *= (maps[k].get(dates[i]) as number) / (maps[k].get(dates[i - 1]) as number)
+    }
+    if (i % 21 === 0) {
+      const tot = vals.reduce((s, x) => s + x, 0)
+      vals = weights.map((w) => tot * w)
+    }
+    eq.push({ date: dates[i], equity: vals.reduce((s, x) => s + x, 0) })
+  }
+  return eq
+}
+
+async function beatMode(token: string): Promise<void> {
+  log('# MODE=beat — 챔피언(반반 혼합)을 이기는 배분 전수 탐색 (50차 · 대표 지시)')
+  log('')
+  const qqq = await loadTicker('QQQ', token)
+  await sleep(400)
+  const tqqq = await loadTicker('TQQQ', token)
+  await sleep(400)
+  const soxl = await loadTicker('SOXL', token)
+  await sleep(400)
+  const gld = await loadTicker('GLD', token)
+
+  // 4종목 교집합 정렬
+  let dates = new Set(qqq.bars.map((b) => b.date))
+  for (const t of [tqqq, soxl, gld]) {
+    const s = new Set(t.bars.map((b) => b.date))
+    dates = new Set([...dates].filter((d) => s.has(d)))
+  }
+  const cut = (bars: DailyBar[]): DailyBar[] => bars.filter((b) => dates.has(b.date))
+  const qqqB = cut(qqq.bars)
+  const tqqqB = cut(tqqq.bars)
+  const soxlB = cut(soxl.bars)
+  const gldB = cut(gld.bars)
+  if (new Set([qqqB.length, tqqqB.length, soxlB.length, gldB.length]).size !== 1) throw new Error('4종목 정렬 실패')
+  log(`구간 ${qqqB[0].date} ~ ${qqqB[qqqB.length - 1].date} (${qqqB.length}봉 · 4종목 교집합) · tiingo 총수익`)
+  log('')
+
+  const settings = {
+    initialCapital: 100_000,
+    positionPct: 100,
+    commissionPct: 0.01,
+    sellTaxPct: 0,
+    slippagePct: 0.05,
+    stopLossPct: null,
+    takeProfitPct: null,
+  }
+  const NAMES = ['스위칭TQQQ', '스위칭SOXL', 'VR·SOXL', 'VR·TQQQ', '금GLD']
+  const sleeves: Curve[] = [
+    trendSwitchCurveBy(qqqB, tqqqB, qqqB, 170, US_LADDER_COST),
+    trendSwitchCurveBy(soxlB, soxlB, qqqB, 150, US_LADDER_COST),
+    runValueRebalancing(soxlB, 1, { periodDays: 20, growthPct: 2, bandPct: 20, initialStockPct: 50 }, settings).equity,
+    runValueRebalancing(tqqqB, 1, { periodDays: 30, growthPct: 2, bandPct: 15, initialStockPct: 90 }, settings).equity,
+    buyHoldCurve(gldB, US_LADDER_COST),
+  ]
+  log('## 부품 단독 성적')
+  log('| 부품 | CAGR | MDD | 칼마 |')
+  log('|---|---|---|---|')
+  for (let k = 0; k < sleeves.length; k++) {
+    const p = perfOf(blendN([sleeves[k]], [1]))
+    log(`| ${NAMES[k]} | ${f1(p.cagr)}% | ${f1(p.mdd)}% | ${f2(calmarOf(p))} |`)
+  }
+  log('')
+  log('부품 간 일간수익률 상관 (스위칭TQQQ 기준): ' + sleeves.slice(1).map((c, k) => `${NAMES[k + 1]} ${dailyCorr(sleeves[0], c).toFixed(2)}`).join(' · '))
+  log('')
+
+  // 10%p 심플렉스 전수 — 5부품 합 100%
+  interface Combo {
+    w: number[]
+    cagr: number
+    mdd: number
+    calmar: number
+  }
+  const combos: Combo[] = []
+  for (let a = 0; a <= 10; a++)
+    for (let b = 0; b <= 10 - a; b++)
+      for (let c = 0; c <= 10 - a - b; c++)
+        for (let d = 0; d <= 10 - a - b - c; d++) {
+          const e = 10 - a - b - c - d
+          const w = [a / 10, b / 10, c / 10, d / 10, e / 10]
+          const p = perfOf(blendN(sleeves, w))
+          combos.push({ w, cagr: p.cagr, mdd: p.mdd, calmar: calmarOf(p) ?? 0 })
+        }
+  const key = (w: number[]): string => w.map((x) => Math.round(x * 10)).join(',')
+  const byKey = new Map(combos.map((c) => [key(c.w), c]))
+  const label = (w: number[]): string =>
+    w.map((x, k) => (x > 0 ? `${NAMES[k]}${Math.round(x * 100)}` : '')).filter(Boolean).join('+')
+  // 이웃최소: 한 부품에서 다른 부품으로 10%p 옮긴 모든 변형의 최소 칼마
+  const nbMin = (c: Combo): number => {
+    let min = c.calmar
+    for (let i = 0; i < 5; i++)
+      for (let j = 0; j < 5; j++) {
+        if (i === j || c.w[i] < 0.1) continue
+        const w2 = [...c.w]
+        w2[i] -= 0.1
+        w2[j] += 0.1
+        const n = byKey.get(key(w2))
+        if (n) min = Math.min(min, n.calmar)
+      }
+    return min
+  }
+
+  const champ = byKey.get('5,0,5,0,0') as Combo
+  const sorted = [...combos].sort((x, y) => y.calmar - x.calmar)
+  const champRank = sorted.indexOf(champ) + 1
+  log(`## 챔피언: ${label(champ.w)} — CAGR ${f1(champ.cagr)}% · MDD ${f1(champ.mdd)}% · 칼마 ${f2(champ.calmar)} · 이웃최소 ${f2(nbMin(champ))} · 전체 순위 ${champRank}/${combos.length}`)
+  log('')
+  log('## 칼마 상위 12 (1,001조합 전수)')
+  log('| 배분 | CAGR | MDD | 칼마 | 이웃최소 |')
+  log('|---|---|---|---|---|')
+  for (const c of sorted.slice(0, 12)) log(`| ${label(c.w)} | ${f1(c.cagr)}% | ${f1(c.mdd)}% | ${f2(c.calmar)} | ${f2(nbMin(c))} |`)
+  log('')
+  const hi = sorted.filter((c) => c.cagr >= 35)
+  log('## CAGR ≥ 35% 조건부 칼마 상위 5')
+  log('| 배분 | CAGR | MDD | 칼마 | 이웃최소 |')
+  log('|---|---|---|---|---|')
+  for (const c of hi.slice(0, 5)) log(`| ${label(c.w)} | ${f1(c.cagr)}% | ${f1(c.mdd)}% | ${f2(c.calmar)} | ${f2(nbMin(c))} |`)
+  log('')
+  log(
+    '읽는 법: 챔피언보다 칼마가 높고 **이웃최소도 챔피언 이상**인 배분만 "이겼다"고 본다 — ' +
+      '한 점만 높은 건 배분 과최적화다. 48차와 같은 자(달러·무세·재배분 비용 근사 미반영)라 ' +
+      '수치는 실전형(49차)보다 후하다. 2010~26 한 개 창 · 투자자문 아님(규칙 4).',
+  )
+}
+
+// ============================================================================
 // 6. MODE=selftest — 네트워크 없이 도는 자기검증
 // ============================================================================
 
@@ -2080,12 +2260,13 @@ async function main(): Promise<void> {
   if (mode === 'vrgrid') await vrGridMode(key.value)
   if (mode === 'mix') await mixMode(key.value)
   if (mode === 'krwtax') await krwTaxMode(key.value)
+  if (mode === 'beat') await beatMode(key.value)
   if (mode === 'real' || mode === 'all') await real(key.value)
   if (mode === 'synth' || mode === 'all') await synth(key.value)
   if (mode === 'prop' || mode === 'all') await prop(key.value)
   if (mode === 'sweep' || mode === 'all') await sweepMode(key.value)
   if (mode === 'dca' || mode === 'all') await dcaMode(key.value)
-  if (!['real', 'synth', 'prop', 'sweep', 'dca', 'vr', 'vrgrid', 'mix', 'krwtax', 'all'].includes(mode)) throw new Error(`알 수 없는 MODE: ${mode}`)
+  if (!['real', 'synth', 'prop', 'sweep', 'dca', 'vr', 'vrgrid', 'mix', 'krwtax', 'beat', 'all'].includes(mode)) throw new Error(`알 수 없는 MODE: ${mode}`)
 
   log('')
   log('---')
