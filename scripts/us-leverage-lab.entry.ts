@@ -2190,6 +2190,82 @@ async function beatMode(token: string): Promise<void> {
   log('|---|---|---|---|---|')
   for (const c of hi.slice(0, 5)) log(`| ${label(c.w)} | ${f1(c.cagr)}% | ${f1(c.mdd)}% | ${f2(c.calmar)} | ${f2(nbMin(c))} |`)
   log('')
+
+  // 심층 지표 (2026-08-10 대표 지시 "다 추가해서 표 업데이트") — 칼마가 못 보는 것들:
+  //  · 소르티노 = CAGR ÷ 연환산 하락편차(하락일 수익률만의 제곱평균 √×√252) — 하방 흔들림 대비 수익
+  //  · 최장 물밑 = 전고점을 깬 뒤 회복까지 최대 기간(개월=거래일/21) — 낙폭의 "길이"
+  //  · 최악 시작 3년 = 모든 시작 시점의 3년(756거래일) 연환산 수익률의 최솟값 — 입장 운 제거
+  //  · 최악 하루/1개월 = 일간·21거래일 최대 손실 — 꼬리 충격
+  interface DeepStats {
+    cagr: number
+    mdd: number
+    calmar: number | null
+    sortino: number | null
+    uwMonths: number
+    worst3y: number
+    worstDay: number
+    worstMonth: number
+  }
+  const deep = (c: Curve): DeepStats => {
+    const p = perfOf(c)
+    let downSq = 0
+    let worstDay = 0
+    let nRet = 0
+    for (let i = 1; i < c.length; i++) {
+      const r = c[i].equity / c[i - 1].equity - 1
+      nRet++
+      if (r < 0) downSq += r * r
+      if (r < worstDay) worstDay = r
+    }
+    const downDev = Math.sqrt(downSq / nRet) * Math.sqrt(252)
+    let worstMonth = 0
+    for (let i = 21; i < c.length; i++) {
+      const r = c[i].equity / c[i - 21].equity - 1
+      if (r < worstMonth) worstMonth = r
+    }
+    let peak = -Infinity
+    let peakIdx = 0
+    let maxUw = 0
+    for (let i = 0; i < c.length; i++) {
+      if (c[i].equity >= peak) {
+        peak = c[i].equity
+        peakIdx = i
+      } else if (i - peakIdx > maxUw) maxUw = i - peakIdx
+    }
+    let worst3y = Infinity
+    for (let i = 0; i + 756 < c.length; i++) {
+      const r = Math.pow(c[i + 756].equity / c[i].equity, 252 / 756) - 1
+      if (r < worst3y) worst3y = r
+    }
+    return {
+      cagr: p.cagr,
+      mdd: p.mdd,
+      calmar: calmarOf(p),
+      sortino: downDev > 0 ? p.cagr / 100 / downDev : null,
+      uwMonths: maxUw / 21,
+      worst3y: worst3y * 100,
+      worstDay: worstDay * 100,
+      worstMonth: worstMonth * 100,
+    }
+  }
+  log('## 심층 지표 — 주요 배분 비교')
+  log('| 배분 | CAGR | MDD | 칼마 | 소르티노 | 최장물밑 | 최악시작3년 | 최악하루 | 최악1개월 |')
+  log('|---|---|---|---|---|---|---|---|---|')
+  const deepRows: [string, Curve][] = [
+    ['반반(기존): 스위칭T50+VR·S50', blendN(sleeves, [0.5, 0, 0.5, 0, 0])],
+    ['금20 우승: T30+S20+VR·S30+금20', blendN(sleeves, [0.3, 0.2, 0.3, 0, 0.2])],
+    ['수익유지: T40+S10+VR·S40+금10', blendN(sleeves, [0.4, 0.1, 0.4, 0, 0.1])],
+    ['방어형: T10+S20+VR·S10+금60', blendN(sleeves, [0.1, 0.2, 0.1, 0, 0.6])],
+    ['벤치: QQQ 보유', buyHoldCurve(qqqB.slice(170), US_LADDER_COST)],
+  ]
+  for (const [name, curve] of deepRows) {
+    const d = deep(curve)
+    log(
+      `| ${name} | ${f1(d.cagr)}% | ${f1(d.mdd)}% | ${f2(d.calmar)} | ${f2(d.sortino)} | ` +
+        `${d.uwMonths.toFixed(0)}개월 | ${d.worst3y >= 0 ? '+' : ''}${f1(d.worst3y)}%/년 | ${f1(d.worstDay)}% | ${f1(d.worstMonth)}% |`,
+    )
+  }
+  log('')
   log(
     '읽는 법: 챔피언보다 칼마가 높고 **이웃최소도 챔피언 이상**인 배분만 "이겼다"고 본다 — ' +
       '한 점만 높은 건 배분 과최적화다. 48차와 같은 자(달러·무세·재배분 비용 근사 미반영)라 ' +
