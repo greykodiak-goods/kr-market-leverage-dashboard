@@ -82,6 +82,7 @@ import {
   type TiingoAdjAudit,
 } from './lib/tiingo'
 import type { DailyBar } from '../src/lib/history'
+import { runValueRebalancing, DEFAULT_VR_PARAMS, type VRParams } from '../src/features/backtest/algoEngine'
 
 // ============================================================================
 // 0. 상수 · 전제
@@ -1181,6 +1182,1124 @@ async function dcaMode(token: string): Promise<void> {
 }
 
 // ============================================================================
+// 5.8 MODE=vr — SOXL VR vs TQQQ VR (2026-08-07 대표 지시 · 45차)
+// ============================================================================
+//
+// 라오어 VR 근사(algoEngine.runValueRebalancing · 추가입금 없음)를 두 3배 ETF에
+// 같은 조건으로 건다. SOXL은 반도체 3배(SOX 기초)라 기초지수가 다르다 — 같은
+// "3배 VR"이어도 기초의 성질(변동성·낙폭 깊이)이 결과를 지배한다는 것을 보인다.
+
+async function vrMode(token: string): Promise<void> {
+  log('# MODE=vr — SOXL VR vs TQQQ VR (45차 · 대표 지시)')
+  log('')
+  const tqqq = await loadTicker('TQQQ', token)
+  await sleep(400)
+  const soxl = await loadTicker('SOXL', token)
+  await sleep(400)
+  const qld = await loadTicker(RIVAL, token)
+
+  // 공통 구간: 둘 다 실재하는 날짜만 (SOXL 2010-03-11 상장 — 며칠 차이)
+  const common = new Set(tqqq.bars.map((b) => b.date))
+  const soxlB = soxl.bars.filter((b) => common.has(b.date))
+  const soxlSet = new Set(soxlB.map((b) => b.date))
+  const tqqqB = tqqq.bars.filter((b) => soxlSet.has(b.date))
+  const qldB = qld.bars.filter((b) => soxlSet.has(b.date))
+  if (tqqqB.length !== soxlB.length) throw new Error(`교집합 정렬 실패 ${tqqqB.length} vs ${soxlB.length}`)
+  log(`구간 ${tqqqB[0].date} ~ ${tqqqB[tqqqB.length - 1].date} (${tqqqB.length}봉 · 두 ETF 교집합) · tiingo 총수익`)
+  log('')
+
+  const settings = {
+    initialCapital: 100_000,
+    positionPct: 100,
+    commissionPct: 0.01,
+    sellTaxPct: 0,
+    slippagePct: 0.05,
+    stopLossPct: null,
+    takeProfitPct: null,
+  }
+  const mid = new Date((Date.parse(tqqqB[0].date) + Date.parse(tqqqB[tqqqB.length - 1].date)) / 2)
+    .toISOString()
+    .slice(0, 10)
+
+  const stat = (eq: { date: string; equity: number }[], from = '', to = '9999-12-31') => {
+    const c: Curve = eq.filter((e) => e.date >= from && e.date <= to).map((e) => ({ date: e.date, equity: e.equity }))
+    return perfOf(c)
+  }
+  const holdCurve = (bars: DailyBar[]): Curve => buyHoldCurve(bars, US_LADDER_COST)
+
+  const hT = holdCurve(tqqqB)
+  const hS = holdCurve(soxlB)
+  const hQ = holdCurve(qldB)
+  const row = (name: string, p: ReturnType<typeof perfOf>, extra = '') =>
+    log(
+      `| ${name} | ${(p.total / 100 + 1).toFixed(1)}배 | ${p.cagr.toFixed(1)}% | ${p.mdd.toFixed(1)}% | ` +
+        `${(calmarOf(p) ?? NaN).toFixed(2)} |${extra}`,
+    )
+
+  log('| 대상 | 총배수 | CAGR | MDD | 칼마 |')
+  log('|---|---|---|---|---|')
+  row('TQQQ 단순보유', perfOf(hT))
+  row('SOXL 단순보유', perfOf(hS))
+  row('QLD 단순보유(참고)', perfOf(hQ))
+  log('')
+
+  const variants: [string, VRParams][] = [
+    ['기본 (10d·1%·15%·75%)', DEFAULT_VR_PARAMS],
+    ['성장 0.5%', { ...DEFAULT_VR_PARAMS, growthPct: 0.5 }],
+    ['성장 1.5%', { ...DEFAULT_VR_PARAMS, growthPct: 1.5 }],
+    ['밴드 10%', { ...DEFAULT_VR_PARAMS, bandPct: 10 }],
+    ['밴드 20%', { ...DEFAULT_VR_PARAMS, bandPct: 20 }],
+    ['초기 90%', { ...DEFAULT_VR_PARAMS, initialStockPct: 90 }],
+  ]
+  log('| VR 변형 | TQQQ: 배수/CAGR/MDD/칼마 | SOXL: 배수/CAGR/MDD/칼마 |')
+  log('|---|---|---|')
+  for (const [name, P] of variants) {
+    const rT = runValueRebalancing(tqqqB, 1, P, settings)
+    const rS = runValueRebalancing(soxlB, 1, P, settings)
+    const pT = stat(rT.equity)
+    const pS = stat(rS.equity)
+    log(
+      `| ${name} | ${(pT.total / 100 + 1).toFixed(1)}배 / ${pT.cagr.toFixed(1)}% / ${pT.mdd.toFixed(1)}% / ${(calmarOf(pT) ?? NaN).toFixed(2)} ` +
+        `| ${(pS.total / 100 + 1).toFixed(1)}배 / ${pS.cagr.toFixed(1)}% / ${pS.mdd.toFixed(1)}% / ${(calmarOf(pS) ?? NaN).toFixed(2)} |`,
+    )
+  }
+  log('')
+  // 전·후반 일관성 (기본 변형)
+  const rT = runValueRebalancing(tqqqB, 1, DEFAULT_VR_PARAMS, settings)
+  const rS = runValueRebalancing(soxlB, 1, DEFAULT_VR_PARAMS, settings)
+  log(`전·후반 경계 ${mid} — CAGR(기본 변형):`)
+  log(
+    `  TQQQ VR 전반 ${stat(rT.equity, '', mid).cagr.toFixed(1)}% / 후반 ${stat(rT.equity, mid).cagr.toFixed(1)}% · ` +
+      `SOXL VR 전반 ${stat(rS.equity, '', mid).cagr.toFixed(1)}% / 후반 ${stat(rS.equity, mid).cagr.toFixed(1)}%`,
+  )
+  log(
+    `  리밸런스 횟수 — TQQQ ${rT.events.length}건 · SOXL ${rS.events.length}건 · ` +
+      `현금 최저 — TQQQ $${Math.round(Math.min(...rT.events.map((e) => e.cashAfter))).toLocaleString()} · ` +
+      `SOXL $${Math.round(Math.min(...rS.events.map((e) => e.cashAfter))).toLocaleString()}`,
+  )
+  log('')
+  log(
+    '읽는 법: VR 파라미터가 같아도 성패는 **기초지수의 성질**이 가른다. SOX(반도체)는 나스닥100보다 ' +
+      '변동성·낙폭이 크고 횡보 잠식이 깊다 — 같은 "3배 VR"이라는 이름에 속지 말 것(규칙 4).',
+  )
+}
+
+// ============================================================================
+// 5.9 MODE=vrgrid — VR 4변수 전수 격자 + 고원 채점 (2026-08-07 대표 지시 · 47차)
+// ============================================================================
+//
+// 대표 질문: "SOXL VR 기본(10d·1%·15%·75%)이 특이케이스인가 고원인가, 세부 옵션 다
+// 검토하면 최적값인가?" — 43차 사다리 고원 채점과 같은 방법으로 판정한다:
+// 각 조합의 **이웃최소 칼마**(4개 축에서 ±1스텝 이웃 8개+자기 중 최솟값)를 점수로 쓴다.
+// 스파이크(운)는 이웃최소가 무너지고, 고원(실체)은 이웃최소가 버틴다.
+
+const VR_GRID = {
+  periodDays: [5, 10, 15, 20, 30],
+  growthPct: [0, 0.5, 1, 1.5, 2],
+  bandPct: [5, 10, 15, 20, 25],
+  initialStockPct: [50, 65, 75, 90],
+} as const
+
+async function vrGridMode(token: string): Promise<void> {
+  log('# MODE=vrgrid — VR 4변수 전수 격자 + 고원 채점 (47차 · 대표 지시)')
+  log('')
+  const tqqq = await loadTicker('TQQQ', token)
+  await sleep(400)
+  const soxl = await loadTicker('SOXL', token)
+
+  const common = new Set(tqqq.bars.map((b) => b.date))
+  const soxlB = soxl.bars.filter((b) => common.has(b.date))
+  const soxlSet = new Set(soxlB.map((b) => b.date))
+  const tqqqB = tqqq.bars.filter((b) => soxlSet.has(b.date))
+  if (tqqqB.length !== soxlB.length) throw new Error(`교집합 정렬 실패 ${tqqqB.length} vs ${soxlB.length}`)
+  log(`구간 ${tqqqB[0].date} ~ ${tqqqB[tqqqB.length - 1].date} (${tqqqB.length}봉 · 교집합) · tiingo 총수익`)
+  const axes = Object.entries(VR_GRID)
+    .map(([k, v]) => `${k}=[${v.join(',')}]`)
+    .join(' × ')
+  log(`격자: ${axes} → ${VR_GRID.periodDays.length * VR_GRID.growthPct.length * VR_GRID.bandPct.length * VR_GRID.initialStockPct.length}조합/종목`)
+  log('')
+
+  const settings = {
+    initialCapital: 100_000,
+    positionPct: 100,
+    commissionPct: 0.01,
+    sellTaxPct: 0,
+    slippagePct: 0.05,
+    stopLossPct: null,
+    takeProfitPct: null,
+  }
+
+  interface Cell {
+    pi: number
+    gi: number
+    bi: number
+    si: number
+    p: VRParams
+    cagr: number
+    mdd: number
+    calmar: number
+    nbMin: number
+  }
+
+  for (const [sym, bars] of [
+    ['TQQQ', tqqqB],
+    ['SOXL', soxlB],
+  ] as const) {
+    const hold = perfOf(buyHoldCurve(bars, US_LADDER_COST))
+    const holdCalmar = calmarOf(hold) ?? 0
+    log(`## ${sym} — 보유 벤치: CAGR ${f1(hold.cagr)}% · MDD ${f1(hold.mdd)}% · 칼마 ${f2(holdCalmar)}`)
+    log('')
+
+    // 4차원 격자 전수 실행
+    const grid: Cell[][][][] = []
+    const flat: Cell[] = []
+    let ran = 0
+    VR_GRID.periodDays.forEach((periodDays, pi) => {
+      grid[pi] = []
+      VR_GRID.growthPct.forEach((growthPct, gi) => {
+        grid[pi][gi] = []
+        VR_GRID.bandPct.forEach((bandPct, bi) => {
+          grid[pi][gi][bi] = []
+          VR_GRID.initialStockPct.forEach((initialStockPct, si) => {
+            const p: VRParams = { periodDays, growthPct, bandPct, initialStockPct }
+            const r = runValueRebalancing(bars, 1, p, settings)
+            const perf = perfOf(r.equity)
+            const cell: Cell = { pi, gi, bi, si, p, cagr: perf.cagr, mdd: perf.mdd, calmar: calmarOf(perf) ?? 0, nbMin: 0 }
+            grid[pi][gi][bi][si] = cell
+            flat.push(cell)
+            ran++
+          })
+        })
+      })
+    })
+    if (ran !== flat.length || ran === 0) throw new Error(`격자 실행 수 불일치 ${ran}`)
+
+    // 이웃최소 — 축별 ±1 (모서리는 있는 이웃만)
+    for (const c of flat) {
+      let min = c.calmar
+      const probe = (pi: number, gi: number, bi: number, si: number): void => {
+        const n = grid[pi]?.[gi]?.[bi]?.[si]
+        if (n) min = Math.min(min, n.calmar)
+      }
+      probe(c.pi - 1, c.gi, c.bi, c.si)
+      probe(c.pi + 1, c.gi, c.bi, c.si)
+      probe(c.pi, c.gi - 1, c.bi, c.si)
+      probe(c.pi, c.gi + 1, c.bi, c.si)
+      probe(c.pi, c.gi, c.bi - 1, c.si)
+      probe(c.pi, c.gi, c.bi + 1, c.si)
+      probe(c.pi, c.gi, c.bi, c.si - 1)
+      probe(c.pi, c.gi, c.bi, c.si + 1)
+      c.nbMin = min
+    }
+
+    const label = (c: Cell): string => `${c.p.periodDays}d·${c.p.growthPct}%·밴드${c.p.bandPct}%·초기${c.p.initialStockPct}%`
+    const line = (c: Cell): string =>
+      `| ${label(c)} | ${f1(c.cagr)}% | ${f1(c.mdd)}% | ${f2(c.calmar)} | ${f2(c.nbMin)} |`
+
+    const byCalmar = [...flat].sort((a, b) => b.calmar - a.calmar)
+    const byNbMin = [...flat].sort((a, b) => b.nbMin - a.nbMin)
+    const def = flat.find(
+      (c) =>
+        c.p.periodDays === DEFAULT_VR_PARAMS.periodDays &&
+        c.p.growthPct === DEFAULT_VR_PARAMS.growthPct &&
+        c.p.bandPct === DEFAULT_VR_PARAMS.bandPct &&
+        c.p.initialStockPct === DEFAULT_VR_PARAMS.initialStockPct,
+    )
+    if (!def) throw new Error('기본 파라미터가 격자에 없다 — 격자 축을 확인하라')
+
+    log('| 조합 | CAGR | MDD | 칼마 | 이웃최소 |')
+    log('|---|---|---|---|---|')
+    log(`상위 5 (칼마):`)
+    for (const c of byCalmar.slice(0, 5)) log(line(c))
+    log(`상위 5 (이웃최소 = 고원 점수):`)
+    for (const c of byNbMin.slice(0, 5)) log(line(c))
+    log(`기본값 위치:`)
+    log(line(def))
+    log('')
+    const defRankCalmar = byCalmar.indexOf(def) + 1
+    const defRankNb = byNbMin.indexOf(def) + 1
+    const overHold = flat.filter((c) => c.calmar > holdCalmar).length
+    const overTarget = flat.filter((c) => c.calmar > 0.61 && c.cagr >= 30).length
+    const nbOverHold = flat.filter((c) => c.nbMin > holdCalmar).length
+    log(
+      `기본값 순위: 칼마 ${defRankCalmar}/${flat.length} · 이웃최소 ${defRankNb}/${flat.length} — ` +
+        `벤치 초과 조합 ${overHold}/${flat.length} · 이웃최소까지 벤치 초과 ${nbOverHold}/${flat.length} · ` +
+        `목표(칼마>0.61 & CAGR≥30) 충족 ${overTarget}/${flat.length}`,
+    )
+    log('')
+  }
+  log(
+    '읽는 법: **이웃최소가 벤치를 넘는 조합이 넓게 깔려 있으면 고원(실체), 최고점만 높고 이웃최소가 ' +
+      '주저앉으면 스파이크(운)**다. 43차 사다리 채점과 같은 방법. 이 구간 성적은 2010~26 강세장 ' +
+      '한 개 창이며 매수 권유가 아니다(규칙 4).',
+  )
+}
+
+// ============================================================================
+// 5.10 MODE=mix — 두 전략(추세 스위칭 · VR) 최적 조합 + 혼합 배분 프런티어 (48차)
+// ============================================================================
+//
+// 대표 질문: "두 전략 중 칼마 최적 조합을 찾아라." 두 해석을 다 잰다:
+//  ① 각 전략의 견고 정점끼리 단독 비교 (47차 고원 채점의 승자들)
+//  ② 두 전략을 w:1-w로 섞은 포트폴리오 — 상관이 낮으면 혼합이 단독을 이길 수 있다.
+// 슬리브 간 리밸런스(월 1회=21거래일)는 수익률 결합으로 근사하고 그 비용은 [근사·미반영]
+// (회전율 월 수% × 편도 0.06% ≈ 월 0.01%p 미만이라 순위를 바꾸지 못한다).
+
+function trendSwitchCurve(qqq: readonly DailyBar[], up: readonly DailyBar[], L: number, cost: LadderCost): Curve {
+  if (qqq.length !== up.length) throw new Error(`스위칭 정렬 실패 ${qqq.length} vs ${up.length}`)
+  const side = (cost.feePct + cost.slippagePct) / 100
+  const n = qqq.length
+  const sma: (number | null)[] = new Array(n).fill(null)
+  let sum = 0
+  for (let i = 0; i < n; i++) {
+    sum += qqq[i].c
+    if (i >= L) sum -= qqq[i - L].c
+    if (i >= L - 1) sma[i] = sum / L
+  }
+  // 신호 = i-1 종가 vs SMA(i-1) → 체결 = i 시가 (규칙 1-2)
+  const start = L
+  let inUp = qqq[start - 1].c > (sma[start - 1] as number)
+  let units = (cost.initialCapital * (1 - side)) / (inUp ? up[start].o : qqq[start].o)
+  const eq: Curve = []
+  for (let i = start; i < n; i++) {
+    if (i > start) {
+      const wantUp = qqq[i - 1].c > (sma[i - 1] as number)
+      if (wantUp !== inUp) {
+        const cash = units * (inUp ? up[i].o : qqq[i].o) * (1 - side)
+        inUp = wantUp
+        units = cash / ((inUp ? up[i].o : qqq[i].o) * (1 + side))
+      }
+    }
+    eq.push({ date: qqq[i].date, equity: units * (inUp ? up[i].c : qqq[i].c) })
+  }
+  return eq
+}
+
+/** 두 곡선을 공통 날짜에서 w:1-w로 결합, 21거래일마다 재배분. 비용 [근사·미반영]. */
+function blendCurves(a: Curve, b: Curve, wA: number): Curve {
+  const bMap = new Map(b.map((e) => [e.date, e.equity]))
+  const common = a.filter((e) => bMap.has(e.date))
+  if (common.length < 100) throw new Error(`혼합 공통 구간이 너무 짧다: ${common.length}`)
+  let va = wA
+  let vb = 1 - wA
+  const eq: Curve = [{ date: common[0].date, equity: 1 }]
+  for (let i = 1; i < common.length; i++) {
+    va *= common[i].equity / common[i - 1].equity
+    vb *= (bMap.get(common[i].date) as number) / (bMap.get(common[i - 1].date) as number)
+    if (i % 21 === 0) {
+      const tot = va + vb
+      va = tot * wA
+      vb = tot * (1 - wA)
+    }
+    eq.push({ date: common[i].date, equity: va + vb })
+  }
+  return eq
+}
+
+/** 일간 수익률 상관계수 (공통 날짜) */
+function dailyCorr(a: Curve, b: Curve): number {
+  const bMap = new Map(b.map((e) => [e.date, e.equity]))
+  const ra: number[] = []
+  const rb: number[] = []
+  let prevA: { date: string; equity: number } | null = null
+  for (const e of a) {
+    if (!bMap.has(e.date)) continue
+    if (prevA && bMap.has(prevA.date)) {
+      ra.push(e.equity / prevA.equity - 1)
+      rb.push((bMap.get(e.date) as number) / (bMap.get(prevA.date) as number) - 1)
+    }
+    prevA = e
+  }
+  const n = ra.length
+  const ma = ra.reduce((s, x) => s + x, 0) / n
+  const mb = rb.reduce((s, x) => s + x, 0) / n
+  let cov = 0
+  let va = 0
+  let vb = 0
+  for (let i = 0; i < n; i++) {
+    cov += (ra[i] - ma) * (rb[i] - mb)
+    va += (ra[i] - ma) ** 2
+    vb += (rb[i] - mb) ** 2
+  }
+  return cov / Math.sqrt(va * vb)
+}
+
+async function mixMode(token: string): Promise<void> {
+  log('# MODE=mix — 두 전략 최적 조합 + 혼합 프런티어 (48차 · 대표 지시)')
+  log('')
+  const qqq = await loadTicker('QQQ', token)
+  await sleep(400)
+  const tqqq = await loadTicker('TQQQ', token)
+  await sleep(400)
+  const soxl = await loadTicker('SOXL', token)
+
+  // 3종목 교집합 정렬
+  const dSet = new Set(qqq.bars.map((b) => b.date))
+  const dSet2 = new Set(tqqq.bars.filter((b) => dSet.has(b.date)).map((b) => b.date))
+  const soxlB = soxl.bars.filter((b) => dSet2.has(b.date))
+  const dSet3 = new Set(soxlB.map((b) => b.date))
+  const qqqB = qqq.bars.filter((b) => dSet3.has(b.date))
+  const tqqqB = tqqq.bars.filter((b) => dSet3.has(b.date))
+  if (qqqB.length !== tqqqB.length || qqqB.length !== soxlB.length) {
+    throw new Error(`3종목 교집합 정렬 실패 ${qqqB.length}/${tqqqB.length}/${soxlB.length}`)
+  }
+  log(`구간 ${qqqB[0].date} ~ ${qqqB[qqqB.length - 1].date} (${qqqB.length}봉 · QQQ∩TQQQ∩SOXL) · tiingo 총수익`)
+  log('')
+
+  const settings = {
+    initialCapital: 100_000,
+    positionPct: 100,
+    commissionPct: 0.01,
+    sellTaxPct: 0,
+    slippagePct: 0.05,
+    stopLossPct: null,
+    takeProfitPct: null,
+  }
+  const row = (name: string, c: Curve, extra = ''): Perf => {
+    const p = perfOf(c)
+    log(`| ${name} | ${f1(p.cagr)}% | ${f1(p.mdd)}% | ${f2(calmarOf(p))} |${extra}`)
+    return p
+  }
+
+  // ① 단독 정점들 (47차 승자) — 같은 창에서 재확인
+  const SW_LS = [150, 160, 170, 180]
+  log('## ① 단독 — 같은 창 재확인')
+  log('| 전략 | CAGR | MDD | 칼마 |')
+  log('|---|---|---|---|')
+  const swCurves = new Map<number, Curve>()
+  for (const L of SW_LS) {
+    const c = trendSwitchCurve(qqqB, tqqqB, L, US_LADDER_COST)
+    swCurves.set(L, c)
+    row(`스위칭 TQQQ↔QQQ L${L}`, c)
+  }
+  const vrPlateauSoxl: VRParams = { periodDays: 20, growthPct: 2, bandPct: 20, initialStockPct: 50 }
+  const vrDefaultSoxl = DEFAULT_VR_PARAMS
+  const vrPlateauTqqq: VRParams = { periodDays: 30, growthPct: 2, bandPct: 15, initialStockPct: 90 }
+  const soxlVrPlateau: Curve = runValueRebalancing(soxlB, 1, vrPlateauSoxl, settings).equity
+  const soxlVrDefault: Curve = runValueRebalancing(soxlB, 1, vrDefaultSoxl, settings).equity
+  const tqqqVrPlateau: Curve = runValueRebalancing(tqqqB, 1, vrPlateauTqqq, settings).equity
+  row('SOXL VR 고원정점 (20d·2%·밴드20·초기50)', soxlVrPlateau)
+  row('SOXL VR 기본 (10d·1%·밴드15·초기75)', soxlVrDefault)
+  row('TQQQ VR 고원정점 (30d·2%·밴드15·초기90)', tqqqVrPlateau)
+  log('')
+
+  // ② 혼합 프런티어 — 스위칭 정점 × VR 3종, w = 스위칭 비중
+  const swBest = swCurves.get(170) as Curve
+  const pairs: [string, Curve][] = [
+    ['SOXL VR 고원정점', soxlVrPlateau],
+    ['SOXL VR 기본', soxlVrDefault],
+    ['TQQQ VR 고원정점', tqqqVrPlateau],
+  ]
+  log('## ② 혼합 — 스위칭 L170 w% + VR (1-w)% · 월 재배분 [비용 근사·미반영]')
+  for (const [name, vrC] of pairs) {
+    log(`상대: ${name} — 일간수익률 상관 ${dailyCorr(swBest, vrC).toFixed(2)}`)
+    log('| w(스위칭) | CAGR | MDD | 칼마 |')
+    log('|---|---|---|---|')
+    let best = { w: -1, calmar: -1 }
+    for (let w = 0; w <= 100; w += 10) {
+      const c = blendCurves(swBest, vrC, w / 100)
+      const p = perfOf(c)
+      const cal = calmarOf(p) ?? 0
+      if (cal > best.calmar) best = { w, calmar: cal }
+      row(`${w}%`, c)
+    }
+    log(`→ 최적 w=${best.w}% (칼마 ${best.calmar.toFixed(2)})`)
+    log('')
+  }
+  log(
+    '읽는 법: 혼합이 단독 최고 칼마를 넘으면 분산 효과가 실재하는 것. 상관이 1에 가까우면 ' +
+      '혼합은 중간값만 준다. 전부 2010~26 한 개 창 · 환율·세금 미반영 · 투자자문 아님(규칙 4).',
+  )
+}
+
+// ============================================================================
+// 5.11 MODE=krwtax — 원화 환산 + 해외주식 양도세 연단위 과세 실측 (49차)
+// ============================================================================
+//
+// 대표 지시(2026-08-08): "환율 변수랑 미국 직투 세금까지, 년단위 과세 납부금에 따른 분석."
+// 혼합(스위칭 L170 + SOXL VR 정점)을 **원화 기준**으로 다시 굴린다:
+//  · 매도할 때마다 원화 실현손익 기록(취득가·매도가 모두 그 시점 환율로 환산 — 환차익도 과세 대상)
+//  · 매년 첫 거래일에 전년 실현이익에 과세: (실현이익 − 기본공제 250만) × 22%, 손실 이월 없음
+//  · 세금은 포트폴리오에서 실제로 빼서(현금 우선, 부족하면 매도) 복리 손실을 실측
+// [근사] 목록: 원가는 이동평균법(선입선출 대신 — 국세청 인정 방식 중 하나) / 납부 시점을
+// 이듬해 5월이 아니라 연초로 앞당김(보수적) / 환전 스프레드 진입 시 0.5% 1회 / 배당은 총수익
+// 가격에 내재(배당소득세 미반영 — 3배 ETF 배당 미미) / A 슬리브 소수점 주식 허용 /
+// 공제 250만·세율 22%를 전 기간 고정(현행 기준 소급).
+// 환율: 야후 KRW=X 일봉(러너에서 수급 — 규칙 4 게이트: 부족하면 비정상 종료).
+
+async function fetchUsdKrw(): Promise<Map<string, number>> {
+  // range=max가 FX 심볼에서 269봉만 반환하는 것을 실측(run 31302490427) — 명시적 기간으로 요청한다.
+  const p1 = Math.floor(Date.UTC(2005, 0, 1) / 1000)
+  const p2 = Math.floor(Date.now() / 1000)
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/KRW=X?period1=${p1}&period2=${p2}&interval=1d`
+  const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } })
+  if (!res.ok) throw new Error(`환율 조회 실패 HTTP ${res.status}`)
+  const j = (await res.json()) as {
+    chart?: { result?: { timestamp?: number[]; indicators?: { quote?: { close?: (number | null)[] }[] } }[] }
+  }
+  const r = j.chart?.result?.[0]
+  const ts = r?.timestamp ?? []
+  const close = r?.indicators?.quote?.[0]?.close ?? []
+  const m = new Map<string, number>()
+  for (let i = 0; i < ts.length; i++) {
+    const c = close[i]
+    if (typeof c === 'number' && Number.isFinite(c) && c > 500 && c < 3000) {
+      m.set(new Date(ts[i] * 1000).toISOString().slice(0, 10), c)
+    }
+  }
+  if (m.size < 2000) throw new Error(`환율 데이터 부족: ${m.size}봉 — 조용히 진행하지 않는다`)
+  return m
+}
+
+interface KrwTaxResult {
+  curveKrw: Curve
+  curveUsd: Curve
+  taxes: { year: number; realizedKrw: number; taxKrw: number }[]
+  fxFrom: number
+  fxTo: number
+}
+
+function simulateKrwTax(
+  qqqB: readonly DailyBar[],
+  tqqqB: readonly DailyBar[],
+  soxlB: readonly DailyBar[],
+  fxByDate: Map<string, number>,
+  wA: number,
+  initialKrw: number,
+  taxOn: boolean,
+  optimize = false,
+): KrwTaxResult {
+  const L = 170
+  const VRP = { periodDays: 20, growthPct: 2, bandPct: 20, initialStockPct: 50 }
+  const REBAL_EVERY = 21
+  const SIDE = 0.0006
+  const FX_SPREAD = 0.005
+  const DEDUCT_KRW = 2_500_000
+  const TAX_RATE = 0.22
+  const n = qqqB.length
+
+  // 환율 정렬 — 미국 거래일에 환율이 없으면 직전값 승계(전일 이하만 — 미래참조 금지)
+  const fx: number[] = new Array(n)
+  {
+    const sorted = [...fxByDate.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    let k = 0
+    let last = NaN
+    for (let i = 0; i < n; i++) {
+      while (k < sorted.length && sorted[k][0] <= qqqB[i].date) {
+        last = sorted[k][1]
+        k++
+      }
+      if (!Number.isFinite(last)) throw new Error(`시작일 ${qqqB[i].date} 이전 환율 없음`)
+      fx[i] = last
+    }
+  }
+
+  // SMA(QQQ 종가, 당일 포함)
+  const sma: (number | null)[] = new Array(n).fill(null)
+  {
+    let sum = 0
+    for (let i = 0; i < n; i++) {
+      sum += qqqB[i].c
+      if (i >= L) sum -= qqqB[i - L].c
+      if (i >= L - 1) sma[i] = sum / L
+    }
+  }
+
+  const start = L
+  const initialUsd = (initialKrw * (1 - FX_SPREAD)) / fx[start]
+
+  // A 슬리브(스위칭): 소수점 단위 허용. B 슬리브(VR): 정수 주식 + 현금.
+  let aAsset: 'TQQQ' | 'QQQ' = qqqB[start - 1].c > (sma[start - 1] as number) ? 'TQQQ' : 'QQQ'
+  const px = (sym: 'TQQQ' | 'QQQ' | 'SOXL', i: number, kind: 'o' | 'c'): number =>
+    sym === 'TQQQ' ? tqqqB[i][kind] : sym === 'QQQ' ? qqqB[i][kind] : soxlB[i][kind]
+
+  const aBudget = initialUsd * wA
+  let aUnits = aBudget > 0 ? aBudget / (px(aAsset, start, 'c') * (1 + SIDE)) : 0
+  let aBasisKrw = aBudget * fx[start]
+
+  const bBudget = initialUsd * (1 - wA)
+  let bQty = 0
+  let bCashUsd = bBudget
+  let bBasisKrw = 0
+  {
+    const spend0 = bBudget * (VRP.initialStockPct / 100)
+    const q = Math.floor(spend0 / (px('SOXL', start, 'c') * (1 + SIDE)))
+    if (q >= 1 && bBudget > 0) {
+      const spent = q * px('SOXL', start, 'c') * (1 + SIDE)
+      bQty = q
+      bCashUsd -= spent
+      bBasisKrw = spent * fx[start]
+    }
+  }
+  let V = bQty * px('SOXL', start, 'c')
+
+  let realizedYear = 0
+  const taxes: KrwTaxResult['taxes'] = []
+  const curveKrw: Curve = []
+  const curveUsd: Curve = []
+
+  const aVal = (i: number): number => aUnits * px(aAsset, i, 'c')
+  const bVal = (i: number): number => bQty * px('SOXL', i, 'c') + bCashUsd
+
+  // A 슬리브 일부/전부 매도 — 원화 실현손익 기록 후 USD 현금 반환
+  const sellA = (i: number, frac: number, kind: 'o' | 'c'): number => {
+    const f = Math.min(1, Math.max(0, frac))
+    if (f <= 0 || aUnits <= 0) return 0
+    const units = aUnits * f
+    const proceeds = units * px(aAsset, i, kind) * (1 - SIDE)
+    realizedYear += proceeds * fx[i] - aBasisKrw * f
+    aBasisKrw *= 1 - f
+    aUnits -= units
+    return proceeds
+  }
+  const buyA = (i: number, usd: number, kind: 'o' | 'c'): void => {
+    if (usd <= 0) return
+    aUnits += usd / (px(aAsset, i, kind) * (1 + SIDE))
+    aBasisKrw += usd * fx[i]
+  }
+  const sellSoxl = (i: number, qty: number): number => {
+    const q = Math.min(qty, bQty)
+    if (q < 1) return 0
+    const proceeds = q * px('SOXL', i, 'c') * (1 - SIDE)
+    realizedYear += proceeds * fx[i] - bBasisKrw * (q / bQty)
+    bBasisKrw *= 1 - q / bQty
+    bQty -= q
+    bCashUsd += proceeds
+    return proceeds
+  }
+
+  for (let i = start; i < n; i++) {
+    // ① 연초 과세 — 전년 실현손익 정산 (첫 해 제외)
+    if (taxOn && i > start && qqqB[i].date.slice(0, 4) !== qqqB[i - 1].date.slice(0, 4)) {
+      const year = Number(qqqB[i - 1].date.slice(0, 4))
+      const taxable = Math.max(0, realizedYear - DEDUCT_KRW)
+      const taxKrw = taxable * TAX_RATE
+      taxes.push({ year, realizedKrw: realizedYear, taxKrw })
+      realizedYear = 0
+      if (taxKrw > 0) {
+        let needUsd = taxKrw / fx[i]
+        const fromCash = Math.min(bCashUsd, needUsd)
+        bCashUsd -= fromCash
+        needUsd -= fromCash
+        if (needUsd > 0 && aVal(i) > 0) {
+          const frac = Math.min(1, needUsd / (aVal(i) * (1 - SIDE)))
+          const proceeds = sellA(i, frac, 'c')
+          needUsd -= Math.min(needUsd, proceeds)
+        }
+        if (needUsd > 0) sellSoxl(i, Math.ceil(needUsd / (px('SOXL', i, 'c') * (1 - SIDE))))
+      }
+    }
+
+    // ② 시가: 스위칭 (신호 = 전일 종가 vs 전일 SMA)
+    if (i > start && wA > 0) {
+      const want: 'TQQQ' | 'QQQ' = qqqB[i - 1].c > (sma[i - 1] as number) ? 'TQQQ' : 'QQQ'
+      if (want !== aAsset) {
+        const proceeds = sellA(i, 1, 'o')
+        aAsset = want
+        buyA(i, proceeds, 'o')
+      }
+    }
+
+    // ③ 종가: VR 점검 (20거래일마다)
+    if (wA < 1 && i > start && (i - start) % VRP.periodDays === 0) {
+      V *= 1 + VRP.growthPct / 100
+      const stockVal = bQty * px('SOXL', i, 'c')
+      if (stockVal > V * (1 + VRP.bandPct / 100)) {
+        sellSoxl(i, Math.floor((stockVal - V) / px('SOXL', i, 'c')))
+      } else if (stockVal < V * (1 - VRP.bandPct / 100)) {
+        const budget = Math.min(bCashUsd, V - stockVal)
+        const q = Math.floor(budget / (px('SOXL', i, 'c') * (1 + SIDE)))
+        if (q >= 1) {
+          const spend = q * px('SOXL', i, 'c') * (1 + SIDE)
+          bCashUsd -= spend
+          bQty += q
+          bBasisKrw += spend * fx[i]
+        }
+      }
+    }
+
+    // ④ 종가: 월 재배분 (21거래일마다 · 목표 비중에서 1%p 이상 벗어날 때만)
+    if (wA > 0 && wA < 1 && i > start && (i - start) % REBAL_EVERY === 0) {
+      const total = aVal(i) + bVal(i)
+      const diff = aVal(i) - total * wA
+      if (Math.abs(diff) > total * 0.01) {
+        if (diff > 0) {
+          bCashUsd += sellA(i, diff / aVal(i), 'c')
+        } else {
+          let need = -diff
+          const fromCash = Math.min(bCashUsd, need)
+          bCashUsd -= fromCash
+          let raised = fromCash
+          need -= fromCash
+          if (need > 0) raised += sellSoxl(i, Math.ceil(need / (px('SOXL', i, 'c') * (1 - SIDE))))
+          // sellSoxl은 bCash로 넣으므로 그만큼 다시 꺼낸다
+          if (raised > fromCash) bCashUsd -= raised - fromCash
+          buyA(i, raised, 'c')
+        }
+      }
+    }
+
+    // ⑤ 절세 오버레이 — 연말 마지막 거래일 종가에 실행 (거래소 달력은 사전 공지 정보라
+    //    "마지막 거래일" 판정은 미래 가격 참조가 아니다. 규칙 1 위반 아님)
+    if (taxOn && optimize && (i + 1 >= n || qqqB[i + 1].date.slice(0, 4) !== qqqB[i].date.slice(0, 4)) && i > start) {
+      // (a) 손실 수확: 평가손실 포지션을 팔고 즉시 재매수 — 실현손실로 이익 상계 (한국은 워시세일 규정 없음)
+      if (aUnits > 0 && aVal(i) * fx[i] < aBasisKrw) {
+        const proceeds = sellA(i, 1, 'c')
+        buyA(i, proceeds, 'c')
+      }
+      if (bQty > 0 && bQty * px('SOXL', i, 'c') * fx[i] < bBasisKrw) {
+        const cashBefore = bCashUsd
+        sellSoxl(i, bQty)
+        const proceeds = bCashUsd - cashBefore
+        const q = Math.floor(proceeds / (px('SOXL', i, 'c') * (1 + SIDE)))
+        if (q >= 1) {
+          const spend = q * px('SOXL', i, 'c') * (1 + SIDE)
+          bCashUsd -= spend
+          bQty += q
+          bBasisKrw += spend * fx[i]
+        }
+      }
+      // (b) 공제 소진 스텝업: 실현이익이 250만 미달이면 평가이익을 그만큼 실현하고 재매수 (취득가 상향)
+      let needGain = DEDUCT_KRW - realizedYear
+      if (needGain > 0 && aUnits > 0) {
+        const gA = aVal(i) * fx[i] - aBasisKrw
+        if (gA > 0) {
+          const frac = Math.min(1, needGain / gA)
+          const proceeds = sellA(i, frac, 'c')
+          buyA(i, proceeds, 'c')
+          needGain = DEDUCT_KRW - realizedYear
+        }
+      }
+      if (needGain > 0 && bQty > 0) {
+        const gB = bQty * px('SOXL', i, 'c') * fx[i] - bBasisKrw
+        if (gB > 0) {
+          const cashBefore = bCashUsd
+          sellSoxl(i, Math.min(bQty, Math.ceil((needGain / gB) * bQty)))
+          const proceeds = bCashUsd - cashBefore
+          const q = Math.floor(proceeds / (px('SOXL', i, 'c') * (1 + SIDE)))
+          if (q >= 1) {
+            const spend = q * px('SOXL', i, 'c') * (1 + SIDE)
+            bCashUsd -= spend
+            bQty += q
+            bBasisKrw += spend * fx[i]
+          }
+        }
+      }
+    }
+
+    const usd = aVal(i) + bVal(i)
+    curveUsd.push({ date: qqqB[i].date, equity: usd })
+    curveKrw.push({ date: qqqB[i].date, equity: usd * fx[i] })
+  }
+  // 마지막 해 실현분 기록(과세는 이듬해 몫이라 차감 없이 표기만)
+  if (taxOn) taxes.push({ year: Number(qqqB[n - 1].date.slice(0, 4)), realizedKrw: realizedYear, taxKrw: -1 })
+
+  return { curveKrw, curveUsd, taxes, fxFrom: fx[start], fxTo: fx[n - 1] }
+}
+
+async function krwTaxMode(token: string): Promise<void> {
+  log('# MODE=krwtax — 원화 환산 + 양도세 연단위 과세 실측 (49차 · 대표 지시)')
+  log('')
+  const qqq = await loadTicker('QQQ', token)
+  await sleep(400)
+  const tqqq = await loadTicker('TQQQ', token)
+  await sleep(400)
+  const soxl = await loadTicker('SOXL', token)
+  const fxMap = await fetchUsdKrw()
+
+  const dSet = new Set(qqq.bars.map((b) => b.date))
+  const dSet2 = new Set(tqqq.bars.filter((b) => dSet.has(b.date)).map((b) => b.date))
+  const soxlB = soxl.bars.filter((b) => dSet2.has(b.date))
+  const dSet3 = new Set(soxlB.map((b) => b.date))
+  const qqqB = qqq.bars.filter((b) => dSet3.has(b.date))
+  const tqqqB = tqqq.bars.filter((b) => dSet3.has(b.date))
+  if (qqqB.length !== tqqqB.length || qqqB.length !== soxlB.length) throw new Error('3종목 교집합 정렬 실패')
+  log(`구간 ${qqqB[0].date} ~ ${qqqB[qqqB.length - 1].date} (${qqqB.length}봉) · tiingo 총수익 · 환율 야후 KRW=X ${fxMap.size}봉`)
+  log('')
+
+  const perfRow = (name: string, c: Curve): void => {
+    const p = perfOf(c)
+    log(`| ${name} | ${(p.total / 100 + 1).toFixed(1)}배 | ${f1(p.cagr)}% | ${f1(p.mdd)}% | ${f2(calmarOf(p))} |`)
+  }
+
+  // ① 환율·세금 없음(달러) vs 원화 무세 vs 원화 과세 — 혼합 50:50, 초기 1,000만원
+  const base = simulateKrwTax(qqqB, tqqqB, soxlB, fxMap, 0.5, 10_000_000, false)
+  const taxed = simulateKrwTax(qqqB, tqqqB, soxlB, fxMap, 0.5, 10_000_000, true)
+  log(`환율: 시작 ${base.fxFrom.toFixed(0)}원 → 끝 ${base.fxTo.toFixed(0)}원 (달러 ${((base.fxTo / base.fxFrom - 1) * 100).toFixed(0)}% 절상)`)
+  log('')
+  log('## ① 혼합 50:50 · 초기 1,000만원')
+  log('| 기준 | 최종배수 | CAGR | MDD | 칼마 |')
+  log('|---|---|---|---|---|')
+  perfRow('달러 · 무세', base.curveUsd)
+  perfRow('원화 · 무세 (환율만)', base.curveKrw)
+  perfRow('원화 · 연단위 과세', taxed.curveKrw)
+  log('')
+  log('연도별 실현이익·세금 (원화 과세 시나리오 · 만원):')
+  log('| 연도 | 실현이익 | 납부세금 |')
+  log('|---|---|---|')
+  let taxSum = 0
+  for (const t of taxed.taxes) {
+    const paid = t.taxKrw >= 0 ? `${Math.round(t.taxKrw / 10_000).toLocaleString()}` : '(이듬해 납부분)'
+    if (t.taxKrw > 0) taxSum += t.taxKrw
+    log(`| ${t.year} | ${Math.round(t.realizedKrw / 10_000).toLocaleString()} | ${paid} |`)
+  }
+  log(`납부 합계 ${Math.round(taxSum / 10_000).toLocaleString()}만원`)
+  log('')
+
+  // ② 규모·전략 비교 — 세후 CAGR + 절세 오버레이(연말 손실수확+공제 소진 스텝업) + 보유 벤치
+  log('## ② 규모·전략별 세후 성적 (원화 기준)')
+  log('| 시나리오 | 최종배수 | CAGR | MDD | 칼마 | 납부합계(만) |')
+  log('|---|---|---|---|---|---|')
+  const row2 = (name: string, r: KrwTaxResult): void => {
+    const p = perfOf(r.curveKrw)
+    const taxSum = r.taxes.reduce((s, t) => s + Math.max(0, t.taxKrw), 0)
+    log(
+      `| ${name} | ${(p.total / 100 + 1).toFixed(1)}배 | ${f1(p.cagr)}% | ${f1(p.mdd)}% | ` +
+        `${f2(calmarOf(p))} | ${Math.round(taxSum / 10_000).toLocaleString()} |`,
+    )
+  }
+  const scen: [string, number, number, boolean][] = [
+    ['혼합 50:50 · 200만', 0.5, 2_000_000, false],
+    ['혼합 50:50 · 1,000만', 0.5, 10_000_000, false],
+    ['혼합 50:50 · 1,000만 · 절세오버레이', 0.5, 10_000_000, true],
+    ['혼합 50:50 · 1억', 0.5, 100_000_000, false],
+    ['혼합 50:50 · 1억 · 절세오버레이', 0.5, 100_000_000, true],
+    ['스위칭 단독 · 1,000만', 1, 10_000_000, false],
+    ['스위칭 단독 · 1,000만 · 절세오버레이', 1, 10_000_000, true],
+    ['SOXL VR 단독 · 1,000만', 0, 10_000_000, false],
+  ]
+  for (const [name, w, cap, opt] of scen) {
+    row2(name, simulateKrwTax(qqqB, tqqqB, soxlB, fxMap, w, cap, true, opt))
+  }
+
+  // 보유 벤치 — 매매가 없으니 과세이연을 통째로 받는다: 청산 시 1회만 과세 (공제 1회 적용)
+  const fxArr: number[] = (() => {
+    const sorted = [...fxMap.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    const arr: number[] = new Array(qqqB.length)
+    let k = 0
+    let last = NaN
+    for (let i = 0; i < qqqB.length; i++) {
+      while (k < sorted.length && sorted[k][0] <= qqqB[i].date) {
+        last = sorted[k][1]
+        k++
+      }
+      arr[i] = last
+    }
+    return arr
+  })()
+  const holdEndTax = (name: string, bars: readonly DailyBar[], initialKrw: number): void => {
+    const start = 170 // 전략과 같은 시작점 (비교 가능성)
+    const side = 0.0006
+    const usd0 = (initialKrw * (1 - 0.005)) / fxArr[start]
+    const units = (usd0 * (1 - side)) / bars[start].c
+    const curve: Curve = []
+    for (let i = start; i < bars.length; i++) curve.push({ date: bars[i].date, equity: units * bars[i].c * fxArr[i] })
+    const basisKrw = usd0 * fxArr[start]
+    const finalKrw = curve[curve.length - 1].equity
+    const tax = Math.max(0, finalKrw * (1 - side) - basisKrw - 2_500_000) * 0.22
+    const afterTax = finalKrw - tax
+    const p = perfOf(curve)
+    const cagr = (Math.pow(afterTax / curve[0].equity, 1 / p.years) - 1) * 100
+    const calmar = Math.abs(p.mdd) > 0.01 ? cagr / Math.abs(p.mdd) : null
+    log(
+      `| ${name} 보유 · 1,000만 (청산 1회 과세) | ${(afterTax / curve[0].equity).toFixed(1)}배 | ${f1(cagr)}% | ` +
+        `${f1(p.mdd)}% | ${f2(calmar)} | ${Math.round(tax / 10_000).toLocaleString()} |`,
+    )
+  }
+  holdEndTax('QQQ', qqqB, 10_000_000)
+  holdEndTax('TQQQ', tqqqB, 10_000_000)
+  holdEndTax('SOXL', soxlB, 10_000_000)
+  log('')
+  log(
+    '읽는 법: 원화 무세와 달러 무세의 차이 = 환율 효과, 원화 과세와 원화 무세의 차이 = 세금의 ' +
+      '복리 손실. 공제 250만은 고정액이라 **원금이 작을수록 세부담이 급감**한다(200만 vs 1억 비교). ' +
+      '납부를 연초로 앞당긴 보수적 근사라 실제(5월 납부)는 이보다 아주 약간 낫다. 투자자문 아님(규칙 4).',
+  )
+}
+
+// ============================================================================
+// 5.12 MODE=beat — 챔피언(스위칭+SOXL VR 반반)을 이기는 배분이 있는가 (50차)
+// ============================================================================
+//
+// 대표 지시(2026-08-10): "반반 혼합보다 성과 좋은 거 찾아줘."
+// 부품 5개로 배분 공간을 전수 탐색한다: ①TQQQ↔QQQ 스위칭(L170) ②SOXL↔QQQ 스위칭
+// (SOXL 자기 150일선 — 반도체 쪽도 VR 대신 추세 게이트를 시험) ③SOXL VR 고원정점
+// ④TQQQ VR 고원정점 ⑤금 GLD 보유(32차 국장에서 금 슬리브가 칼마를 올린 이력).
+// 배분은 10%p 단위 심플렉스 전수(1,001조합), 월 재배분. **48차와 같은 자**(달러·무세·
+// 재배분 비용 [근사·미반영])로 재서 챔피언 0.81과 직접 비교 가능하게 한다.
+// 상위 후보는 이웃최소(인접 배분으로 10%p 옮긴 모든 변형의 최소 칼마)로 고원 여부까지 판정.
+
+function trendSwitchCurveBy(
+  signalB: readonly DailyBar[],
+  upB: readonly DailyBar[],
+  downB: readonly DailyBar[],
+  L: number,
+  cost: LadderCost,
+): Curve {
+  if (signalB.length !== upB.length || signalB.length !== downB.length) throw new Error('스위칭 정렬 실패')
+  const side = (cost.feePct + cost.slippagePct) / 100
+  const n = signalB.length
+  const sma: (number | null)[] = new Array(n).fill(null)
+  let sum = 0
+  for (let i = 0; i < n; i++) {
+    sum += signalB[i].c
+    if (i >= L) sum -= signalB[i - L].c
+    if (i >= L - 1) sma[i] = sum / L
+  }
+  const start = L
+  let inUp = signalB[start - 1].c > (sma[start - 1] as number)
+  let units = (cost.initialCapital * (1 - side)) / (inUp ? upB[start].o : downB[start].o)
+  const eq: Curve = []
+  for (let i = start; i < n; i++) {
+    if (i > start) {
+      const wantUp = signalB[i - 1].c > (sma[i - 1] as number)
+      if (wantUp !== inUp) {
+        const cash = units * (inUp ? upB[i].o : downB[i].o) * (1 - side)
+        inUp = wantUp
+        units = cash / ((inUp ? upB[i].o : downB[i].o) * (1 + side))
+      }
+    }
+    eq.push({ date: signalB[i].date, equity: units * (inUp ? upB[i].c : downB[i].c) })
+  }
+  return eq
+}
+
+/** N개 곡선을 고정 비중으로 결합, 21거래일마다 재배분. 비용 [근사·미반영] — 48차와 같은 자. */
+function blendN(curves: Curve[], weights: number[]): Curve {
+  const maps = curves.map((c) => new Map(c.map((e) => [e.date, e.equity])))
+  const dates = curves[0].filter((e) => maps.every((m) => m.has(e.date))).map((e) => e.date)
+  if (dates.length < 500) throw new Error(`혼합 공통 구간 부족: ${dates.length}`)
+  let vals = [...weights]
+  const eq: Curve = [{ date: dates[0], equity: 1 }]
+  for (let i = 1; i < dates.length; i++) {
+    for (let k = 0; k < vals.length; k++) {
+      if (vals[k] > 0) vals[k] *= (maps[k].get(dates[i]) as number) / (maps[k].get(dates[i - 1]) as number)
+    }
+    if (i % 21 === 0) {
+      const tot = vals.reduce((s, x) => s + x, 0)
+      vals = weights.map((w) => tot * w)
+    }
+    eq.push({ date: dates[i], equity: vals.reduce((s, x) => s + x, 0) })
+  }
+  return eq
+}
+
+async function beatMode(token: string): Promise<void> {
+  log('# MODE=beat — 챔피언(반반 혼합)을 이기는 배분 전수 탐색 (50차 · 대표 지시)')
+  log('')
+  const qqq = await loadTicker('QQQ', token)
+  await sleep(400)
+  const tqqq = await loadTicker('TQQQ', token)
+  await sleep(400)
+  const soxl = await loadTicker('SOXL', token)
+  await sleep(400)
+  const gld = await loadTicker('GLD', token)
+
+  // 4종목 교집합 정렬
+  let dates = new Set(qqq.bars.map((b) => b.date))
+  for (const t of [tqqq, soxl, gld]) {
+    const s = new Set(t.bars.map((b) => b.date))
+    dates = new Set([...dates].filter((d) => s.has(d)))
+  }
+  const cut = (bars: DailyBar[]): DailyBar[] => bars.filter((b) => dates.has(b.date))
+  const qqqB = cut(qqq.bars)
+  const tqqqB = cut(tqqq.bars)
+  const soxlB = cut(soxl.bars)
+  const gldB = cut(gld.bars)
+  if (new Set([qqqB.length, tqqqB.length, soxlB.length, gldB.length]).size !== 1) throw new Error('4종목 정렬 실패')
+  log(`구간 ${qqqB[0].date} ~ ${qqqB[qqqB.length - 1].date} (${qqqB.length}봉 · 4종목 교집합) · tiingo 총수익`)
+  log('')
+
+  const settings = {
+    initialCapital: 100_000,
+    positionPct: 100,
+    commissionPct: 0.01,
+    sellTaxPct: 0,
+    slippagePct: 0.05,
+    stopLossPct: null,
+    takeProfitPct: null,
+  }
+  const NAMES = ['스위칭TQQQ', '스위칭SOXL', 'VR·SOXL', 'VR·TQQQ', '금GLD']
+  const sleeves: Curve[] = [
+    trendSwitchCurveBy(qqqB, tqqqB, qqqB, 170, US_LADDER_COST),
+    trendSwitchCurveBy(soxlB, soxlB, qqqB, 150, US_LADDER_COST),
+    runValueRebalancing(soxlB, 1, { periodDays: 20, growthPct: 2, bandPct: 20, initialStockPct: 50 }, settings).equity,
+    runValueRebalancing(tqqqB, 1, { periodDays: 30, growthPct: 2, bandPct: 15, initialStockPct: 90 }, settings).equity,
+    buyHoldCurve(gldB, US_LADDER_COST),
+  ]
+  log('## 부품 단독 성적')
+  log('| 부품 | CAGR | MDD | 칼마 |')
+  log('|---|---|---|---|')
+  for (let k = 0; k < sleeves.length; k++) {
+    const p = perfOf(blendN([sleeves[k]], [1]))
+    log(`| ${NAMES[k]} | ${f1(p.cagr)}% | ${f1(p.mdd)}% | ${f2(calmarOf(p))} |`)
+  }
+  log('')
+  log('부품 간 일간수익률 상관 (스위칭TQQQ 기준): ' + sleeves.slice(1).map((c, k) => `${NAMES[k + 1]} ${dailyCorr(sleeves[0], c).toFixed(2)}`).join(' · '))
+  log('')
+
+  // 10%p 심플렉스 전수 — 5부품 합 100%
+  interface Combo {
+    w: number[]
+    cagr: number
+    mdd: number
+    calmar: number
+  }
+  const combos: Combo[] = []
+  for (let a = 0; a <= 10; a++)
+    for (let b = 0; b <= 10 - a; b++)
+      for (let c = 0; c <= 10 - a - b; c++)
+        for (let d = 0; d <= 10 - a - b - c; d++) {
+          const e = 10 - a - b - c - d
+          const w = [a / 10, b / 10, c / 10, d / 10, e / 10]
+          const p = perfOf(blendN(sleeves, w))
+          combos.push({ w, cagr: p.cagr, mdd: p.mdd, calmar: calmarOf(p) ?? 0 })
+        }
+  const key = (w: number[]): string => w.map((x) => Math.round(x * 10)).join(',')
+  const byKey = new Map(combos.map((c) => [key(c.w), c]))
+  const label = (w: number[]): string =>
+    w.map((x, k) => (x > 0 ? `${NAMES[k]}${Math.round(x * 100)}` : '')).filter(Boolean).join('+')
+  // 이웃최소: 한 부품에서 다른 부품으로 10%p 옮긴 모든 변형의 최소 칼마
+  const nbMin = (c: Combo): number => {
+    let min = c.calmar
+    for (let i = 0; i < 5; i++)
+      for (let j = 0; j < 5; j++) {
+        if (i === j || c.w[i] < 0.1) continue
+        const w2 = [...c.w]
+        w2[i] -= 0.1
+        w2[j] += 0.1
+        const n = byKey.get(key(w2))
+        if (n) min = Math.min(min, n.calmar)
+      }
+    return min
+  }
+
+  const champ = byKey.get('5,0,5,0,0') as Combo
+  const sorted = [...combos].sort((x, y) => y.calmar - x.calmar)
+  const champRank = sorted.indexOf(champ) + 1
+  log(`## 챔피언: ${label(champ.w)} — CAGR ${f1(champ.cagr)}% · MDD ${f1(champ.mdd)}% · 칼마 ${f2(champ.calmar)} · 이웃최소 ${f2(nbMin(champ))} · 전체 순위 ${champRank}/${combos.length}`)
+  log('')
+  log('## 칼마 상위 12 (1,001조합 전수)')
+  log('| 배분 | CAGR | MDD | 칼마 | 이웃최소 |')
+  log('|---|---|---|---|---|')
+  for (const c of sorted.slice(0, 12)) log(`| ${label(c.w)} | ${f1(c.cagr)}% | ${f1(c.mdd)}% | ${f2(c.calmar)} | ${f2(nbMin(c))} |`)
+  log('')
+  const hi = sorted.filter((c) => c.cagr >= 35)
+  log('## CAGR ≥ 35% 조건부 칼마 상위 5')
+  log('| 배분 | CAGR | MDD | 칼마 | 이웃최소 |')
+  log('|---|---|---|---|---|')
+  for (const c of hi.slice(0, 5)) log(`| ${label(c.w)} | ${f1(c.cagr)}% | ${f1(c.mdd)}% | ${f2(c.calmar)} | ${f2(nbMin(c))} |`)
+  log('')
+
+  // 심층 지표 (2026-08-10 대표 지시 "다 추가해서 표 업데이트") — 칼마가 못 보는 것들:
+  //  · 소르티노 = CAGR ÷ 연환산 하락편차(하락일 수익률만의 제곱평균 √×√252) — 하방 흔들림 대비 수익
+  //  · 최장 물밑 = 전고점을 깬 뒤 회복까지 최대 기간(개월=거래일/21) — 낙폭의 "길이"
+  //  · 최악 시작 3년 = 모든 시작 시점의 3년(756거래일) 연환산 수익률의 최솟값 — 입장 운 제거
+  //  · 최악 하루/1개월 = 일간·21거래일 최대 손실 — 꼬리 충격
+  interface DeepStats {
+    cagr: number
+    mdd: number
+    calmar: number | null
+    sortino: number | null
+    uwMonths: number
+    worst3y: number
+    worstDay: number
+    worstMonth: number
+  }
+  const deep = (c: Curve): DeepStats => {
+    const p = perfOf(c)
+    let downSq = 0
+    let worstDay = 0
+    let nRet = 0
+    for (let i = 1; i < c.length; i++) {
+      const r = c[i].equity / c[i - 1].equity - 1
+      nRet++
+      if (r < 0) downSq += r * r
+      if (r < worstDay) worstDay = r
+    }
+    const downDev = Math.sqrt(downSq / nRet) * Math.sqrt(252)
+    let worstMonth = 0
+    for (let i = 21; i < c.length; i++) {
+      const r = c[i].equity / c[i - 21].equity - 1
+      if (r < worstMonth) worstMonth = r
+    }
+    let peak = -Infinity
+    let peakIdx = 0
+    let maxUw = 0
+    for (let i = 0; i < c.length; i++) {
+      if (c[i].equity >= peak) {
+        peak = c[i].equity
+        peakIdx = i
+      } else if (i - peakIdx > maxUw) maxUw = i - peakIdx
+    }
+    let worst3y = Infinity
+    for (let i = 0; i + 756 < c.length; i++) {
+      const r = Math.pow(c[i + 756].equity / c[i].equity, 252 / 756) - 1
+      if (r < worst3y) worst3y = r
+    }
+    return {
+      cagr: p.cagr,
+      mdd: p.mdd,
+      calmar: calmarOf(p),
+      sortino: downDev > 0 ? p.cagr / 100 / downDev : null,
+      uwMonths: maxUw / 21,
+      worst3y: worst3y * 100,
+      worstDay: worstDay * 100,
+      worstMonth: worstMonth * 100,
+    }
+  }
+  log('## 심층 지표 — 주요 배분 비교')
+  log('| 배분 | CAGR | MDD | 칼마 | 소르티노 | 최장물밑 | 최악시작3년 | 최악하루 | 최악1개월 |')
+  log('|---|---|---|---|---|---|---|---|---|')
+  const deepRows: [string, Curve][] = [
+    ['반반(기존): 스위칭T50+VR·S50', blendN(sleeves, [0.5, 0, 0.5, 0, 0])],
+    ['금20 우승: T30+S20+VR·S30+금20', blendN(sleeves, [0.3, 0.2, 0.3, 0, 0.2])],
+    ['수익유지: T40+S10+VR·S40+금10', blendN(sleeves, [0.4, 0.1, 0.4, 0, 0.1])],
+    ['방어형: T10+S20+VR·S10+금60', blendN(sleeves, [0.1, 0.2, 0.1, 0, 0.6])],
+    ['벤치: QQQ 보유', buyHoldCurve(qqqB.slice(170), US_LADDER_COST)],
+  ]
+  for (const [name, curve] of deepRows) {
+    const d = deep(curve)
+    log(
+      `| ${name} | ${f1(d.cagr)}% | ${f1(d.mdd)}% | ${f2(d.calmar)} | ${f2(d.sortino)} | ` +
+        `${d.uwMonths.toFixed(0)}개월 | ${d.worst3y >= 0 ? '+' : ''}${f1(d.worst3y)}%/년 | ${f1(d.worstDay)}% | ${f1(d.worstMonth)}% |`,
+    )
+  }
+  log('')
+
+  // VR 없는 단순 운용 (2026-08-10 대표 질문 "vr 없이 tqqq 스위칭만 하면?")
+  // VR을 빼면 20거래일 점검이 사라져 루틴이 매일 이평선 1개 + 월 재배분만 남는다.
+  // 그 단순함의 대가(또는 이득)를 심층 지표로 잰다.
+  log('## VR 없는 단순 운용 — 스위칭만 / 스위칭+금')
+  log('| 구성 | CAGR | MDD | 칼마 | 소르티노 | 최장물밑 | 최악시작3년 | 최악하루 | 최악1개월 |')
+  log('|---|---|---|---|---|---|---|---|---|')
+  const simpleRows: [string, number[]][] = [
+    ['스위칭TQQQ 100 (VR 없음·단독)', [1, 0, 0, 0, 0]],
+    ['스위칭T90 + 금10', [0.9, 0, 0, 0, 0.1]],
+    ['스위칭T80 + 금20', [0.8, 0, 0, 0, 0.2]],
+    ['스위칭T70 + 금30', [0.7, 0, 0, 0, 0.3]],
+    ['스위칭T60 + 금40', [0.6, 0, 0, 0, 0.4]],
+    ['스위칭T50 + 금50', [0.5, 0, 0, 0, 0.5]],
+    ['스위칭T50 + 스위칭S20 + 금30 (VR 없음·3부품)', [0.5, 0.2, 0, 0, 0.3]],
+    ['스위칭T40 + 스위칭S30 + 금30 (VR 없음·3부품)', [0.4, 0.3, 0, 0, 0.3]],
+  ]
+  for (const [name, w] of simpleRows) {
+    const d = deep(blendN(sleeves, w))
+    const c = byKey.get(key(w))
+    log(
+      `| ${name} | ${f1(d.cagr)}% | ${f1(d.mdd)}% | ${f2(d.calmar)}${c ? `(이웃 ${f2(nbMin(c))})` : ''} | ${f2(d.sortino)} | ` +
+        `${d.uwMonths.toFixed(0)}개월 | ${d.worst3y >= 0 ? '+' : ''}${f1(d.worst3y)}%/년 | ${f1(d.worstDay)}% | ${f1(d.worstMonth)}% |`,
+    )
+  }
+  log('')
+  log(
+    '읽는 법: 챔피언보다 칼마가 높고 **이웃최소도 챔피언 이상**인 배분만 "이겼다"고 본다 — ' +
+      '한 점만 높은 건 배분 과최적화다. 48차와 같은 자(달러·무세·재배분 비용 근사 미반영)라 ' +
+      '수치는 실전형(49차)보다 후하다. 2010~26 한 개 창 · 투자자문 아님(규칙 4).',
+  )
+}
+
+// ============================================================================
 // 6. MODE=selftest — 네트워크 없이 도는 자기검증
 // ============================================================================
 
@@ -1239,12 +2358,17 @@ async function main(): Promise<void> {
   log('호출 종목 4개 — 무료 티어 한도(500 unique/월 · 50 req/시간)와 무관하다.')
   log('')
 
+  if (mode === 'vr') await vrMode(key.value)
+  if (mode === 'vrgrid') await vrGridMode(key.value)
+  if (mode === 'mix') await mixMode(key.value)
+  if (mode === 'krwtax') await krwTaxMode(key.value)
+  if (mode === 'beat') await beatMode(key.value)
   if (mode === 'real' || mode === 'all') await real(key.value)
   if (mode === 'synth' || mode === 'all') await synth(key.value)
   if (mode === 'prop' || mode === 'all') await prop(key.value)
   if (mode === 'sweep' || mode === 'all') await sweepMode(key.value)
   if (mode === 'dca' || mode === 'all') await dcaMode(key.value)
-  if (!['real', 'synth', 'prop', 'sweep', 'dca', 'all'].includes(mode)) throw new Error(`알 수 없는 MODE: ${mode}`)
+  if (!['real', 'synth', 'prop', 'sweep', 'dca', 'vr', 'vrgrid', 'mix', 'krwtax', 'beat', 'all'].includes(mode)) throw new Error(`알 수 없는 MODE: ${mode}`)
 
   log('')
   log('---')

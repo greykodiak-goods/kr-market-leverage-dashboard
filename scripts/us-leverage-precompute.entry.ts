@@ -22,10 +22,12 @@ import { dirname, join } from 'node:path'
 import {
   runProportionalLadder,
   runProportionalLadderDca,
+  runGeneralLadder,
   alignBars,
   US_LADDER_COST,
   LADDER_BASE,
   type Curve,
+  type GeneralLadderParams,
 } from '../src/features/backtest/leverageLadder'
 import { US_LEVERAGE_PRESETS, US_LEV_SCHEMA } from '../src/features/backtest/usLeveragePresets'
 import {
@@ -108,6 +110,61 @@ function sampleIdx(n: number): number[] {
 /** 주 1점 다운샘플. */
 function downsample(strat: Curve, bench: Curve): [string, number, number][] {
   return sampleIdx(strat.length).map((i) => [strat[i].date, Math.round(strat[i].equity), Math.round(bench[i].equity)])
+}
+
+// ── 적립식 반원금 근사 (2026-08-07 대표 지정 방식) ──────────────────────────
+// 매일 같은 금액을 넣으면 투자원금이 0→C로 선형 증가하므로, 시간 적분한 평균
+// 투자원금은 **총 납입액의 절반(C/2)**이다. 대표 지시: 그 절반을 원금으로 보고
+// 수익률·CAGR을 계산한다. **근사다** — 정확한 값은 현금흐름 IRR이며 둘 다 싣는다.
+export interface DcaHalfBase {
+  /** (평가액 − 납입액) ÷ (납입액/2) — 반원금 기준 총수익률 % */
+  totalPct: number
+  /** (평가액 ÷ 반원금)^(1/년수) − 1 — 반원금을 기초에 넣은 셈 치는 연환산 % */
+  cagrPct: number
+}
+
+export function dcaHalfBase(contributed: number, finalValue: number, years: number): DcaHalfBase {
+  const half = contributed / 2
+  if (!(half > 0) || !(years > 0)) throw new Error('반원금 근사: 납입액·기간이 양수여야 한다')
+  return {
+    totalPct: ((finalValue - contributed) / half) * 100,
+    cagrPct: (Math.pow(Math.max(finalValue / half, 1e-9), 1 / years) - 1) * 100,
+  }
+}
+
+/**
+ * 적립식 IRR(연환산 %) — 이분법. 매 봉 시가에 -amount, 마지막에 +finalValue.
+ * NPV(r)=0인 r을 찾는다. 근사(반원금)와 나란히 실어 차이를 보이게 한다.
+ */
+export function dcaIrrPct(dates: readonly string[], amount: number, finalValue: number): number {
+  const t0 = Date.parse(dates[0])
+  const yr = (d: string): number => (Date.parse(d) - t0) / (365.25 * 86400e3)
+  const end = yr(dates[dates.length - 1])
+  const npv = (r: number): number => {
+    let v = 0
+    for (const d of dates) v -= amount / Math.pow(1 + r, yr(d))
+    return v + finalValue / Math.pow(1 + r, end)
+  }
+  let lo = -0.99
+  let hi = 10
+  if (npv(lo) * npv(hi) > 0) throw new Error('IRR 구간에 근이 없다 — 데이터를 의심하라')
+  for (let i = 0; i < 200; i++) {
+    const mid = (lo + hi) / 2
+    if (npv(lo) * npv(mid) <= 0) hi = mid
+    else lo = mid
+  }
+  return ((lo + hi) / 2) * 100
+}
+
+/** 곡선 최대낙폭(%) — 평가액 기준 러닝 피크 대비. */
+export function curveMddPct(values: readonly number[]): number {
+  let peak = -Infinity
+  let mdd = 0
+  for (const v of values) {
+    peak = Math.max(peak, v)
+    if (peak > 0) mdd = Math.min(mdd, (v / peak - 1) * 100)
+  }
+  return mdd
 }
 
 /**
@@ -200,32 +257,102 @@ async function main(): Promise<void> {
   })
 
   // ── 적립식 요약 — 매일 1만원 ──────────────────────────────────────────────
+  const windowYears = Math.max(
+    1 / 365,
+    (Date.parse(base[base.length - 1].date) - Date.parse(base[0].date)) / (365.25 * 86400e3),
+  )
+
+  // 단순 적립 3종은 일별 평가액 곡선까지 만들어 MDD·반원금 근사·IRR을 계산한다(대표 지정 방식).
+  const dcaHold = LADDER.map((sym) => {
+    const bars = aligned.get(sym)!
+    const side = (US_LADDER_COST.feePct + US_LADDER_COST.slippagePct) / 100
+    let shares = 0
+    let contributed = 0
+    const values: number[] = []
+    for (const b of bars) {
+      shares += (DCA_DAILY * (1 - side)) / b.o
+      contributed += DCA_DAILY
+      values.push(shares * b.c)
+    }
+    const finalValue = values[values.length - 1]
+    const half = dcaHalfBase(contributed, finalValue, windowYears)
+    const mddPct = curveMddPct(values)
+    return {
+      symbol: sym,
+      label: `${sym} 단순 적립`,
+      contributed,
+      finalValue,
+      multiple: +(finalValue / contributed).toFixed(2),
+      // 반원금 근사(대표 지정): 유효원금 = 납입액/2. 정확값은 irrPct.
+      halfBaseTotalPct: +half.totalPct.toFixed(1),
+      halfBaseCagrPct: +half.cagrPct.toFixed(1),
+      irrPct: +dcaIrrPct(bars.map((b) => b.date), DCA_DAILY, finalValue).toFixed(1),
+      mddPct: +mddPct.toFixed(1),
+      calmar: Math.abs(mddPct) > 0.01 ? +(half.cagrPct / Math.abs(mddPct)).toFixed(2) : null,
+    }
+  })
+
   const dcaRows = [
-    ...LADDER.map((sym) => {
-      const bars = aligned.get(sym)!
-      const side = (US_LADDER_COST.feePct + US_LADDER_COST.slippagePct) / 100
-      let shares = 0
-      let contributed = 0
-      for (const b of bars) {
-        shares += (DCA_DAILY * (1 - side)) / b.o
-        contributed += DCA_DAILY
-      }
-      const finalValue = shares * bars[bars.length - 1].c
-      return { label: `${sym} 단순 적립`, contributed, finalValue, multiple: +(finalValue / contributed).toFixed(2) }
-    }),
+    ...dcaHold.map((h) => ({ label: h.label, contributed: h.contributed, finalValue: h.finalValue, multiple: h.multiple })),
     ...US_LEVERAGE_PRESETS.map((preset) => {
       const r = runProportionalLadderDca(base, aligned, preset.params, US_LADDER_COST, DCA_DAILY, 'weights')
-      // 같은 이름 4줄이 나란히 있으면 무엇이 무엇인지 알 수 없다 — 파라미터로 구분한다.
+      // 같은 이름이 나란히 있으면 무엇이 무엇인지 알 수 없다 — 파라미터로 전부 구분한다.
       const q = preset.params
-      const tp = q.tpFracPct !== 10 ? ` · 익절 ${q.tpFracPct}%` : ''
+      const frac = q.tpFracPct !== 10 ? ` · 규모 ${q.tpFracPct}%` : ''
       return {
-        label: `사다리 밴드 ${q.band1Pct}/${q.band2Pct}%${tp} 적립`,
+        label: `사다리 ${q.band1Pct}/${q.band2Pct} · 익절+${q.tpStepPct}%${frac} 적립`,
         contributed: r.contributed,
         finalValue: r.finalValue,
         multiple: +r.multiple.toFixed(2),
       }
     }),
   ].sort((a, b) => b.finalValue - a.finalValue)
+
+  // ── 4변수 격자 전수 탐색 — 칼마 1위 (대표 지시 "젤 칼마값 좋은거") ─────────
+  // 하락폭 4~30(2 간격) × 매도횟수 1~5 × 상승폭 4~30(2 간격) × 매수등분 {1,2,3,5,10,20}
+  const DROPS = Array.from({ length: 14 }, (_, i) => 4 + i * 2)
+  const RISES = DROPS
+  const SELLS = [1, 2, 3, 4, 5]
+  const BUYS = [1, 2, 3, 5, 10, 20]
+  let gridBest: {
+    params: GeneralLadderParams
+    cagrPct: number
+    mddPct: number
+    calmar: number
+    alphaCagrPct: number
+    trades: number
+    gridSize: number
+  } | null = null
+  let gridCount = 0
+  const benchPerfFull = perfOf(bench)
+  for (const dropStepPct of DROPS)
+    for (const sellTranches of SELLS)
+      for (const riseStepPct of RISES)
+        for (const buyTranches of BUYS) {
+          gridCount++
+          const r = runGeneralLadder(base, aligned, { dropStepPct, sellTranches, riseStepPct, buyTranches }, US_LADDER_COST)
+          const pf = perfOf(r.equity)
+          const cal = calmarOf(pf)
+          if (cal == null) continue
+          if (!gridBest || cal > gridBest.calmar || (cal === gridBest.calmar && pf.cagr > gridBest.cagrPct)) {
+            gridBest = {
+              params: { dropStepPct, sellTranches, riseStepPct, buyTranches },
+              cagrPct: +pf.cagr.toFixed(1),
+              mddPct: +pf.mdd.toFixed(1),
+              calmar: +cal.toFixed(3),
+              alphaCagrPct: +(pf.cagr - benchPerfFull.cagr).toFixed(1),
+              trades: r.trades,
+              gridSize: 0,
+            }
+          }
+        }
+  if (!gridBest) throw new Error('격자 탐색이 후보 0개로 끝났다 — 비정상')
+  gridBest.gridSize = gridCount
+  console.log(
+    `격자 ${gridCount}조합 탐색 — 칼마 1위: 매도 ${gridBest.params.dropStepPct}%×${gridBest.params.sellTranches}회 · ` +
+      `매수 ${gridBest.params.riseStepPct}%×1/${gridBest.params.buyTranches} · 칼마 ${gridBest.calmar} ` +
+      `(벤치 ${calmarOf(benchPerfFull)?.toFixed(2)})`,
+  )
 
   const artifact = {
     schema: US_LEV_SCHEMA,
@@ -248,6 +375,22 @@ async function main(): Promise<void> {
     walls,
     presets,
     dca: { dailyAmount: DCA_DAILY, rows: dcaRows },
+    // 스키마 3: 단순 적립 3종의 상세 지표 — 반원금 근사(대표 지정) + 정확 IRR + MDD.
+    dcaHold,
+    // 스키마 4: 일봉(시가·종가)을 산출물에 싣는다 — 브라우저가 4변수 일반화 사다리를
+    // **직접 재계산**할 수 있게(대표 지시 "값 조정하면서"). 키가 아니라 데이터만 나간다(규칙 2-1 유지).
+    bars: {
+      dates: base.map((b) => b.date),
+      series: Object.fromEntries(
+        LADDER.map((sym) => {
+          const bs = aligned.get(sym)!
+          return [sym, { o: bs.map((b) => +b.o.toFixed(4)), c: bs.map((b) => +b.c.toFixed(4)) }]
+        }),
+      ),
+    },
+    // 스키마 4: 4변수 격자 전수 탐색의 칼마 1위 — 화면 "최적 보기" 버튼용.
+    // ⚠️ 격자 1위를 고르는 것 자체가 과최적화다 — 화면·보고 양쪽에 그 경고를 붙인다.
+    best: gridBest,
     limits: [
       '환율 미반영 — 원화 투자자 기준 손익이 아니다',
       '세금 미반영 — 미국 배당 원천징수 15% 포함',
