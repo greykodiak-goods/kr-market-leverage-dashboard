@@ -1,14 +1,14 @@
 {
  "track": "ma15x60",
  "label": "전체 80 · MA15→60선·버퍼2% (17차 수익÷MDD 후보)",
- "updatedAt": "2026-08-26T08:22:57.959Z",
+ "updatedAt": "2026-08-27T18:24:47.727Z",
  "inception": "2026-08-01",
  "strategyType": "spec",
  "dataNote": "Yahoo 일봉(비공식·총수익 보정) 근사 체결 — 실호가 대조는 2단계에서. 시뮬레이션이며 투자자문 아님.",
  "summary": {
   "equity": 9957668,
   "totalPct": -0.42,
-  "benchTotalPct": -1.02,
+  "benchTotalPct": 0.29,
   "mddPct": -0.42,
   "trades": 1,
   "open": 2,
