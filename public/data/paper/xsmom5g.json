@@ -1,18 +1,18 @@
 {
  "track": "xsmom5g",
  "label": "모멘텀 12-1 상위5+게이트 (25차 · MDD −61% [추정])",
- "updatedAt": "2026-08-31T15:26:29.028Z",
+ "updatedAt": "2026-09-01T12:44:40.009Z",
  "inception": "2026-08-03",
  "strategyType": "xsmom",
  "dataNote": "횡단면 모멘텀(12-1) · 매월 첫 거래일 시가 리밸런스. Yahoo 일봉(비공식·총수익 보정) 근사 체결 — 실호가 대조는 2단계에서. ⚠️ 25차 백테스트 실측 최대낙폭 −61~−68% [추정] — 낙폭이 깊은 계열이다. 시뮬레이션이며 투자자문 아님.",
  "summary": {
-  "equity": 10385411,
-  "totalPct": 3.85,
-  "benchTotalPct": 8.15,
+  "equity": 10398433,
+  "totalPct": 3.98,
+  "benchTotalPct": 8.86,
   "mddPct": -7.9,
-  "trades": 0,
+  "trades": 1,
   "open": 5,
-  "winRatePct": null
+  "winRatePct": 100
  },
  "openPositions": [
   {
@@ -21,19 +21,19 @@
    "qty": 1,
    "exitDate": null,
    "exitPrice": null,
-   "pnl": 198595.66685000062,
-   "pnlPct": 16.246315680037043,
+   "pnl": 207595.66685000062,
+   "pnlPct": 16.98256961467486,
    "reason": "보유중(미청산)",
    "symbol": "009150.KS"
   },
   {
    "entryDate": "2026-08-03",
-   "entryPrice": 1071069.9999999998,
-   "qty": 1,
+   "entryPrice": 1044042.9999999998,
+   "qty": 2,
    "exitDate": null,
    "exitPrice": null,
-   "pnl": -43230.6604999993,
-   "pnlPct": -4.035607091363618,
+   "pnl": 45600.78710000077,
+   "pnlPct": 2.1835282650139707,
    "reason": "보유중(미청산)",
    "symbol": "402340.KS"
   },
@@ -43,32 +43,32 @@
    "qty": 1,
    "exitDate": null,
    "exitPrice": null,
-   "pnl": 9467.874334082007,
-   "pnlPct": 0.5760687111756858,
+   "pnl": 49467.87433408201,
+   "pnlPct": 3.0098513781127862,
    "reason": "보유중(미청산)",
    "symbol": "000660.KS"
   },
   {
    "entryDate": "2026-08-03",
-   "entryPrice": 126526.39999999998,
-   "qty": 15,
+   "entryPrice": 126376.24999999999,
+   "qty": 16,
    "exitDate": null,
    "exitPrice": null,
-   "pnl": 30819.315600000322,
-   "pnlPct": 1.6236239180645793,
+   "pnl": -11123.30299999984,
+   "pnlPct": -0.5500259520077261,
    "reason": "보유중(미청산)",
    "symbol": "319660.KQ"
   },
   {
-   "entryDate": "2026-08-03",
-   "entryPrice": 130029.89999999998,
-   "qty": 15,
+   "entryDate": "2026-09-01",
+   "entryPrice": 175775.59999999998,
+   "qty": 11,
    "exitDate": null,
    "exitPrice": null,
-   "pnl": 189758.9327250002,
-   "pnlPct": 9.727530522032604,
+   "pnl": -30821.62973999954,
+   "pnlPct": -1.5938196815051386,
    "reason": "보유중(미청산)",
-   "symbol": "095610.KQ"
+   "symbol": "036930.KQ"
   }
  ],
  "trades": [
@@ -78,19 +78,19 @@
    "qty": 1,
    "exitDate": null,
    "exitPrice": null,
-   "pnl": 198595.66685000062,
-   "pnlPct": 16.246315680037043,
+   "pnl": 207595.66685000062,
+   "pnlPct": 16.98256961467486,
    "reason": "보유중(미청산)",
    "symbol": "009150.KS"
   },
   {
    "entryDate": "2026-08-03",
-   "entryPrice": 1071069.9999999998,
-   "qty": 1,
+   "entryPrice": 1044042.9999999998,
+   "qty": 2,
    "exitDate": null,
    "exitPrice": null,
-   "pnl": -43230.6604999993,
-   "pnlPct": -4.035607091363618,
+   "pnl": 45600.78710000077,
+   "pnlPct": 2.1835282650139707,
    "reason": "보유중(미청산)",
    "symbol": "402340.KS"
   },
@@ -100,19 +100,19 @@
    "qty": 1,
    "exitDate": null,
    "exitPrice": null,
-   "pnl": 9467.874334082007,
-   "pnlPct": 0.5760687111756858,
+   "pnl": 49467.87433408201,
+   "pnlPct": 3.0098513781127862,
    "reason": "보유중(미청산)",
    "symbol": "000660.KS"
   },
   {
    "entryDate": "2026-08-03",
-   "entryPrice": 126526.39999999998,
-   "qty": 15,
+   "entryPrice": 126376.24999999999,
+   "qty": 16,
    "exitDate": null,
    "exitPrice": null,
-   "pnl": 30819.315600000322,
-   "pnlPct": 1.6236239180645793,
+   "pnl": -11123.30299999984,
+   "pnlPct": -0.5500259520077261,
    "reason": "보유중(미청산)",
    "symbol": "319660.KQ"
   },
@@ -120,12 +120,23 @@
    "entryDate": "2026-08-03",
    "entryPrice": 130029.89999999998,
    "qty": 15,
+   "exitDate": "2026-09-01",
+   "exitPrice": 139460.4,
+   "pnl": 137713.28782500047,
+   "pnlPct": 7.059537020839617,
+   "reason": "조건 매도",
+   "symbol": "095610.KQ"
+  },
+  {
+   "entryDate": "2026-09-01",
+   "entryPrice": 175775.59999999998,
+   "qty": 11,
    "exitDate": null,
    "exitPrice": null,
-   "pnl": 189758.9327250002,
-   "pnlPct": 9.727530522032604,
+   "pnl": -30821.62973999954,
+   "pnlPct": -1.5938196815051386,
    "reason": "보유중(미청산)",
-   "symbol": "095610.KQ"
+   "symbol": "036930.KQ"
   }
  ],
  "equity": [
@@ -204,6 +215,14 @@
   {
    "date": "2026-08-28",
    "equity": 10385411
+  },
+  {
+   "date": "2026-08-31",
+   "equity": 10435911
+  },
+  {
+   "date": "2026-09-01",
+   "equity": 10398433
   }
  ],
  "excluded": []
