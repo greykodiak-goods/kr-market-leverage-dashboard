@@ -1,21 +1,34 @@
 {
  "track": "all80",
  "label": "전체 80 (코스피38+코스닥40)",
- "updatedAt": "2026-09-02T12:17:31.046Z",
+ "updatedAt": "2026-09-03T12:15:26.766Z",
  "inception": "2026-07-31",
  "strategyType": "spec",
  "dataNote": "Yahoo 일봉(비공식·총수익 보정) 근사 체결 — 실호가 대조는 2단계에서. 시뮬레이션이며 투자자문 아님.",
  "summary": {
-  "equity": 9922163,
-  "totalPct": -0.78,
-  "benchTotalPct": -4.89,
-  "mddPct": -1.11,
-  "trades": 0,
-  "open": 2,
-  "winRatePct": null
+  "equity": 9979292,
+  "totalPct": -0.21,
+  "benchTotalPct": -4.79,
+  "mddPct": -0.66,
+  "trades": 1,
+  "open": 1,
+  "winRatePct": 0
  },
  "openPositions": [],
- "trades": [],
+ "trades": [
+  {
+   "entryDate": "2026-08-24",
+   "entryPrice": 117116.99999999999,
+   "qty": 8,
+   "exitDate": "2026-08-26",
+   "exitPrice": 109697.083734375,
+   "pnl": -60947.872030293685,
+   "pnlPct": -6.504044163167025,
+   "reason": "조건 매도",
+   "symbol": "247540.KQ",
+   "entryWeightPct": 9.37108127041497
+  }
+ ],
  "equity": [
   {
    "date": "2026-07-31",
@@ -83,31 +96,35 @@
   },
   {
    "date": "2026-08-25",
-   "equity": 9949163
+   "equity": 9936293
   },
   {
    "date": "2026-08-26",
-   "equity": 9973163
+   "equity": 9957292
   },
   {
    "date": "2026-08-27",
-   "equity": 10027163
+   "equity": 9959292
   },
   {
    "date": "2026-08-28",
-   "equity": 10033763
+   "equity": 9964292
   },
   {
    "date": "2026-08-31",
-   "equity": 10032563
+   "equity": 9942292
   },
   {
    "date": "2026-09-01",
-   "equity": 10007763
+   "equity": 9954292
   },
   {
    "date": "2026-09-02",
-   "equity": 9922163
+   "equity": 9934292
+  },
+  {
+   "date": "2026-09-03",
+   "equity": 9979292
   }
  ],
  "excluded": []

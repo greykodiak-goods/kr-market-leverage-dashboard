@@ -1,14 +1,14 @@
 {
  "track": "ma15x60",
  "label": "전체 80 · MA15→60선·버퍼2% (17차 수익÷MDD 후보)",
- "updatedAt": "2026-09-02T12:17:31.066Z",
+ "updatedAt": "2026-09-03T12:15:26.788Z",
  "inception": "2026-08-01",
  "strategyType": "spec",
  "dataNote": "Yahoo 일봉(비공식·총수익 보정) 근사 체결 — 실호가 대조는 2단계에서. 시뮬레이션이며 투자자문 아님.",
  "summary": {
-  "equity": 9851858,
-  "totalPct": -1.48,
-  "benchTotalPct": -4.89,
+  "equity": 9872628,
+  "totalPct": -1.27,
+  "benchTotalPct": -4.79,
   "mddPct": -2.16,
   "trades": 4,
   "open": 3,
@@ -21,9 +21,9 @@
    "entryPrice": 117116.99999999999,
    "qty": 8,
    "exitDate": "2026-08-25",
-   "exitPrice": 114085.8,
-   "pnl": -25896.072959999903,
-   "pnlPct": -2.7634960265834763,
+   "exitPrice": 112454.2847109375,
+   "pnl": -38926.65927068435,
+   "pnlPct": -4.154053334220505,
    "reason": "조건 매도",
    "symbol": "247540.KQ",
    "entryWeightPct": 9.37108127041497
@@ -38,7 +38,7 @@
    "pnlPct": -1.1074568796635043,
    "reason": "조건 매도",
    "symbol": "267260.KS",
-   "entryWeightPct": 8.254767100577135
+   "entryWeightPct": 8.265585553827053
   },
   {
    "entryDate": "2026-08-27",
@@ -50,7 +50,7 @@
    "pnlPct": -1.9453962328734395,
    "reason": "조건 매도",
    "symbol": "178320.KQ",
-   "entryWeightPct": 11.643686153736581
+   "entryWeightPct": 11.658949376473673
   },
   {
    "entryDate": "2026-08-27",
@@ -62,7 +62,7 @@
    "pnlPct": -10.228009173244818,
    "reason": "조건 매도",
    "symbol": "010120.KS",
-   "entryWeightPct": 8.82703794846462
+   "entryWeightPct": 8.83860530436571
   }
  ],
  "equity": [
@@ -128,31 +128,35 @@
   },
   {
    "date": "2026-08-25",
-   "equity": 9959268
+   "equity": 9946237
   },
   {
    "date": "2026-08-26",
-   "equity": 9957668
+   "equity": 9944637
   },
   {
    "date": "2026-08-27",
-   "equity": 10069130
+   "equity": 10056099
   },
   {
    "date": "2026-08-28",
-   "equity": 9990954
+   "equity": 9977923
   },
   {
    "date": "2026-08-31",
-   "equity": 10008954
+   "equity": 9995923
   },
   {
    "date": "2026-09-01",
-   "equity": 9957354
+   "equity": 9944323
   },
   {
    "date": "2026-09-02",
-   "equity": 9851858
+   "equity": 9838828
+  },
+  {
+   "date": "2026-09-03",
+   "equity": 9872628
   }
  ],
  "excluded": []
