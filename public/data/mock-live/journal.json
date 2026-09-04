@@ -1325,5 +1325,67 @@
    "totalPct": 0
   },
   "dataNote": "장부는 **주문 전송가를 체결가로 가정**한다(지정가 미체결·부분체결·실제 체결가 차이 미반영). 시세는 Yahoo 일봉(비공식·총수익 보정)이고 15:20 종가는 미확정값이다. 동결 유니버스라 생존편향이 있고 환율·거래세 외 세금은 반영하지 않는다. 실체결 대조는 2단계 게이트에서 한다."
+ },
+ {
+  "at": "2026-09-04T09:56:12.437Z",
+  "date": "2026-09-04",
+  "runner": "investing-daemon",
+  "phase": "close",
+  "mode": "dryRun",
+  "tradingDay": null,
+  "notes": [],
+  "summary": [
+   {
+    "id": "ma20-all80",
+    "equity": 20000000,
+    "totalPct": 0,
+    "alphaPct": 0,
+    "positions": 0,
+    "closedTrades": 0,
+    "winRatePct": null
+   },
+   {
+    "id": "ma15-all80",
+    "equity": 20000000,
+    "totalPct": 0,
+    "alphaPct": 0,
+    "positions": 0,
+    "closedTrades": 0,
+    "winRatePct": null
+   },
+   {
+    "id": "ma20-kosdaq",
+    "equity": 20000000,
+    "totalPct": 0,
+    "alphaPct": 0,
+    "positions": 0,
+    "closedTrades": 0,
+    "winRatePct": null
+   },
+   {
+    "id": "ma20-surge",
+    "equity": 20000000,
+    "totalPct": 0,
+    "alphaPct": 0,
+    "positions": 0,
+    "closedTrades": 0,
+    "winRatePct": null
+   },
+   {
+    "id": "bench-hold",
+    "equity": 20000000,
+    "totalPct": 0,
+    "alphaPct": null,
+    "positions": 0,
+    "closedTrades": 0,
+    "winRatePct": null
+   }
+  ],
+  "totals": {
+   "equity": 100000000,
+   "initialCapital": 100000000,
+   "totalPct": 0
+  },
+  "dataNote": "장부는 **주문 전송가를 체결가로 가정**한다(지정가 미체결·부분체결·실제 체결가 차이 미반영). 시세는 Yahoo 일봉(비공식·총수익 보정)이고 15:20 종가는 미확정값이다. 동결 유니버스라 생존편향이 있고 환율·거래세 외 세금은 반영하지 않는다. 실체결 대조는 2단계 게이트에서 한다."
  }
 ]
