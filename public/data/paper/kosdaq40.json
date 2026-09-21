@@ -1,14 +1,14 @@
 {
  "track": "kosdaq40",
  "label": "코스닥 40",
- "updatedAt": "2026-09-18T12:22:28.914Z",
+ "updatedAt": "2026-09-21T14:32:21.408Z",
  "inception": "2026-07-31",
  "strategyType": "spec",
  "dataNote": "Yahoo 일봉(비공식·총수익 보정) 근사 체결 — 실호가 대조는 2단계에서. 시뮬레이션이며 투자자문 아님.",
  "summary": {
-  "equity": 9944001,
-  "totalPct": -0.56,
-  "benchTotalPct": 0.43,
+  "equity": 9942501,
+  "totalPct": -0.57,
+  "benchTotalPct": 2.65,
   "mddPct": -1.23,
   "trades": 1,
   "open": 1,
@@ -169,6 +169,10 @@
   {
    "date": "2026-09-18",
    "equity": 9944001
+  },
+  {
+   "date": "2026-09-21",
+   "equity": 9942501
   }
  ],
  "excluded": []
