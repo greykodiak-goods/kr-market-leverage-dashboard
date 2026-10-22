@@ -1,15 +1,15 @@
 {
  "track": "all80",
  "label": "전체 80 (코스피38+코스닥40)",
- "updatedAt": "2026-10-21T13:13:16.690Z",
+ "updatedAt": "2026-10-22T13:11:42.075Z",
  "inception": "2026-07-31",
  "strategyType": "spec",
  "dataNote": "Yahoo 일봉(비공식·총수익 보정) 근사 체결 — 실호가 대조는 2단계에서. 시뮬레이션이며 투자자문 아님.",
  "summary": {
-  "equity": 9562286,
-  "totalPct": -4.38,
-  "benchTotalPct": -17.55,
-  "mddPct": -6.02,
+  "equity": 9456986,
+  "totalPct": -5.43,
+  "benchTotalPct": -20.49,
+  "mddPct": -6.42,
   "trades": 5,
   "open": 3,
   "winRatePct": 0
@@ -293,6 +293,10 @@
   {
    "date": "2026-10-21",
    "equity": 9562286
+  },
+  {
+   "date": "2026-10-22",
+   "equity": 9456986
   }
  ],
  "excluded": []
