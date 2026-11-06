@@ -1,18 +1,18 @@
 {
  "track": "ma15",
  "label": "전체 80 · 진입 MA15 (도전자 — 14차)",
- "updatedAt": "2026-11-05T15:48:12.870Z",
+ "updatedAt": "2026-11-06T15:23:03.227Z",
  "inception": "2026-07-31",
  "strategyType": "spec",
  "dataNote": "Yahoo 일봉(비공식·총수익 보정) 근사 체결 — 실호가 대조는 2단계에서. 시뮬레이션이며 투자자문 아님.",
  "summary": {
-  "equity": 8976002,
-  "totalPct": -10.24,
+  "equity": 9001354,
+  "totalPct": -9.99,
   "benchTotalPct": -22.14,
   "mddPct": -12.31,
-  "trades": 11,
+  "trades": 12,
   "open": 2,
-  "winRatePct": 9.1
+  "winRatePct": 8.3
  },
  "openPositions": [],
  "trades": [
@@ -147,6 +147,18 @@
    "reason": "조건 매도",
    "symbol": "373220.KS",
    "entryWeightPct": 7.477371119358183
+  },
+  {
+   "entryDate": "2026-09-28",
+   "entryPrice": 39739.7,
+   "qty": 26,
+   "exitDate": "2026-11-05",
+   "exitPrice": 33766.2,
+   "pnl": -156914.55481,
+   "pnlPct": -15.184488167986487,
+   "reason": "조건 매도",
+   "symbol": "028300.KQ",
+   "entryWeightPct": 10.673148911272037
   }
  ],
  "equity": [
@@ -404,7 +416,11 @@
   },
   {
    "date": "2026-11-04",
-   "equity": 8976002
+   "equity": 8975081
+  },
+  {
+   "date": "2026-11-05",
+   "equity": 9001354
   }
  ],
  "excluded": []
