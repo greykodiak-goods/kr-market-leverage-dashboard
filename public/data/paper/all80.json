@@ -1,17 +1,17 @@
 {
  "track": "all80",
  "label": "전체 80 (코스피38+코스닥40)",
- "updatedAt": "2026-11-10T15:46:53.682Z",
+ "updatedAt": "2026-11-11T15:37:17.525Z",
  "inception": "2026-07-31",
  "strategyType": "spec",
  "dataNote": "Yahoo 일봉(비공식·총수익 보정) 근사 체결 — 실호가 대조는 2단계에서. 시뮬레이션이며 투자자문 아님.",
  "summary": {
-  "equity": 9129411,
-  "totalPct": -8.71,
-  "benchTotalPct": -24.54,
+  "equity": 9152729,
+  "totalPct": -8.47,
+  "benchTotalPct": -22.2,
   "mddPct": -9.66,
-  "trades": 7,
-  "open": 2,
+  "trades": 8,
+  "open": 1,
   "winRatePct": 0
  },
  "openPositions": [],
@@ -99,6 +99,18 @@
    "reason": "조건 매도",
    "symbol": "028300.KQ",
    "entryWeightPct": 10.509416070613739
+  },
+  {
+   "entryDate": "2026-10-12",
+   "entryPrice": 21821.8,
+   "qty": 48,
+   "exitDate": "2026-11-10",
+   "exitPrice": 21078.9,
+   "pnl": -37485.765839999774,
+   "pnlPct": -3.5782397856756214,
+   "reason": "조건 매도",
+   "symbol": "011200.KS",
+   "entryWeightPct": 10.520475012705415
   }
  ],
  "equity": [
@@ -369,6 +381,10 @@
   {
    "date": "2026-11-09",
    "equity": 9129411
+  },
+  {
+   "date": "2026-11-10",
+   "equity": 9152729
   }
  ],
  "excluded": []

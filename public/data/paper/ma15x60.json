@@ -1,17 +1,17 @@
 {
  "track": "ma15x60",
  "label": "전체 80 · MA15→60선·버퍼2% (17차 수익÷MDD 후보)",
- "updatedAt": "2026-11-10T15:46:53.710Z",
+ "updatedAt": "2026-11-11T15:37:17.568Z",
  "inception": "2026-08-01",
  "strategyType": "spec",
  "dataNote": "Yahoo 일봉(비공식·총수익 보정) 근사 체결 — 실호가 대조는 2단계에서. 시뮬레이션이며 투자자문 아님.",
  "summary": {
-  "equity": 9086572,
-  "totalPct": -9.13,
-  "benchTotalPct": -24.54,
-  "mddPct": -13.75,
-  "trades": 12,
-  "open": 2,
+  "equity": 9079066,
+  "totalPct": -9.21,
+  "benchTotalPct": -22.2,
+  "mddPct": -13.82,
+  "trades": 13,
+  "open": 1,
   "winRatePct": 0
  },
  "openPositions": [],
@@ -159,6 +159,18 @@
    "reason": "조건 매도",
    "symbol": "028300.KQ",
    "entryWeightPct": 10.759564120944956
+  },
+  {
+   "entryDate": "2026-10-12",
+   "entryPrice": 21821.8,
+   "qty": 52,
+   "exitDate": "2026-11-10",
+   "exitPrice": 21078.9,
+   "pnl": -40609.579659999814,
+   "pnlPct": -3.5782397856756263,
+   "reason": "조건 매도",
+   "symbol": "011200.KS",
+   "entryWeightPct": 10.92320261622896
   }
  ],
  "equity": [
@@ -425,6 +437,10 @@
   {
    "date": "2026-11-09",
    "equity": 9086572
+  },
+  {
+   "date": "2026-11-10",
+   "equity": 9079066
   }
  ],
  "excluded": []
