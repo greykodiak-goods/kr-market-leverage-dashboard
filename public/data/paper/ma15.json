@@ -1,14 +1,14 @@
 {
  "track": "ma15",
  "label": "전체 80 · 진입 MA15 (도전자 — 14차)",
- "updatedAt": "2026-11-12T16:14:10.250Z",
+ "updatedAt": "2026-11-13T15:41:22.466Z",
  "inception": "2026-07-31",
  "strategyType": "spec",
  "dataNote": "Yahoo 일봉(비공식·총수익 보정) 근사 체결 — 실호가 대조는 2단계에서. 시뮬레이션이며 투자자문 아님.",
  "summary": {
-  "equity": 8883684,
-  "totalPct": -11.16,
-  "benchTotalPct": -22.48,
+  "equity": 8893684,
+  "totalPct": -11.06,
+  "benchTotalPct": -23.51,
   "mddPct": -13.37,
   "trades": 13,
   "open": 1,
@@ -449,6 +449,10 @@
   {
    "date": "2026-11-11",
    "equity": 8883684
+  },
+  {
+   "date": "2026-11-12",
+   "equity": 8893684
   }
  ],
  "excluded": []
